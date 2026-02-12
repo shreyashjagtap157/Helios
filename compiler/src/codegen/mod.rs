@@ -2,27 +2,33 @@
 //! Code Generation
 //! Supports multiple backends: LLVM IR, OVM bytecode, and native code.
 
-pub mod mlir;
+pub mod cognitive;
+#[cfg(test)]
+pub mod comprehensive_tests;
 pub mod cpp_interop;
-pub mod ovm;
-pub mod optimizer;
-pub mod jit;
-pub mod opt;
-pub mod optimizing_jit;
-pub mod gpu_dispatch;
-pub mod native_codegen;
+pub mod dwarf;
+pub mod exception_handling;
 pub mod gpu_advanced;
+pub mod gpu_binary;
+pub mod gpu_dispatch;
 pub mod gpu_fusion;
 #[cfg(test)]
 pub mod gpu_tests;
-pub mod dwarf;
-pub mod python_interop;
+pub mod jit;
+pub mod mlir;
+pub mod native_codegen;
+pub mod native_extended;
+pub mod opt;
+pub mod optimizer;
+pub mod optimizing_jit;
+pub mod ovm;
 pub mod python_buffer;
+pub mod python_interop;
 
 #[cfg(feature = "llvm")]
 pub mod llvm_backend;
 
-use crate::ir::{IrModule, IrFunction, IrType, IrInstruction, IrTerminator};
+use crate::ir::{IrFunction, IrInstruction, IrModule, IrTerminator, IrType};
 use log::{debug, info, trace};
 use std::path::Path;
 
@@ -30,21 +36,20 @@ use std::path::Path;
 #[derive(Debug, Clone, Copy, Default)]
 pub enum CodegenTarget {
     #[default]
-    Ovm,        // OVM bytecode for managed execution (default, always available)
+    Ovm, // OVM bytecode for managed execution (default, always available)
     #[cfg(feature = "llvm")]
-    Llvm,       // LLVM IR -> native code
+    Llvm, // LLVM IR -> native code
     #[cfg(feature = "llvm")]
-    Hybrid,     // Both native and managed
+    Hybrid, // Both native and managed
     #[cfg(feature = "llvm")]
-    Native,     // Direct native code (no runtime)
+    Native, // Direct native code (no runtime)
 }
 
 /// Generate code from IR with target selection
 pub fn generate_with_target(
     ir: IrModule,
     output: &Path,
-    #[allow(unused_variables)]
-    opt_level: u8,
+    #[allow(unused_variables)] opt_level: u8,
     target: CodegenTarget,
 ) -> Result<(), String> {
     match target {
@@ -64,15 +69,10 @@ pub fn generate_with_target(
 
 /// Code generation entry point
 /// Uses OVM backend by default, LLVM for native compilation if available.
-pub fn generate(
-    ir: IrModule, 
-    output: &Path, 
-    opt_level: u8, 
-    emit_llvm: bool
-) -> Result<(), String> {
+pub fn generate(ir: IrModule, output: &Path, opt_level: u8, emit_llvm: bool) -> Result<(), String> {
     info!("Code generation starting (opt_level={})", opt_level);
     debug!("Output path: {:?}", output);
-    
+
     if emit_llvm {
         // Emit LLVM IR text for inspection/debugging
         let llvm_ir = generate_llvm_ir(&ir);
@@ -81,13 +81,16 @@ pub fn generate(
             .map_err(|e| format!("Failed to write LLVM IR: {}", e))?;
         info!("Wrote LLVM IR to {:?}", ir_path);
     }
-    
+
     // Try LLVM backend if available, otherwise use OVM
     #[cfg(feature = "llvm")]
     {
         match llvm_backend::generate_llvm(&ir, output, opt_level) {
             Ok(()) => {
-                info!("Native compilation succeeded: {:?}", output.with_extension("o"));
+                info!(
+                    "Native compilation succeeded: {:?}",
+                    output.with_extension("o")
+                );
                 return Ok(());
             }
             Err(e) => {
@@ -95,7 +98,7 @@ pub fn generate(
             }
         }
     }
-    
+
     // Default: Generate OVM bytecode
     ovm::generate_ovm(ir, &output.with_extension("ovm"))?;
     info!("Generated OVM bytecode: {:?}", output.with_extension("ovm"));
@@ -105,10 +108,10 @@ pub fn generate(
 fn generate_llvm_ir(module: &IrModule) -> String {
     trace!("Generating LLVM IR text");
     let mut out = String::new();
-    
+
     out.push_str(&format!("; ModuleID = '{}'\n", module.name));
     out.push_str("target triple = \"x86_64-pc-windows-msvc\"\n\n");
-    
+
     // V2.0: Emit external declarations with mangling
     for ext in &module.externs {
         let name = if ext.abi == "C++" {
@@ -119,29 +122,39 @@ fn generate_llvm_ir(module: &IrModule) -> String {
         } else {
             ext.name.clone()
         };
-        
+
         let params: Vec<_> = ext.params.iter().map(|t| ir_type_to_llvm(t)).collect();
-        out.push_str(&format!("declare {} @{}({})\n", 
-            ir_type_to_llvm(&ext.return_type), name, params.join(", ")));
+        out.push_str(&format!(
+            "declare {} @{}({})\n",
+            ir_type_to_llvm(&ext.return_type),
+            name,
+            params.join(", ")
+        ));
     }
 
     for func in &module.functions {
         out.push_str(&gen_function(func));
         out.push('\n');
     }
-    
+
     out
 }
 
 fn gen_function(func: &IrFunction) -> String {
     let ret_ty = ir_type_to_llvm(&func.return_type);
-    let params: Vec<_> = func.params.iter()
+    let params: Vec<_> = func
+        .params
+        .iter()
         .map(|(n, t)| format!("{} %{}", ir_type_to_llvm(t), n))
         .collect();
-    
-    let mut out = format!("define {} @{}({}) {{\n", 
-        ret_ty, func.name, params.join(", "));
-    
+
+    let mut out = format!(
+        "define {} @{}({}) {{\n",
+        ret_ty,
+        func.name,
+        params.join(", ")
+    );
+
     // V3.0: Function Entry Safepoint
     // In a real implementation, this would emit a call to the runtime
     // call void @__omni_check_safepoint()
@@ -154,23 +167,27 @@ fn gen_function(func: &IrFunction) -> String {
         }
         out.push_str(&format!("  {}\n", gen_terminator(&block.terminator)));
     }
-    
+
     out.push_str("}\n");
     out
 }
 
 fn gen_instruction(inst: &IrInstruction) -> String {
     match inst {
-        IrInstruction::Alloca { dest, ty } => 
-            format!("%{} = alloca {}", dest, ir_type_to_llvm(ty)),
-        IrInstruction::Load { dest, ptr, ty } =>
-            format!("%{} = load {}, ptr %{}", dest, ir_type_to_llvm(ty), ptr),
-        IrInstruction::Store { ptr, value } =>
-            format!("store {}, ptr %{}", value, ptr),
-        IrInstruction::BinOp { dest, op, left, right } =>
-            format!("%{} = {} {}, {}", dest, op, left, right),
+        IrInstruction::Alloca { dest, ty } => format!("%{} = alloca {}", dest, ir_type_to_llvm(ty)),
+        IrInstruction::Load { dest, ptr, ty } => {
+            format!("%{} = load {}, ptr %{}", dest, ir_type_to_llvm(ty), ptr)
+        }
+        IrInstruction::Store { ptr, value } => format!("store {}, ptr %{}", value, ptr),
+        IrInstruction::BinOp {
+            dest,
+            op,
+            left,
+            right,
+        } => format!("%{} = {} {}, {}", dest, op, left, right),
         IrInstruction::Call { dest, func, args } => {
-            let args_str = args.iter()
+            let args_str = args
+                .iter()
                 .map(|a| format!("{}", a))
                 .collect::<Vec<_>>()
                 .join(", ");
@@ -180,54 +197,127 @@ fn gen_instruction(inst: &IrInstruction) -> String {
                 format!("call @{}({})", func, args_str)
             }
         }
-        IrInstruction::GetField { dest, ptr, field } =>
-            format!("%{} = getelementptr %{}, i32 {}", dest, ptr, field),
+        IrInstruction::GetField { dest, ptr, field } => {
+            format!("%{} = getelementptr %{}, i32 {}", dest, ptr, field)
+        }
         // New instruction variants - LLVM-style textual IR
         IrInstruction::Phi { dest, ty, incoming } => {
-            let pairs: Vec<_> = incoming.iter()
+            let pairs: Vec<_> = incoming
+                .iter()
                 .map(|(v, b)| format!("[%{}, %{}]", v, b))
                 .collect();
-            format!("%{} = phi {} {}", dest, ir_type_to_llvm(ty), pairs.join(", "))
+            format!(
+                "%{} = phi {} {}",
+                dest,
+                ir_type_to_llvm(ty),
+                pairs.join(", ")
+            )
         }
-        IrInstruction::Select { dest, cond, then_val, else_val } =>
-            format!("%{} = select {}, {}, {}", dest, cond, then_val, else_val),
-        IrInstruction::Switch { value, default, cases } => {
-            let case_strs: Vec<_> = cases.iter()
+        IrInstruction::Select {
+            dest,
+            cond,
+            then_val,
+            else_val,
+        } => format!("%{} = select {}, {}, {}", dest, cond, then_val, else_val),
+        IrInstruction::Switch {
+            value,
+            default,
+            cases,
+        } => {
+            let case_strs: Vec<_> = cases
+                .iter()
                 .map(|(v, l)| format!("i64 {}, label %{}", v, l))
                 .collect();
-            format!("switch {} label %{} [ {} ]", value, default, case_strs.join(", "))
+            format!(
+                "switch {} label %{} [ {} ]",
+                value,
+                default,
+                case_strs.join(", ")
+            )
         }
-        IrInstruction::CreateClosure { dest, func, captures } =>
-            format!("%{} = closure @{} [{}]", dest, func, captures.join(", ")),
-        IrInstruction::CallClosure { dest, closure, args } => {
-            let args_str = args.iter().map(|a| a.to_string()).collect::<Vec<_>>().join(", ");
+        IrInstruction::CreateClosure {
+            dest,
+            func,
+            captures,
+        } => format!("%{} = closure @{} [{}]", dest, func, captures.join(", ")),
+        IrInstruction::CallClosure {
+            dest,
+            closure,
+            args,
+        } => {
+            let args_str = args
+                .iter()
+                .map(|a| a.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
             match dest {
                 Some(d) => format!("%{} = callclosure %{}({})", d, closure, args_str),
                 None => format!("callclosure %{}({})", closure, args_str),
             }
         }
-        IrInstruction::AsyncSpawn { dest, func, args } =>
-            format!("%{} = async.spawn @{}({} args)", dest, func, args.len()),
-        IrInstruction::AsyncAwait { dest, future } =>
-            match dest {
-                Some(d) => format!("%{} = async.await %{}", d, future),
-                None => format!("async.await %{}", future),
-            },
-        IrInstruction::TraitDispatch { dest, object, method, args } =>
-            match dest {
-                Some(d) => format!("%{} = dispatch %{}.{}({} args)", d, object, method, args.len()),
-                None => format!("dispatch %{}.{}({} args)", object, method, args.len()),
-            },
-        IrInstruction::VTableLookup { dest, object, trait_name, method_idx } =>
-            format!("%{} = vtable.lookup %{}::{}.{}", dest, object, trait_name, method_idx),
-        IrInstruction::Cast { dest, value, to_type } =>
-            format!("%{} = bitcast {} to {}", dest, value, ir_type_to_llvm(to_type)),
-        IrInstruction::ExtractValue { dest, aggregate, indices } =>
-            format!("%{} = extractvalue %{} {:?}", dest, aggregate, indices),
-        IrInstruction::InsertValue { dest, aggregate, value, indices } =>
-            format!("%{} = insertvalue %{}, {} {:?}", dest, aggregate, value, indices),
-        IrInstruction::NativeCall { dest, module, func, args } => {
-            let args_str = args.iter()
+        IrInstruction::AsyncSpawn { dest, func, args } => {
+            format!("%{} = async.spawn @{}({} args)", dest, func, args.len())
+        }
+        IrInstruction::AsyncAwait { dest, future } => match dest {
+            Some(d) => format!("%{} = async.await %{}", d, future),
+            None => format!("async.await %{}", future),
+        },
+        IrInstruction::TraitDispatch {
+            dest,
+            object,
+            method,
+            args,
+        } => match dest {
+            Some(d) => format!(
+                "%{} = dispatch %{}.{}({} args)",
+                d,
+                object,
+                method,
+                args.len()
+            ),
+            None => format!("dispatch %{}.{}({} args)", object, method, args.len()),
+        },
+        IrInstruction::VTableLookup {
+            dest,
+            object,
+            trait_name,
+            method_idx,
+        } => format!(
+            "%{} = vtable.lookup %{}::{}.{}",
+            dest, object, trait_name, method_idx
+        ),
+        IrInstruction::Cast {
+            dest,
+            value,
+            to_type,
+        } => format!(
+            "%{} = bitcast {} to {}",
+            dest,
+            value,
+            ir_type_to_llvm(to_type)
+        ),
+        IrInstruction::ExtractValue {
+            dest,
+            aggregate,
+            indices,
+        } => format!("%{} = extractvalue %{} {:?}", dest, aggregate, indices),
+        IrInstruction::InsertValue {
+            dest,
+            aggregate,
+            value,
+            indices,
+        } => format!(
+            "%{} = insertvalue %{}, {} {:?}",
+            dest, aggregate, value, indices
+        ),
+        IrInstruction::NativeCall {
+            dest,
+            module,
+            func,
+            args,
+        } => {
+            let args_str = args
+                .iter()
                 .map(|a| format!("{}", a))
                 .collect::<Vec<_>>()
                 .join(", ");
@@ -235,6 +325,9 @@ fn gen_instruction(inst: &IrInstruction) -> String {
                 Some(d) => format!("%{} = native.call {}::{}({})", d, module, func, args_str),
                 None => format!("native.call {}::{}({})", module, func, args_str),
             }
+        }
+        IrInstruction::BoundsCheck { index, length } => {
+            format!("call void @__omni_bounds_check(%{}, %{})", index, length)
         }
     }
 }
@@ -244,8 +337,11 @@ fn gen_terminator(term: &IrTerminator) -> String {
         IrTerminator::Return(Some(v)) => format!("ret {}", v),
         IrTerminator::Return(None) => "ret void".to_string(),
         IrTerminator::Branch(label) => format!("br label %{}", label),
-        IrTerminator::CondBranch { cond, then_label, else_label } =>
-            format!("br {}, label %{}, label %{}", cond, then_label, else_label),
+        IrTerminator::CondBranch {
+            cond,
+            then_label,
+            else_label,
+        } => format!("br {}, label %{}, label %{}", cond, then_label, else_label),
         IrTerminator::Unreachable => "unreachable".to_string(),
     }
 }
@@ -264,15 +360,15 @@ fn ir_type_to_llvm(ty: &IrType) -> String {
         IrType::Array(elem, size) => format!("[{} x {}]", size, ir_type_to_llvm(elem)),
         IrType::Struct(name) => format!("%{}", name),
         // Advanced types - represented as opaque pointers in LLVM
-        IrType::Closure { .. } => "ptr".to_string(),  // Closure is a fat pointer
-        IrType::Future(_) => "ptr".to_string(),       // Future is a boxed state machine
-        IrType::TraitObject(_) => "ptr".to_string(),  // dyn Trait is a fat pointer
-        IrType::Generic(_) => "ptr".to_string(),      // Generic types resolved at monomorphization
-        IrType::Enum { name, .. } => format!("%{}", name),  // Enums are struct-like
+        IrType::Closure { .. } => "ptr".to_string(), // Closure is a fat pointer
+        IrType::Future(_) => "ptr".to_string(),      // Future is a boxed state machine
+        IrType::TraitObject(_) => "ptr".to_string(), // dyn Trait is a fat pointer
+        IrType::Generic(_) => "ptr".to_string(),     // Generic types resolved at monomorphization
+        IrType::Enum { name, .. } => format!("%{}", name), // Enums are struct-like
         IrType::Tuple(elements) => {
             let types: Vec<_> = elements.iter().map(|e| ir_type_to_llvm(e)).collect();
             format!("{{ {} }}", types.join(", "))
         }
-        IrType::FnPtr { .. } => "ptr".to_string(),    // Function pointers
+        IrType::FnPtr { .. } => "ptr".to_string(), // Function pointers
     }
 }

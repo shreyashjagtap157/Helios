@@ -369,6 +369,7 @@ impl IrOptimizer {
                         IrInstruction::AsyncSpawn { .. } |
                         IrInstruction::AsyncAwait { .. } |
                         IrInstruction::TraitDispatch { .. } |
+                        IrInstruction::BoundsCheck { .. } |
                         IrInstruction::CallClosure { .. } => true,
                         // Other pure instructions
                         IrInstruction::Phi { dest, .. } |
@@ -470,6 +471,10 @@ impl IrOptimizer {
                 for arg in args {
                     if let IrValue::Var(v) = arg { used.insert(v.clone()); }
                 }
+            }
+            IrInstruction::BoundsCheck { index, length } => {
+                used.insert(index.clone());
+                used.insert(length.clone());
             }
             IrInstruction::Alloca { .. } => {}
         }
@@ -1480,6 +1485,7 @@ impl IrOptimizer {
         )
     }
 
+
     /// Get the destination variable of an instruction (if any)
     fn instruction_dest(&self, instr: &IrInstruction) -> Option<String> {
         match instr {
@@ -1501,7 +1507,8 @@ impl IrOptimizer {
             IrInstruction::TraitDispatch { dest, .. } |
             IrInstruction::NativeCall { dest, .. } => dest.clone(),
             IrInstruction::Store { .. } |
-            IrInstruction::Switch { .. } => None,
+            IrInstruction::Switch { .. } |
+            IrInstruction::BoundsCheck { .. } => None,
         }
     }
 

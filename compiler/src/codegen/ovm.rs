@@ -388,6 +388,7 @@ fn instruction_size(inst: &IrInstruction) -> u32 {
         IrInstruction::ExtractValue { .. } => 4, // opcode(1) + u8(1) + u16(2)
         IrInstruction::InsertValue { .. } => 5,  // opcode(1) + u32(4)
         IrInstruction::NativeCall { args, .. } => 5 + (args.len() as u32),
+        IrInstruction::BoundsCheck { .. } => 5, // opcode(1) + 2xu16(4)
     }
 }
 
@@ -593,6 +594,20 @@ fn compile_instruction(codegen: &mut OvmCodegen, inst: &IrInstruction) -> Result
             let name_idx = codegen.add_constant(OvmConstant::String(native_name));
             codegen.emit(OvmOpcode::Syscall);
             codegen.emit_u16(name_idx as u16);
+        }
+
+        IrInstruction::BoundsCheck { index, length } => {
+            // Load index and length, emit bounds check
+            if let Some(&idx) = codegen.local_indices.get(index) {
+                codegen.emit(OvmOpcode::LoadLoc);
+                codegen.emit_u16(idx);
+            }
+            if let Some(&len) = codegen.local_indices.get(length) {
+                codegen.emit(OvmOpcode::LoadLoc);
+                codegen.emit_u16(len);
+            }
+            // Runtime bounds check: panics if index >= length
+            codegen.emit(OvmOpcode::Lt);
         }
     }
     Ok(())

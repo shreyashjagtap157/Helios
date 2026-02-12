@@ -2,7 +2,7 @@
 //! 
 //! Static analysis for bounds check elimination and unsafe code auditing.
 
-use crate::ir::{IrFunction, IrInstruction};
+use crate::ir::{IrFunction, IrInstruction, IrBinOp, IrValue, IrConst};
 use std::collections::{HashSet, HashMap};
 
 /// Bounds Check Elimination (BCE)
@@ -25,9 +25,9 @@ impl BoundsCheckElimination {
                 match inst {
                     // Track constant assignments: %x = const 5
                     IrInstruction::Store { ptr, value } => {
-                        if let Ok(v) = value.parse::<i64>() {
-                            constants.insert(ptr.clone(), v);
-                            known_ranges.insert(ptr.clone(), (v, v));
+                        if let IrValue::Const(IrConst::Int(v)) = value {
+                            constants.insert(ptr.clone(), *v);
+                            known_ranges.insert(ptr.clone(), (*v, *v));
                         }
                     },
                     // Track alloca sizes for arrays: alloca [N x T]
@@ -42,24 +42,32 @@ impl BoundsCheckElimination {
                     },
                     // Track binary ops that refine ranges
                     IrInstruction::BinOp { dest, op, left, right } => {
-                        let l_range = known_ranges.get(left).copied();
-                        let r_range = known_ranges.get(right).copied();
+                        let l_key = match left {
+                            IrValue::Var(name) => Some(name.clone()),
+                            _ => None,
+                        };
+                        let r_key = match right {
+                            IrValue::Var(name) => Some(name.clone()),
+                            _ => None,
+                        };
+                        let l_range = l_key.as_ref().and_then(|k| known_ranges.get(k)).copied();
+                        let r_range = r_key.as_ref().and_then(|k| known_ranges.get(k)).copied();
                         
                         if let (Some((l_lo, l_hi)), Some((r_lo, r_hi))) = (l_range, r_range) {
-                            let new_range = match op.as_str() {
-                                "add" => (l_lo.saturating_add(r_lo), l_hi.saturating_add(r_hi)),
-                                "sub" => (l_lo.saturating_sub(r_hi), l_hi.saturating_sub(r_lo)),
-                                "mul" if l_lo >= 0 && r_lo >= 0 => (l_lo.saturating_mul(r_lo), l_hi.saturating_mul(r_hi)),
-                                "rem" | "srem" if r_lo > 0 => (0, r_hi - 1), // x % n is in [0, n-1]
-                                "and" if r_lo >= 0 => (0, r_hi), // x & mask ≤ mask
+                            let new_range = match op {
+                                IrBinOp::Add => (l_lo.saturating_add(r_lo), l_hi.saturating_add(r_hi)),
+                                IrBinOp::Sub => (l_lo.saturating_sub(r_hi), l_hi.saturating_sub(r_lo)),
+                                IrBinOp::Mul if l_lo >= 0 && r_lo >= 0 => (l_lo.saturating_mul(r_lo), l_hi.saturating_mul(r_hi)),
+                                IrBinOp::Mod if r_lo > 0 => (0, r_hi - 1), // x % n is in [0, n-1]
+                                IrBinOp::And if r_lo >= 0 => (0, r_hi), // x & mask ≤ mask
                                 _ => (i64::MIN, i64::MAX),
                             };
                             known_ranges.insert(dest.clone(), new_range);
-                        } else if let Some(r_val) = constants.get(right) {
-                            if let Some((l_lo, l_hi)) = l_range {
-                                let new_range = match op.as_str() {
-                                    "rem" | "srem" if *r_val > 0 => (0, r_val - 1),
-                                    "and" if *r_val >= 0 => (0, *r_val),
+                        } else if let Some(r_val) = r_key.as_ref().and_then(|k| constants.get(k)) {
+                            if let Some((_l_lo, _l_hi)) = l_range {
+                                let new_range = match op {
+                                    IrBinOp::Mod if *r_val > 0 => (0, r_val - 1),
+                                    IrBinOp::And if *r_val >= 0 => (0, *r_val),
                                     _ => (i64::MIN, i64::MAX),
                                 };
                                 known_ranges.insert(dest.clone(), new_range);
@@ -107,8 +115,6 @@ impl BoundsCheckElimination {
         // Get the index range
         let idx_range = if let Some(&range) = ranges.get(index) {
             range
-        } else if let Ok(v) = index.parse::<i64>() {
-            (v, v)
         } else if let Some(&v) = constants.get(index) {
             (v, v)
         } else {
@@ -116,9 +122,7 @@ impl BoundsCheckElimination {
         };
         
         // Get the length value
-        let len_val = if let Ok(v) = length.parse::<i64>() {
-            v
-        } else if let Some(&v) = constants.get(length) {
+        let len_val = if let Some(&v) = constants.get(length) {
             v
         } else if let Some(&v) = known_lengths.get(length) {
             v

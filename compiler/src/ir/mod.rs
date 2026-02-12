@@ -1,14 +1,16 @@
 #![allow(dead_code)]
 //! Omni Intermediate Representation
-//! 
+//!
 //! A low-level SSA-based IR for optimization and codegen.
 //! Supports match lowering, closures, async/await, generics, and trait dispatch.
 
+use crate::parser::ast::{BinaryOp, Literal, Ownership, Pattern, Type, UnaryOp};
+use crate::semantic::{
+    TypedExpr, TypedExprKind, TypedFunction, TypedItem, TypedModule, TypedStatement,
+};
 use log::{debug, info, trace};
-use crate::semantic::{TypedModule, TypedItem, TypedFunction, TypedStatement, TypedExpr, TypedExprKind};
-use crate::parser::ast::{Type, Literal, BinaryOp, UnaryOp, Pattern, Ownership};
-use std::fmt;
 use std::collections::HashMap;
+use std::fmt;
 
 /// IR Module - collection of functions and globals
 #[derive(Debug, Clone)]
@@ -17,9 +19,9 @@ pub struct IrModule {
     pub functions: Vec<IrFunction>,
     pub globals: Vec<IrGlobal>,
     pub externs: Vec<IrExternalFunc>,
-    pub vtables: Vec<VTable>,         // Virtual dispatch tables
-    pub string_pool: Vec<String>,     // Interned strings
-    pub type_info: Vec<IrTypeInfo>,   // Runtime type information
+    pub vtables: Vec<VTable>,       // Virtual dispatch tables
+    pub string_pool: Vec<String>,   // Interned strings
+    pub type_info: Vec<IrTypeInfo>, // Runtime type information
 }
 
 /// Virtual method dispatch table
@@ -27,7 +29,7 @@ pub struct IrModule {
 pub struct VTable {
     pub trait_name: String,
     pub type_name: String,
-    pub methods: Vec<String>,  // Function names for each method
+    pub methods: Vec<String>, // Function names for each method
 }
 
 /// Runtime type information for reflection
@@ -43,9 +45,15 @@ pub struct IrTypeInfo {
 #[derive(Debug, Clone)]
 pub enum TypeKind {
     Primitive,
-    Struct { fields: Vec<(String, IrType)> },
-    Enum { variants: Vec<(String, Vec<IrType>)> },
-    Closure { captures: Vec<IrType> },
+    Struct {
+        fields: Vec<(String, IrType)>,
+    },
+    Enum {
+        variants: Vec<(String, Vec<IrType>)>,
+    },
+    Closure {
+        captures: Vec<IrType>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -60,7 +68,11 @@ impl fmt::Display for IrModule {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f, "; Omni IR Module: {}", self.name)?;
         for ext in &self.externs {
-             writeln!(f, "declare {} @{}({:?})", ext.return_type, ext.name, ext.params)?;
+            writeln!(
+                f,
+                "declare {} @{}({:?})",
+                ext.return_type, ext.name, ext.params
+            )?;
         }
         for func in &self.functions {
             writeln!(f, "{}", func)?;
@@ -89,7 +101,9 @@ impl fmt::Display for IrFunction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "fn @{}(", self.name)?;
         for (i, (name, ty)) in self.params.iter().enumerate() {
-            if i > 0 { write!(f, ", ")?; }
+            if i > 0 {
+                write!(f, ", ")?;
+            }
             write!(f, "%{}: {}", name, ty)?;
         }
         writeln!(f, ") -> {} {{", self.return_type)?;
@@ -119,27 +133,111 @@ impl fmt::Display for IrBlock {
 
 #[derive(Debug, Clone)]
 pub enum IrInstruction {
-    Alloca { dest: String, ty: IrType },
-    Load { dest: String, ptr: String, ty: IrType },
-    Store { ptr: String, value: IrValue },
-    BinOp { dest: String, op: IrBinOp, left: IrValue, right: IrValue },
-    Call { dest: Option<String>, func: String, args: Vec<IrValue> },
-    GetField { dest: String, ptr: String, field: usize },
+    Alloca {
+        dest: String,
+        ty: IrType,
+    },
+    Load {
+        dest: String,
+        ptr: String,
+        ty: IrType,
+    },
+    Store {
+        ptr: String,
+        value: IrValue,
+    },
+    BinOp {
+        dest: String,
+        op: IrBinOp,
+        left: IrValue,
+        right: IrValue,
+    },
+    Call {
+        dest: Option<String>,
+        func: String,
+        args: Vec<IrValue>,
+    },
+    GetField {
+        dest: String,
+        ptr: String,
+        field: usize,
+    },
     // New instructions for advanced features
-    Phi { dest: String, ty: IrType, incoming: Vec<(String, String)> },  // (value, block)
-    Select { dest: String, cond: IrValue, then_val: IrValue, else_val: IrValue },
-    Switch { value: IrValue, default: String, cases: Vec<(i64, String)> },
-    CreateClosure { dest: String, func: String, captures: Vec<String> },
-    CallClosure { dest: Option<String>, closure: String, args: Vec<IrValue> },
-    AsyncSpawn { dest: String, func: String, args: Vec<IrValue> },
-    AsyncAwait { dest: Option<String>, future: String },
-    TraitDispatch { dest: Option<String>, object: String, method: String, args: Vec<IrValue> },
-    VTableLookup { dest: String, object: String, trait_name: String, method_idx: usize },
-    Cast { dest: String, value: IrValue, to_type: IrType },
-    ExtractValue { dest: String, aggregate: String, indices: Vec<usize> },
-    InsertValue { dest: String, aggregate: String, value: IrValue, indices: Vec<usize> },
+    Phi {
+        dest: String,
+        ty: IrType,
+        incoming: Vec<(String, String)>,
+    }, // (value, block)
+    Select {
+        dest: String,
+        cond: IrValue,
+        then_val: IrValue,
+        else_val: IrValue,
+    },
+    Switch {
+        value: IrValue,
+        default: String,
+        cases: Vec<(i64, String)>,
+    },
+    CreateClosure {
+        dest: String,
+        func: String,
+        captures: Vec<String>,
+    },
+    CallClosure {
+        dest: Option<String>,
+        closure: String,
+        args: Vec<IrValue>,
+    },
+    AsyncSpawn {
+        dest: String,
+        func: String,
+        args: Vec<IrValue>,
+    },
+    AsyncAwait {
+        dest: Option<String>,
+        future: String,
+    },
+    TraitDispatch {
+        dest: Option<String>,
+        object: String,
+        method: String,
+        args: Vec<IrValue>,
+    },
+    VTableLookup {
+        dest: String,
+        object: String,
+        trait_name: String,
+        method_idx: usize,
+    },
+    Cast {
+        dest: String,
+        value: IrValue,
+        to_type: IrType,
+    },
+    ExtractValue {
+        dest: String,
+        aggregate: String,
+        indices: Vec<usize>,
+    },
+    InsertValue {
+        dest: String,
+        aggregate: String,
+        value: IrValue,
+        indices: Vec<usize>,
+    },
     /// Native/builtin function call (println, print, args, exit, etc.)
-    NativeCall { dest: Option<String>, module: String, func: String, args: Vec<IrValue> },
+    NativeCall {
+        dest: Option<String>,
+        module: String,
+        func: String,
+        args: Vec<IrValue>,
+    },
+    /// Array bounds check: verifies index < length at runtime
+    BoundsCheck {
+        index: String,
+        length: String,
+    },
 }
 
 impl fmt::Display for IrInstruction {
@@ -148,8 +246,12 @@ impl fmt::Display for IrInstruction {
             Self::Alloca { dest, ty } => write!(f, "%{} = alloca {}", dest, ty),
             Self::Load { dest, ptr, ty } => write!(f, "%{} = load {}, %{}", dest, ty, ptr),
             Self::Store { ptr, value } => write!(f, "store {}, %{}", value, ptr),
-            Self::BinOp { dest, op, left, right } => 
-                write!(f, "%{} = {} {}, {}", dest, op, left, right),
+            Self::BinOp {
+                dest,
+                op,
+                left,
+                right,
+            } => write!(f, "%{} = {} {}, {}", dest, op, left, right),
             Self::Call { dest, func, args } => {
                 if let Some(d) = dest {
                     write!(f, "%{} = call @{}(", d, func)?;
@@ -157,76 +259,149 @@ impl fmt::Display for IrInstruction {
                     write!(f, "call @{}(", func)?;
                 }
                 for (i, arg) in args.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}", arg)?;
                 }
                 write!(f, ")")
             }
-            Self::GetField { dest, ptr, field } => 
-                write!(f, "%{} = getfield %{}, {}", dest, ptr, field),
+            Self::GetField { dest, ptr, field } => {
+                write!(f, "%{} = getfield %{}, {}", dest, ptr, field)
+            }
             Self::Phi { dest, ty, incoming } => {
                 write!(f, "%{} = phi {} ", dest, ty)?;
                 for (i, (val, block)) in incoming.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "[%{}, %{}]", val, block)?;
                 }
                 Ok(())
             }
-            Self::Select { dest, cond, then_val, else_val } =>
-                write!(f, "%{} = select {}, {}, {}", dest, cond, then_val, else_val),
-            Self::Switch { value, default, cases } => {
+            Self::Select {
+                dest,
+                cond,
+                then_val,
+                else_val,
+            } => write!(f, "%{} = select {}, {}, {}", dest, cond, then_val, else_val),
+            Self::Switch {
+                value,
+                default,
+                cases,
+            } => {
                 write!(f, "switch {} default %{} [", value, default)?;
                 for (i, (val, label)) in cases.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}: %{}", val, label)?;
                 }
                 write!(f, "]")
             }
-            Self::CreateClosure { dest, func, captures } =>
-                write!(f, "%{} = closure @{} captures [{}]", dest, func, captures.join(", ")),
-            Self::CallClosure { dest, closure, args } => {
+            Self::CreateClosure {
+                dest,
+                func,
+                captures,
+            } => write!(
+                f,
+                "%{} = closure @{} captures [{}]",
+                dest,
+                func,
+                captures.join(", ")
+            ),
+            Self::CallClosure {
+                dest,
+                closure,
+                args,
+            } => {
                 if let Some(d) = dest {
                     write!(f, "%{} = callclosure %{}(", d, closure)?;
                 } else {
                     write!(f, "callclosure %{}(", closure)?;
                 }
                 for (i, arg) in args.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}", arg)?;
                 }
                 write!(f, ")")
             }
-            Self::AsyncSpawn { dest, func, args } =>
-                write!(f, "%{} = async.spawn @{}({} args)", dest, func, args.len()),
-            Self::AsyncAwait { dest, future } =>
-                match dest {
-                    Some(d) => write!(f, "%{} = async.await %{}", d, future),
-                    None => write!(f, "async.await %{}", future),
-                },
-            Self::TraitDispatch { dest, object, method, args } =>
-                match dest {
-                    Some(d) => write!(f, "%{} = dispatch %{}.{}({} args)", d, object, method, args.len()),
-                    None => write!(f, "dispatch %{}.{}({} args)", object, method, args.len()),
-                },
-            Self::VTableLookup { dest, object, trait_name, method_idx } =>
-                write!(f, "%{} = vtable.lookup %{}::{}.{}", dest, object, trait_name, method_idx),
-            Self::Cast { dest, value, to_type } =>
-                write!(f, "%{} = cast {} to {}", dest, value, to_type),
-            Self::ExtractValue { dest, aggregate, indices } =>
-                write!(f, "%{} = extractvalue %{} {:?}", dest, aggregate, indices),
-            Self::InsertValue { dest, aggregate, value, indices } =>
-                write!(f, "%{} = insertvalue %{}, {} {:?}", dest, aggregate, value, indices),
-            Self::NativeCall { dest, module, func, args } => {
+            Self::AsyncSpawn { dest, func, args } => {
+                write!(f, "%{} = async.spawn @{}({} args)", dest, func, args.len())
+            }
+            Self::AsyncAwait { dest, future } => match dest {
+                Some(d) => write!(f, "%{} = async.await %{}", d, future),
+                None => write!(f, "async.await %{}", future),
+            },
+            Self::TraitDispatch {
+                dest,
+                object,
+                method,
+                args,
+            } => match dest {
+                Some(d) => write!(
+                    f,
+                    "%{} = dispatch %{}.{}({} args)",
+                    d,
+                    object,
+                    method,
+                    args.len()
+                ),
+                None => write!(f, "dispatch %{}.{}({} args)", object, method, args.len()),
+            },
+            Self::VTableLookup {
+                dest,
+                object,
+                trait_name,
+                method_idx,
+            } => write!(
+                f,
+                "%{} = vtable.lookup %{}::{}.{}",
+                dest, object, trait_name, method_idx
+            ),
+            Self::Cast {
+                dest,
+                value,
+                to_type,
+            } => write!(f, "%{} = cast {} to {}", dest, value, to_type),
+            Self::ExtractValue {
+                dest,
+                aggregate,
+                indices,
+            } => write!(f, "%{} = extractvalue %{} {:?}", dest, aggregate, indices),
+            Self::InsertValue {
+                dest,
+                aggregate,
+                value,
+                indices,
+            } => write!(
+                f,
+                "%{} = insertvalue %{}, {} {:?}",
+                dest, aggregate, value, indices
+            ),
+            Self::NativeCall {
+                dest,
+                module,
+                func,
+                args,
+            } => {
                 if let Some(d) = dest {
                     write!(f, "%{} = native.call {}::{}(", d, module, func)?;
                 } else {
                     write!(f, "native.call {}::{}(", module, func)?;
                 }
                 for (i, arg) in args.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}", arg)?;
                 }
                 write!(f, ")")
+            }
+            Self::BoundsCheck { index, length } => {
+                write!(f, "bounds_check %{} < %{}", index, length)
             }
         }
     }
@@ -236,7 +411,11 @@ impl fmt::Display for IrInstruction {
 pub enum IrTerminator {
     Return(Option<IrValue>),
     Branch(String),
-    CondBranch { cond: IrValue, then_label: String, else_label: String },
+    CondBranch {
+        cond: IrValue,
+        then_label: String,
+        else_label: String,
+    },
     Unreachable,
 }
 
@@ -246,8 +425,11 @@ impl fmt::Display for IrTerminator {
             Self::Return(Some(v)) => write!(f, "ret {}", v),
             Self::Return(None) => write!(f, "ret void"),
             Self::Branch(label) => write!(f, "br %{}", label),
-            Self::CondBranch { cond, then_label, else_label } => 
-                write!(f, "br {}, %{}, %{}", cond, then_label, else_label),
+            Self::CondBranch {
+                cond,
+                then_label,
+                else_label,
+            } => write!(f, "br {}, %{}, %{}", cond, then_label, else_label),
             Self::Unreachable => write!(f, "unreachable"),
         }
     }
@@ -255,9 +437,19 @@ impl fmt::Display for IrTerminator {
 
 #[derive(Debug, Clone)]
 pub enum IrBinOp {
-    Add, Sub, Mul, Div, Mod,
-    Eq, Ne, Lt, Gt, Le, Ge,
-    And, Or,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    Eq,
+    Ne,
+    Lt,
+    Gt,
+    Le,
+    Ge,
+    And,
+    Or,
 }
 
 impl fmt::Display for IrBinOp {
@@ -282,18 +474,35 @@ impl fmt::Display for IrBinOp {
 
 #[derive(Debug, Clone)]
 pub enum IrType {
-    Void, I8, I16, I32, I64, F32, F64, Bool,
+    Void,
+    I8,
+    I16,
+    I32,
+    I64,
+    F32,
+    F64,
+    Bool,
     Ptr(Box<IrType>),
     Array(Box<IrType>, usize),
     Struct(String),
     // New types for advanced features
-    Closure { params: Vec<IrType>, ret: Box<IrType>, captures: Vec<IrType> },
+    Closure {
+        params: Vec<IrType>,
+        ret: Box<IrType>,
+        captures: Vec<IrType>,
+    },
     Future(Box<IrType>),
     TraitObject(String),
     Generic(String),
-    Enum { name: String, variants: Vec<(String, Vec<IrType>)> },
+    Enum {
+        name: String,
+        variants: Vec<(String, Vec<IrType>)>,
+    },
     Tuple(Vec<IrType>),
-    FnPtr { params: Vec<IrType>, ret: Box<IrType> },
+    FnPtr {
+        params: Vec<IrType>,
+        ret: Box<IrType>,
+    },
 }
 
 /// Async state machine states
@@ -341,7 +550,11 @@ impl fmt::Display for IrType {
             Self::Array(elem, size) => write!(f, "[{}; {}]", elem, size),
             Self::Struct(name) => write!(f, "%{}", name),
             Self::Closure { params, ret, .. } => {
-                let params_str = params.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ");
+                let params_str = params
+                    .iter()
+                    .map(|p| p.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 write!(f, "closure({}) -> {}", params_str, ret)
             }
             Self::Future(inner) => write!(f, "future<{}>", inner),
@@ -349,11 +562,19 @@ impl fmt::Display for IrType {
             Self::Generic(name) => write!(f, "generic<{}>", name),
             Self::Enum { name, .. } => write!(f, "enum {}", name),
             Self::Tuple(elements) => {
-                let elems_str = elements.iter().map(|e| e.to_string()).collect::<Vec<_>>().join(", ");
+                let elems_str = elements
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 write!(f, "({})", elems_str)
             }
             Self::FnPtr { params, ret } => {
-                let params_str = params.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ");
+                let params_str = params
+                    .iter()
+                    .map(|p| p.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 write!(f, "fn({}) -> {}", params_str, ret)
             }
         }
@@ -390,7 +611,7 @@ impl fmt::Display for IrConst {
             Self::Int(v) => write!(f, "{}", v),
             Self::Float(v) => write!(f, "{}", v),
             Self::Bool(v) => write!(f, "{}", v),
-            Self::Str(s) => write!(f, "\"{}\"" , s),
+            Self::Str(s) => write!(f, "\"{}\"", s),
             Self::Null => write!(f, "null"),
         }
     }
@@ -400,14 +621,14 @@ impl fmt::Display for IrConst {
 pub struct IrGenerator {
     temp_counter: usize,
     block_counter: usize,
-    monomorphized: HashMap<String, IrFunction>,  // Monomorphized generic functions
-    vtables: HashMap<String, Vec<String>>,  // Trait -> list of methods
-    closures: Vec<IrFunction>,  // Generated closure functions
+    monomorphized: HashMap<String, IrFunction>, // Monomorphized generic functions
+    vtables: HashMap<String, Vec<String>>,      // Trait -> list of methods
+    closures: Vec<IrFunction>,                  // Generated closure functions
     closure_envs: HashMap<String, ClosureEnv>,  // Closure environments
-    string_pool: Vec<String>,  // String interning
+    string_pool: Vec<String>,                   // String interning
     string_indices: HashMap<String, usize>,
-    async_transforms: Vec<AsyncStateMachine>,  // Async function state machines
-    loop_stack: Vec<(String, String)>,  // (header_label, exit_label) for break/continue
+    async_transforms: Vec<AsyncStateMachine>, // Async function state machines
+    loop_stack: Vec<(String, String)>,        // (header_label, exit_label) for break/continue
     struct_layouts: HashMap<String, Vec<(String, IrType)>>,
     enum_variants: HashMap<String, Vec<(String, Vec<IrType>)>>,
     type_info: Vec<IrTypeInfo>,
@@ -434,7 +655,7 @@ impl IrGenerator {
             current_func_is_async: false,
         }
     }
-    
+
     fn fresh_temp(&mut self) -> String {
         let name = format!("t{}", self.temp_counter);
         self.temp_counter += 1;
@@ -446,7 +667,7 @@ impl IrGenerator {
         self.block_counter += 1;
         name
     }
-    
+
     fn intern_string(&mut self, s: &str) -> usize {
         if let Some(&idx) = self.string_indices.get(s) {
             return idx;
@@ -456,7 +677,7 @@ impl IrGenerator {
         self.string_indices.insert(s.to_string(), idx);
         idx
     }
-    
+
     pub fn generate(&mut self, module: TypedModule) -> IrModule {
         info!("Generating IR from typed AST");
         let mut functions = Vec::new();
@@ -467,7 +688,9 @@ impl IrGenerator {
         for item in &module.items {
             match item {
                 TypedItem::Struct(s) => {
-                    let fields: Vec<_> = s.fields.iter()
+                    let fields: Vec<_> = s
+                        .fields
+                        .iter()
                         .map(|(n, t)| (n.clone(), self.convert_type(t)))
                         .collect();
                     self.struct_layouts.insert(s.name.clone(), fields.clone());
@@ -480,9 +703,19 @@ impl IrGenerator {
                     });
                 }
                 TypedItem::Enum(e) => {
-                    let variants: Vec<_> = e.variants.iter()
-                        .map(|(n, ts)| (n.clone(), ts.clone().unwrap_or_default().iter()
-                            .map(|t| self.convert_type(t)).collect()))
+                    let variants: Vec<_> = e
+                        .variants
+                        .iter()
+                        .map(|(n, ts)| {
+                            (
+                                n.clone(),
+                                ts.clone()
+                                    .unwrap_or_default()
+                                    .iter()
+                                    .map(|t| self.convert_type(t))
+                                    .collect(),
+                            )
+                        })
                         .collect();
                     self.enum_variants.insert(e.name.clone(), variants.clone());
                     self.type_info.push(IrTypeInfo {
@@ -494,11 +727,16 @@ impl IrGenerator {
                     });
                 }
                 TypedItem::Trait(t) => {
-                    self.vtables.insert(t.name.clone(), t.methods.iter().map(|m| m.name.clone()).collect());
+                    self.vtables.insert(
+                        t.name.clone(),
+                        t.methods.iter().map(|m| m.name.clone()).collect(),
+                    );
                 }
                 TypedItem::Impl(imp) => {
                     // Build vtable for this impl
-                    let methods: Vec<_> = imp.methods.iter()
+                    let methods: Vec<_> = imp
+                        .methods
+                        .iter()
                         .map(|m| format!("{}_{}", imp.type_name, m.name))
                         .collect();
                     vtables_list.push(VTable {
@@ -520,9 +758,8 @@ impl IrGenerator {
                 }
                 TypedItem::Extern(e) => {
                     for f in e.functions {
-                        let params: Vec<_> = f.params.iter()
-                            .map(|(_, t)| self.convert_type(t))
-                            .collect();
+                        let params: Vec<_> =
+                            f.params.iter().map(|(_, t)| self.convert_type(t)).collect();
                         externs.push(IrExternalFunc {
                             name: f.name,
                             abi: e.abi.clone(),
@@ -546,7 +783,7 @@ impl IrGenerator {
 
         // Add generated closures
         functions.extend(self.closures.drain(..));
-        
+
         IrModule {
             name: "main".to_string(),
             functions,
@@ -557,20 +794,21 @@ impl IrGenerator {
             type_info: self.type_info.clone(),
         }
     }
-    
+
     fn calculate_struct_size(&self, fields: &[(String, IrType)]) -> usize {
         fields.iter().map(|(_, ty)| self.type_size(ty)).sum()
     }
-    
+
     fn calculate_enum_size(&self, variants: &[(String, Vec<IrType>)]) -> usize {
         // Enum size = discriminant + max variant size
-        let max_variant = variants.iter()
+        let max_variant = variants
+            .iter()
             .map(|(_, tys)| tys.iter().map(|t| self.type_size(t)).sum::<usize>())
             .max()
             .unwrap_or(0);
         8 + max_variant // 8 bytes for discriminant
     }
-    
+
     fn type_size(&self, ty: &IrType) -> usize {
         match ty {
             IrType::Void => 0,
@@ -586,18 +824,22 @@ impl IrGenerator {
                     8 // Default size
                 }
             }
-            IrType::Closure { captures, .. } => 8 + captures.iter().map(|t| self.type_size(t)).sum::<usize>(),
+            IrType::Closure { captures, .. } => {
+                8 + captures.iter().map(|t| self.type_size(t)).sum::<usize>()
+            }
             IrType::TraitObject(_) => 16, // Fat pointer (data + vtable)
             _ => 8,
         }
     }
-    
+
     fn gen_function(&mut self, f: TypedFunction) -> IrFunction {
         trace!("Building IR for function {}", f.name);
-        let params: Vec<_> = f.params.iter()
+        let params: Vec<_> = f
+            .params
+            .iter()
             .map(|(n, t)| (n.clone(), self.convert_type(t)))
             .collect();
-        
+
         let mut blocks = Vec::new();
         let mut instructions = Vec::new();
         let mut current_block = "entry".to_string();
@@ -619,7 +861,7 @@ impl IrGenerator {
             instructions,
             terminator,
         });
-        
+
         IrFunction {
             name: f.name,
             params,
@@ -640,9 +882,15 @@ impl IrGenerator {
             TypedStatement::Let { name, ty, value } => {
                 let _dest = self.fresh_temp();
                 let ir_ty = self.convert_type(ty);
-                instructions.push(IrInstruction::Alloca { dest: name.clone(), ty: ir_ty.clone() });
+                instructions.push(IrInstruction::Alloca {
+                    dest: name.clone(),
+                    ty: ir_ty.clone(),
+                });
                 let val = self.gen_expr(value, instructions);
-                instructions.push(IrInstruction::Store { ptr: name.clone(), value: val });
+                instructions.push(IrInstruction::Store {
+                    ptr: name.clone(),
+                    value: val,
+                });
             }
             TypedStatement::Assignment { target, op, value } => {
                 // Generate the target address (must be an lvalue)
@@ -653,15 +901,25 @@ impl IrGenerator {
                         let obj_val = self.gen_expr(obj, instructions);
                         let _ptr = self.fresh_temp();
                         // Simplified: just use field name for now
-                        format!("{}.{}", match &obj_val { IrValue::Var(v) => v.clone(), _ => "obj".to_string() }, field)
+                        format!(
+                            "{}.{}",
+                            match &obj_val {
+                                IrValue::Var(v) => v.clone(),
+                                _ => "obj".to_string(),
+                            },
+                            field
+                        )
                     }
                     _ => {
                         // Fallback for other lvalue expressions
                         let val = self.gen_expr(&target, instructions);
-                        match val { IrValue::Var(v) => v, _ => "temp".to_string() }
+                        match val {
+                            IrValue::Var(v) => v,
+                            _ => "temp".to_string(),
+                        }
                     }
                 };
-                
+
                 // Generate value expression
                 let val = if let Some(bin_op) = op {
                     // Compound assignment: x += v => x = x + v
@@ -675,13 +933,18 @@ impl IrGenerator {
                         BinaryOp::Div => IrBinOp::Div,
                         _ => IrBinOp::Add, // Fallback
                     };
-                    instructions.push(IrInstruction::BinOp { dest: result.clone(), op: ir_op, left: current, right: rhs });
+                    instructions.push(IrInstruction::BinOp {
+                        dest: result.clone(),
+                        op: ir_op,
+                        left: current,
+                        right: rhs,
+                    });
                     IrValue::Var(result)
                 } else {
                     // Simple assignment
                     self.gen_expr(value, instructions)
                 };
-                
+
                 instructions.push(IrInstruction::Store { ptr, value: val });
             }
             TypedStatement::Return(expr) => {
@@ -695,7 +958,11 @@ impl IrGenerator {
                 // Subsequent code is unreachable; start a dead block
                 *current_block = self.fresh_block();
             }
-            TypedStatement::If { condition, then_block, else_block } => {
+            TypedStatement::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
                 let cond_val = self.gen_expr(condition, instructions);
                 let then_label = self.fresh_block();
                 let else_label = self.fresh_block();
@@ -708,7 +975,11 @@ impl IrGenerator {
                     terminator: IrTerminator::CondBranch {
                         cond: cond_val,
                         then_label: then_label.clone(),
-                        else_label: if else_block.is_some() { else_label.clone() } else { merge_label.clone() },
+                        else_label: if else_block.is_some() {
+                            else_label.clone()
+                        } else {
+                            merge_label.clone()
+                        },
                     },
                 });
 
@@ -744,11 +1015,15 @@ impl IrGenerator {
                 let loop_exit = self.fresh_block();
 
                 // Push loop context for break/continue
-                self.loop_stack.push((loop_header.clone(), loop_exit.clone()));
+                self.loop_stack
+                    .push((loop_header.clone(), loop_exit.clone()));
 
                 // Initialize iterator
                 let _iter_val = self.gen_expr(iter, instructions);
-                instructions.push(IrInstruction::Alloca { dest: var.clone(), ty: IrType::I64 });
+                instructions.push(IrInstruction::Alloca {
+                    dest: var.clone(),
+                    ty: IrType::I64,
+                });
 
                 blocks.push(IrBlock {
                     label: current_block.clone(),
@@ -760,7 +1035,11 @@ impl IrGenerator {
                 *current_block = loop_header.clone();
                 let cond = self.fresh_temp();
                 // Simplified: in real impl, would call iterator.next() and check
-                instructions.push(IrInstruction::Load { dest: cond.clone(), ptr: var.clone(), ty: IrType::Bool });
+                instructions.push(IrInstruction::Load {
+                    dest: cond.clone(),
+                    ptr: var.clone(),
+                    ty: IrType::Bool,
+                });
                 blocks.push(IrBlock {
                     label: current_block.clone(),
                     instructions: std::mem::take(instructions),
@@ -791,7 +1070,8 @@ impl IrGenerator {
                 let loop_exit = self.fresh_block();
 
                 // Push loop context for break/continue
-                self.loop_stack.push((loop_header.clone(), loop_exit.clone()));
+                self.loop_stack
+                    .push((loop_header.clone(), loop_exit.clone()));
 
                 blocks.push(IrBlock {
                     label: current_block.clone(),
@@ -853,14 +1133,14 @@ impl IrGenerator {
             TypedStatement::Match { expr, arms } => {
                 let match_val = self.gen_expr(expr, instructions);
                 let merge_label = self.fresh_block();
-                
+
                 // Generate switch instruction for simple cases
                 let mut cases = Vec::new();
                 let default_label = self.fresh_block();
-                
+
                 for (i, (pattern, arm_body)) in arms.iter().enumerate() {
                     let arm_label = self.fresh_block();
-                    
+
                     // Match pattern
                     match pattern {
                         Pattern::Literal(Literal::Int(n)) => {
@@ -878,22 +1158,28 @@ impl IrGenerator {
                             cases.push((i as i64, arm_label.clone()));
                         }
                     }
-                    
+
                     // Generate arm body block with actual statements
                     let mut arm_instructions = Vec::new();
-                    
+
                     // If binding pattern, store the matched value
                     if let Pattern::Binding(bind_name) = pattern {
-                        arm_instructions.push(IrInstruction::Alloca { dest: bind_name.clone(), ty: IrType::I64 });
-                        arm_instructions.push(IrInstruction::Store { ptr: bind_name.clone(), value: match_val.clone() });
+                        arm_instructions.push(IrInstruction::Alloca {
+                            dest: bind_name.clone(),
+                            ty: IrType::I64,
+                        });
+                        arm_instructions.push(IrInstruction::Store {
+                            ptr: bind_name.clone(),
+                            value: match_val.clone(),
+                        });
                     }
-                    
+
                     // Generate body statements into arm block
                     let mut arm_current = arm_label.clone();
                     for stmt in arm_body {
                         self.gen_statement(stmt, &mut arm_instructions, blocks, &mut arm_current);
                     }
-                    
+
                     blocks.push(IrBlock {
                         label: arm_current,
                         instructions: arm_instructions,
@@ -956,21 +1242,23 @@ impl IrGenerator {
 
     fn gen_expr(&mut self, expr: &TypedExpr, instructions: &mut Vec<IrInstruction>) -> IrValue {
         match &expr.kind {
-            TypedExprKind::Literal(lit) => {
-                match lit {
-                    Literal::Int(n) => IrValue::Const(IrConst::Int(*n)),
-                    Literal::Float(f) => IrValue::Const(IrConst::Float(*f)),
-                    Literal::Bool(b) => IrValue::Const(IrConst::Bool(*b)),
-                    Literal::String(s) => {
-                        self.intern_string(s);
-                        IrValue::Const(IrConst::Str(s.clone()))
-                    }
+            TypedExprKind::Literal(lit) => match lit {
+                Literal::Int(n) => IrValue::Const(IrConst::Int(*n)),
+                Literal::Float(f) => IrValue::Const(IrConst::Float(*f)),
+                Literal::Bool(b) => IrValue::Const(IrConst::Bool(*b)),
+                Literal::String(s) => {
+                    self.intern_string(s);
+                    IrValue::Const(IrConst::Str(s.clone()))
                 }
-            }
+            },
             TypedExprKind::Identifier(name) => {
                 let dest = self.fresh_temp();
                 let ty = self.convert_type(&expr.ty);
-                instructions.push(IrInstruction::Load { dest: dest.clone(), ptr: name.clone(), ty });
+                instructions.push(IrInstruction::Load {
+                    dest: dest.clone(),
+                    ptr: name.clone(),
+                    ty,
+                });
                 IrValue::Var(dest)
             }
             TypedExprKind::Binary(left, op, right) => {
@@ -993,7 +1281,12 @@ impl IrGenerator {
                     BinaryOp::Or => IrBinOp::Or,
                     _ => IrBinOp::Add,
                 };
-                instructions.push(IrInstruction::BinOp { dest: dest.clone(), op: ir_op, left: left_val, right: right_val });
+                instructions.push(IrInstruction::BinOp {
+                    dest: dest.clone(),
+                    op: ir_op,
+                    left: left_val,
+                    right: right_val,
+                });
                 IrValue::Var(dest)
             }
             TypedExprKind::Unary(op, inner) => {
@@ -1005,7 +1298,12 @@ impl IrGenerator {
                     UnaryOp::Neg => IrBinOp::Sub,
                     UnaryOp::Not => IrBinOp::Eq, // !x == (x == 0)
                 };
-                instructions.push(IrInstruction::BinOp { dest: dest.clone(), op: ir_op, left: zero, right: inner_val });
+                instructions.push(IrInstruction::BinOp {
+                    dest: dest.clone(),
+                    op: ir_op,
+                    left: zero,
+                    right: inner_val,
+                });
                 IrValue::Var(dest)
             }
             TypedExprKind::Call(func, args) => {
@@ -1013,16 +1311,29 @@ impl IrGenerator {
                     TypedExprKind::Identifier(n) => n.clone(),
                     _ => "unknown".to_string(),
                 };
-                let arg_vals: Vec<_> = args.iter().map(|a| self.gen_expr(a, instructions)).collect();
+                let arg_vals: Vec<_> = args
+                    .iter()
+                    .map(|a| self.gen_expr(a, instructions))
+                    .collect();
                 let dest = self.fresh_temp();
-                
+
                 // Check if this is a builtin/native call
-                let is_builtin = matches!(func_name.as_str(), 
-                    "println" | "print" | "eprintln" | "eprint" | 
-                    "args" | "exit" | "format" | "typeof" | "sizeof" | 
-                    "assert" | "assert_eq" | "dbg"
+                let is_builtin = matches!(
+                    func_name.as_str(),
+                    "println"
+                        | "print"
+                        | "eprintln"
+                        | "eprint"
+                        | "args"
+                        | "exit"
+                        | "format"
+                        | "typeof"
+                        | "sizeof"
+                        | "assert"
+                        | "assert_eq"
+                        | "dbg"
                 );
-                
+
                 if is_builtin {
                     // Determine the native module for this builtin
                     let module = match func_name.as_str() {
@@ -1041,28 +1352,45 @@ impl IrGenerator {
                         args: arg_vals,
                     });
                 } else {
-                    instructions.push(IrInstruction::Call { dest: Some(dest.clone()), func: func_name, args: arg_vals });
+                    instructions.push(IrInstruction::Call {
+                        dest: Some(dest.clone()),
+                        func: func_name,
+                        args: arg_vals,
+                    });
                 }
                 IrValue::Var(dest)
             }
-            TypedExprKind::MethodCall { receiver, method, args } => {
+            TypedExprKind::MethodCall {
+                receiver,
+                method,
+                args,
+            } => {
                 let recv_val = self.gen_expr(receiver, instructions);
-                let arg_vals: Vec<_> = args.iter().map(|a| self.gen_expr(a, instructions)).collect();
+                let arg_vals: Vec<_> = args
+                    .iter()
+                    .map(|a| self.gen_expr(a, instructions))
+                    .collect();
                 let dest = self.fresh_temp();
-                
+
                 // Check if this is a trait object (dynamic dispatch)
                 if matches!(&receiver.ty, Type::Named(n) if n.starts_with("dyn ")) {
                     // Virtual dispatch through vtable
                     let vtable_dest = self.fresh_temp();
                     instructions.push(IrInstruction::VTableLookup {
                         dest: vtable_dest.clone(),
-                        object: match &recv_val { IrValue::Var(v) => v.clone(), _ => "obj".to_string() },
+                        object: match &recv_val {
+                            IrValue::Var(v) => v.clone(),
+                            _ => "obj".to_string(),
+                        },
                         trait_name: "Trait".to_string(),
                         method_idx: 0,
                     });
                     instructions.push(IrInstruction::TraitDispatch {
                         dest: Some(dest.clone()),
-                        object: match &recv_val { IrValue::Var(v) => v.clone(), _ => "obj".to_string() },
+                        object: match &recv_val {
+                            IrValue::Var(v) => v.clone(),
+                            _ => "obj".to_string(),
+                        },
                         method: method.clone(),
                         args: arg_vals,
                     });
@@ -1070,10 +1398,19 @@ impl IrGenerator {
                     // Static dispatch
                     let mut all_args = vec![recv_val];
                     all_args.extend(arg_vals);
-                    let mangled_name = format!("{}_{}", 
-                        match &receiver.ty { Type::Named(n) => n, _ => "unknown" },
-                        method);
-                    instructions.push(IrInstruction::Call { dest: Some(dest.clone()), func: mangled_name, args: all_args });
+                    let mangled_name = format!(
+                        "{}_{}",
+                        match &receiver.ty {
+                            Type::Named(n) => n,
+                            _ => "unknown",
+                        },
+                        method
+                    );
+                    instructions.push(IrInstruction::Call {
+                        dest: Some(dest.clone()),
+                        func: mangled_name,
+                        args: all_args,
+                    });
                 }
                 IrValue::Var(dest)
             }
@@ -1081,7 +1418,14 @@ impl IrGenerator {
                 let obj_val = self.gen_expr(obj, instructions);
                 let dest = self.fresh_temp();
                 // Would need field index from struct layout
-                instructions.push(IrInstruction::GetField { dest: dest.clone(), ptr: match obj_val { IrValue::Var(v) => v, _ => "obj".to_string() }, field: 0 });
+                instructions.push(IrInstruction::GetField {
+                    dest: dest.clone(),
+                    ptr: match obj_val {
+                        IrValue::Var(v) => v,
+                        _ => "obj".to_string(),
+                    },
+                    field: 0,
+                });
                 IrValue::Var(dest)
             }
             TypedExprKind::Index(arr, idx) => {
@@ -1091,7 +1435,10 @@ impl IrGenerator {
                 // GEP for array indexing
                 IrValue::Var(dest)
             }
-            TypedExprKind::Borrow { mutable: _mutable, expr: inner } => {
+            TypedExprKind::Borrow {
+                mutable: _mutable,
+                expr: inner,
+            } => {
                 // Borrows are mostly compile-time; at IR level, just pass pointer
                 self.gen_expr(inner, instructions)
             }
@@ -1099,17 +1446,34 @@ impl IrGenerator {
                 let ptr_val = self.gen_expr(inner, instructions);
                 let dest = self.fresh_temp();
                 let ty = self.convert_type(&expr.ty);
-                instructions.push(IrInstruction::Load { dest: dest.clone(), ptr: match ptr_val { IrValue::Var(v) => v, _ => "ptr".to_string() }, ty });
+                instructions.push(IrInstruction::Load {
+                    dest: dest.clone(),
+                    ptr: match ptr_val {
+                        IrValue::Var(v) => v,
+                        _ => "ptr".to_string(),
+                    },
+                    ty,
+                });
                 IrValue::Var(dest)
             }
             TypedExprKind::StructLiteral { name, fields } => {
                 let dest = self.fresh_temp();
-                instructions.push(IrInstruction::Alloca { dest: dest.clone(), ty: IrType::Struct(name.clone()) });
+                instructions.push(IrInstruction::Alloca {
+                    dest: dest.clone(),
+                    ty: IrType::Struct(name.clone()),
+                });
                 for (i, (_field_name, field_expr)) in fields.iter().enumerate() {
                     let val = self.gen_expr(field_expr, instructions);
                     let field_ptr = self.fresh_temp();
-                    instructions.push(IrInstruction::GetField { dest: field_ptr.clone(), ptr: dest.clone(), field: i });
-                    instructions.push(IrInstruction::Store { ptr: field_ptr, value: val });
+                    instructions.push(IrInstruction::GetField {
+                        dest: field_ptr.clone(),
+                        ptr: dest.clone(),
+                        field: i,
+                    });
+                    instructions.push(IrInstruction::Store {
+                        ptr: field_ptr,
+                        value: val,
+                    });
                 }
                 IrValue::Var(dest)
             }
@@ -1120,19 +1484,29 @@ impl IrGenerator {
                 } else {
                     IrType::I64
                 };
-                instructions.push(IrInstruction::Alloca { dest: dest.clone(), ty: IrType::Array(Box::new(elem_ty), elements.len()) });
+                instructions.push(IrInstruction::Alloca {
+                    dest: dest.clone(),
+                    ty: IrType::Array(Box::new(elem_ty), elements.len()),
+                });
                 for (idx, elem) in elements.iter().enumerate() {
                     let elem_val = self.gen_expr(elem, instructions);
                     // Generate element pointer via GetField (used as array index)
                     let elem_ptr = self.fresh_temp();
-                    instructions.push(IrInstruction::GetField { dest: elem_ptr.clone(), ptr: dest.clone(), field: idx });
-                    instructions.push(IrInstruction::Store { ptr: elem_ptr, value: elem_val });
+                    instructions.push(IrInstruction::GetField {
+                        dest: elem_ptr.clone(),
+                        ptr: dest.clone(),
+                        field: idx,
+                    });
+                    instructions.push(IrInstruction::Store {
+                        ptr: elem_ptr,
+                        value: elem_val,
+                    });
                 }
                 IrValue::Var(dest)
             }
         }
     }
-    
+
     fn convert_type(&self, ty: &Type) -> IrType {
         #[allow(unreachable_patterns)]
         match ty {
@@ -1166,9 +1540,15 @@ impl IrGenerator {
                 IrType::Ptr(Box::new(inner_ty))
             }
             Type::Function(params, ret) => {
-                let ret_ty = ret.as_ref().map(|r| self.convert_type(r)).unwrap_or(IrType::Void);
+                let ret_ty = ret
+                    .as_ref()
+                    .map(|r| self.convert_type(r))
+                    .unwrap_or(IrType::Void);
                 let param_tys: Vec<_> = params.iter().map(|p| self.convert_type(p)).collect();
-                IrType::FnPtr { params: param_tys, ret: Box::new(ret_ty) }
+                IrType::FnPtr {
+                    params: param_tys,
+                    ret: Box::new(ret_ty),
+                }
             }
             Type::WithOwnership(inner, ownership) => {
                 let inner_ty = self.convert_type(inner);
