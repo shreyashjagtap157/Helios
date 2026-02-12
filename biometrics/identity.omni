@@ -1,0 +1,239 @@
+# HELIOS Biometric Identity Verifier
+# Written in Omni - Keystroke and Mouse Dynamics
+
+module biometrics::identity
+
+import core::logging as log
+import core::math
+import system::time
+import system::crypto
+
+# Statistical distribution for pattern matching
+struct Distribution:
+    mean: f64
+    std_dev: f64
+    samples: usize
+    
+    fn new() -> own Distribution:
+        return Distribution { mean: 0.0, std_dev: 0.0, samples: 0 }
+    
+    fn add_sample(&mut self, value: f64):
+        let n = self.samples as f64
+        let delta = value - self.mean
+        self.mean += delta / (n + 1.0)
+        self.std_dev = ((n * self.std_dev * self.std_dev + delta * (value - self.mean)) / (n + 1.0)).sqrt()
+        self.samples += 1
+    
+    fn probability(&self, value: f64) -> f64:
+        let z = (value - self.mean).abs() / self.std_dev
+        return math::exp(-0.5 * z * z)
+
+
+# Keystroke dynamics profile
+struct KeystrokeProfile:
+    # Dwell time: how long each key is held
+    dwell_times: HashMap<Key, Distribution>
+    # Flight time: time between key release and next key press
+    flight_times: HashMap<(Key, Key), Distribution>
+    # Typing rhythm variance
+    rhythm_variance: f64
+    
+    fn new() -> own KeystrokeProfile:
+        return KeystrokeProfile {
+            dwell_times: HashMap::new(),
+            flight_times: HashMap::new(),
+            rhythm_variance: 0.0
+        }
+    
+    fn record_keystroke(&mut self, key: Key, press_time: u64, release_time: u64, prev_key: Option<Key>, prev_release: Option<u64>):
+        # Record dwell time
+        let dwell = (release_time - press_time) as f64
+        self.dwell_times.entry(key).or_insert(Distribution::new()).add_sample(dwell)
+        
+        # Record flight time
+        if let Some(pk) = prev_key:
+            if let Some(pr) = prev_release:
+                let flight = (press_time - pr) as f64
+                self.flight_times.entry((pk, key)).or_insert(Distribution::new()).add_sample(flight)
+
+
+# Mouse dynamics profile
+struct MouseProfile:
+    # Movement velocity distribution
+    velocity: Distribution
+    # Acceleration profile
+    acceleration: Distribution
+    # Click pressure (if available)
+    click_pressure: Distribution
+    # Micro-movements (jitter signature)
+    micro_movements: Vec<(f64, f64)>
+    
+    fn new() -> own MouseProfile:
+        return MouseProfile {
+            velocity: Distribution::new(),
+            acceleration: Distribution::new(),
+            click_pressure: Distribution::new(),
+            micro_movements: Vec::new()
+        }
+    
+    fn record_movement(&mut self, dx: i32, dy: i32, dt_ms: u64):
+        let distance = ((dx * dx + dy * dy) as f64).sqrt()
+        let velocity = distance / (dt_ms as f64)
+        self.velocity.add_sample(velocity)
+        
+        # Record micro-movement pattern
+        if distance < 5.0:
+            self.micro_movements.push((dx as f64, dy as f64))
+            if self.micro_movements.len() > 1000:
+                self.micro_movements.remove(0)
+
+
+# Complete biometric profile
+struct BiometricProfile:
+    keystroke: KeystrokeProfile
+    mouse: MouseProfile
+    created_at: u64
+    last_updated: u64
+    sample_count: usize
+    
+    fn new() -> own BiometricProfile:
+        let now = time::now_ms()
+        return BiometricProfile {
+            keystroke: KeystrokeProfile::new(),
+            mouse: MouseProfile::new(),
+            created_at: now,
+            last_updated: now,
+            sample_count: 0
+        }
+    
+    fn save(&self, path: &str) -> Result<(), Error>:
+        log::info("Saving biometric profile to {}", path)
+        let encrypted = crypto::encrypt_aes256(
+            self.serialize(),
+            crypto::get_hardware_key()
+        )
+        system::fs::write(path, &encrypted)
+    
+    fn load(path: &str) -> Result<own BiometricProfile, Error>:
+        log::info("Loading biometric profile from {}", path)
+        let encrypted = system::fs::read(path)?
+        let decrypted = crypto::decrypt_aes256(encrypted, crypto::get_hardware_key())?
+        return BiometricProfile::deserialize(&decrypted)
+
+
+# Identity verification engine
+struct IdentityVerifier:
+    developer_profile: Option<own BiometricProfile>
+    confidence_threshold: f64
+    enrollment_samples: usize
+    failed_attempts: usize
+    max_failed_attempts: usize
+    
+    fn new() -> own IdentityVerifier:
+        log::info("Initializing identity verifier")
+        return IdentityVerifier {
+            developer_profile: None,
+            confidence_threshold: 0.85,
+            enrollment_samples: 3000,  # ~30 min of typing
+            failed_attempts: 0,
+            max_failed_attempts: 3
+        }
+    
+    fn is_enrolled(&self) -> bool:
+        return self.developer_profile.is_some()
+    
+    fn start_enrollment(&mut self):
+        log::info("Starting developer enrollment - please work normally for 30 minutes")
+        self.developer_profile = Some(BiometricProfile::new())
+    
+    fn record_event(&mut self, event: &InputEvent):
+        if let Some(profile) = &mut self.developer_profile:
+            match event:
+                InputEvent::KeyPress(key, ts):
+                    # Will be paired with release
+                    pass
+                InputEvent::KeyRelease(key, press_ts, release_ts, prev):
+                    profile.keystroke.record_keystroke(key, press_ts, release_ts, prev.0, prev.1)
+                    profile.sample_count += 1
+                InputEvent::MouseMove(dx, dy, dt):
+                    profile.mouse.record_movement(dx, dy, dt)
+                    profile.sample_count += 1
+    
+    fn is_enrollment_complete(&self) -> bool:
+        if let Some(p) = &self.developer_profile:
+            return p.sample_count >= self.enrollment_samples
+        return false
+    
+    fn finalize_enrollment(&mut self) -> Result<(), Error>:
+        log::info("Finalizing enrollment")
+        if let Some(profile) = &self.developer_profile:
+            profile.save("config/developer_profile.enc")?
+            log::info("Developer profile saved with {} samples", profile.sample_count)
+        return Ok(())
+    
+    fn verify(&mut self, session: &Session) -> VerificationResult:
+        if self.failed_attempts >= self.max_failed_attempts:
+            log::warn("Account locked due to failed attempts")
+            return VerificationResult::Locked
+        
+        let profile = match &self.developer_profile:
+            Some(p): p
+            None: 
+                log::error("No developer profile enrolled")
+                return VerificationResult::NotEnrolled
+        
+        # Match keystroke dynamics
+        let keystroke_score = self.match_keystrokes(session, profile)
+        log::debug("Keystroke score: {:.2}", keystroke_score)
+        
+        # Match mouse dynamics
+        let mouse_score = self.match_mouse(session, profile)
+        log::debug("Mouse score: {:.2}", mouse_score)
+        
+        # Combined score (weighted)
+        let combined = 0.6 * keystroke_score + 0.4 * mouse_score
+        log::info("Verification score: {:.2} (threshold: {:.2})", combined, self.confidence_threshold)
+        
+        if combined >= self.confidence_threshold:
+            self.failed_attempts = 0
+            return VerificationResult::Verified(combined)
+        else:
+            self.failed_attempts += 1
+            log::warn("Verification failed (attempt {}/{})", 
+                self.failed_attempts, self.max_failed_attempts)
+            return VerificationResult::Rejected(combined)
+    
+    fn match_keystrokes(&self, session: &Session, profile: &BiometricProfile) -> f64:
+        let mut score = 0.0
+        let mut count = 0
+        
+        for (key, dwell) in &session.keystroke_dwells:
+            if let Some(dist) = profile.keystroke.dwell_times.get(key):
+                score += dist.probability(dwell)
+                count += 1
+        
+        for ((k1, k2), flight) in &session.keystroke_flights:
+            if let Some(dist) = profile.keystroke.flight_times.get(&(k1, k2)):
+                score += dist.probability(flight)
+                count += 1
+        
+        return if count > 0: score / (count as f64) else: 0.0
+    
+    fn match_mouse(&self, session: &Session, profile: &BiometricProfile) -> f64:
+        let velocity_score = profile.mouse.velocity.probability(session.avg_velocity)
+        let accel_score = profile.mouse.acceleration.probability(session.avg_acceleration)
+        return (velocity_score + accel_score) / 2.0
+
+
+enum VerificationResult:
+    Verified(score: f64)
+    Rejected(score: f64)
+    Locked
+    NotEnrolled
+
+
+struct Session:
+    keystroke_dwells: HashMap<Key, f64>
+    keystroke_flights: HashMap<(Key, Key), f64>
+    avg_velocity: f64
+    avg_acceleration: f64

@@ -1,0 +1,1006 @@
+module std::compress:
+
+# Bindings to Zstd and LZ4
+
+extern "C" {
+    # Zstd
+    fn ZSTD_compress(dst: *u8, dst_cap: usize, src: *u8, src_len: usize, level: i32) -> usize;
+    fn ZSTD_decompress(dst: *u8, dst_cap: usize, src: *u8, src_len: usize) -> usize;
+    fn ZSTD_getFrameContentSize(src: *u8, src_len: usize) -> u64;
+    fn ZSTD_isError(code: usize) -> u32;
+    
+    # LZ4
+    fn LZ4_compress_default(src: *u8, dst: *u8, src_len: i32, dst_cap: i32) -> i32;
+    fn LZ4_decompress_safe(src: *u8, dst: *u8, src_len: i32, dst_cap: i32) -> i32;
+}
+
+enum CompressionLevel:
+    Fast        # Level 1
+    Default     # Level 3
+    High        # Level 9
+    Ultra       # Level 19
+
+# Zstd
+
+fn zstd_compress(data: &[u8], level: CompressionLevel) -> Result<Vec<u8>, CompressError>:
+    let level_int = match level:
+        CompressionLevel::Fast => 1
+        CompressionLevel::Default => 3
+        CompressionLevel::High => 9
+        CompressionLevel::Ultra => 19
+    
+    let max_size = data.len() + (data.len() / 4) + 128
+    let mut out = vec![0u8; max_size]
+    
+    let result = ZSTD_compress(out.ptr(), max_size, data.ptr(), data.len(), level_int)
+    
+    if ZSTD_isError(result) != 0:
+        return Err(CompressError::CompressionFailed)
+    
+    out.truncate(result)
+    Ok(out)
+
+fn zstd_decompress(data: &[u8]) -> Result<Vec<u8>, CompressError>:
+    let decompressed_size = ZSTD_getFrameContentSize(data.ptr(), data.len())
+    
+    if decompressed_size == 0xFFFFFFFFFFFFFFFF:
+        return Err(CompressError::InvalidData)
+    
+    let mut out = vec![0u8; decompressed_size as usize]
+    
+    let result = ZSTD_decompress(out.ptr(), decompressed_size as usize, data.ptr(), data.len())
+    
+    if ZSTD_isError(result) != 0:
+        return Err(CompressError::DecompressionFailed)
+    
+    out.truncate(result)
+    Ok(out)
+
+# LZ4 (faster, lower compression ratio)
+
+fn lz4_compress(data: &[u8]) -> Result<Vec<u8>, CompressError>:
+    let max_size = lz4_compress_bound(data.len())
+    let mut out = vec![0u8; max_size]
+    
+    let result = LZ4_compress_default(data.ptr(), out.ptr(), data.len() as i32, max_size as i32)
+    
+    if result == 0:
+        return Err(CompressError::CompressionFailed)
+    
+    out.truncate(result as usize)
+    Ok(out)
+
+fn lz4_decompress(data: &[u8], original_size: usize) -> Result<Vec<u8>, CompressError>:
+    let mut out = vec![0u8; original_size]
+    
+    let result = LZ4_decompress_safe(data.ptr(), out.ptr(), data.len() as i32, original_size as i32)
+    
+    if result < 0:
+        return Err(CompressError::DecompressionFailed)
+    
+    out.truncate(result as usize)
+    Ok(out)
+
+fn lz4_compress_bound(input_size: usize) -> usize:
+    input_size + (input_size / 255) + 16
+
+enum CompressError:
+    CompressionFailed
+    DecompressionFailed
+    InvalidData
+    BufferTooSmall
+    InvalidHeader
+    ChecksumMismatch
+
+# Pure Omni implementations (no C dependencies)
+
+# ===========================================================
+# DEFLATE Implementation (RFC 1951)
+# ===========================================================
+
+# Huffman tree node
+struct HuffmanNode:
+    symbol: i32
+    left: Option<Box<HuffmanNode>>
+    right: Option<Box<HuffmanNode>>
+
+impl HuffmanNode:
+    fn new_leaf(symbol: i32) -> HuffmanNode:
+        HuffmanNode { symbol: symbol, left: None, right: None }
+    
+    fn new_branch(left: HuffmanNode, right: HuffmanNode) -> HuffmanNode:
+        HuffmanNode { symbol: -1, left: Some(Box::new(left)), right: Some(Box::new(right)) }
+    
+    fn is_leaf(self) -> bool:
+        self.left.is_none() and self.right.is_none()
+
+# Bit reader for decompression
+struct BitReader:
+    data: &[u8]
+    pos: usize
+    bit_pos: u8
+    buffer: u32
+
+impl BitReader:
+    fn new(data: &[u8]) -> BitReader:
+        BitReader { data: data, pos: 0, bit_pos: 0, buffer: 0 }
+    
+    fn read_bits(mut self, count: u8) -> u32:
+        let mut result: u32 = 0
+        let mut bits_read: u8 = 0
+        
+        while bits_read < count:
+            if self.bit_pos == 0:
+                if self.pos >= self.data.len():
+                    return result
+                self.buffer = self.data[self.pos] as u32
+                self.pos += 1
+            
+            let bit = (self.buffer >> self.bit_pos) & 1
+            result |= bit << bits_read
+            bits_read += 1
+            self.bit_pos = (self.bit_pos + 1) % 8
+        
+        result
+    
+    fn read_byte(mut self) -> u8:
+        # Align to byte boundary
+        if self.bit_pos != 0:
+            self.bit_pos = 0
+        
+        if self.pos >= self.data.len():
+            return 0
+        
+        let b = self.data[self.pos]
+        self.pos += 1
+        b
+    
+    fn read_u16_le(mut self) -> u16:
+        let lo = self.read_byte() as u16
+        let hi = self.read_byte() as u16
+        (hi << 8) | lo
+
+# Bit writer for compression
+struct BitWriter:
+    data: Vec<u8>
+    buffer: u32
+    bit_count: u8
+
+impl BitWriter:
+    fn new() -> BitWriter:
+        BitWriter { data: Vec::new(), buffer: 0, bit_count: 0 }
+    
+    fn write_bits(mut self, value: u32, count: u8):
+        self.buffer |= value << self.bit_count
+        self.bit_count += count
+        
+        while self.bit_count >= 8:
+            self.data.push((self.buffer & 0xFF) as u8)
+            self.buffer >>= 8
+            self.bit_count -= 8
+    
+    fn write_byte(mut self, b: u8):
+        self.flush_bits()
+        self.data.push(b)
+    
+    fn flush_bits(mut self):
+        if self.bit_count > 0:
+            self.data.push((self.buffer & 0xFF) as u8)
+            self.buffer = 0
+            self.bit_count = 0
+    
+    fn finish(mut self) -> Vec<u8>:
+        self.flush_bits()
+        self.data
+
+# Fixed Huffman code tables (RFC 1951)
+fn build_fixed_literal_tree() -> HuffmanNode:
+    # Build fixed Huffman tree for literals/lengths
+    # 0-143: 8-bit codes starting at 00110000
+    # 144-255: 9-bit codes starting at 110010000
+    # 256-279: 7-bit codes starting at 0000000
+    # 280-287: 8-bit codes starting at 11000000
+    
+    let mut lengths: [u8; 288] = [0; 288]
+    
+    for i in 0..144:
+        lengths[i] = 8
+    for i in 144..256:
+        lengths[i] = 9
+    for i in 256..280:
+        lengths[i] = 7
+    for i in 280..288:
+        lengths[i] = 8
+    
+    build_tree_from_lengths(&lengths)
+
+fn build_fixed_distance_tree() -> HuffmanNode:
+    let lengths: [u8; 32] = [5; 32]
+    build_tree_from_lengths(&lengths)
+
+fn build_tree_from_lengths(lengths: &[u8]) -> HuffmanNode:
+    # Count codes of each length
+    let mut bl_count: [u16; 16] = [0; 16]
+    for len in lengths:
+        if *len > 0:
+            bl_count[*len as usize] += 1
+    
+    # Find numerical value of smallest code for each length
+    let mut next_code: [u16; 16] = [0; 16]
+    let mut code: u16 = 0
+    for bits in 1..16:
+        code = (code + bl_count[bits - 1]) << 1
+        next_code[bits] = code
+    
+    # Assign codes to symbols and build tree
+    let mut root = HuffmanNode::new_branch(
+        HuffmanNode::new_leaf(-1),
+        HuffmanNode::new_leaf(-1)
+    )
+    
+    for (i, len) in lengths.iter().enumerate():
+        if *len != 0:
+            let code = next_code[*len as usize]
+            next_code[*len as usize] += 1
+            insert_code(&mut root, code, *len, i as i32)
+    
+    root
+
+fn insert_code(node: &mut HuffmanNode, code: u16, len: u8, symbol: i32):
+    if len == 0:
+        node.symbol = symbol
+        return
+    
+    let bit = (code >> (len - 1)) & 1
+    
+    if bit == 0:
+        if node.left.is_none():
+            node.left = Some(Box::new(HuffmanNode::new_leaf(-1)))
+        insert_code(node.left.as_mut().unwrap(), code, len - 1, symbol)
+    else:
+        if node.right.is_none():
+            node.right = Some(Box::new(HuffmanNode::new_leaf(-1)))
+        insert_code(node.right.as_mut().unwrap(), code, len - 1, symbol)
+
+# Length and distance extra bits tables
+const LENGTH_EXTRA_BITS: [u8; 29] = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0]
+const LENGTH_BASE: [u16; 29] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258]
+const DIST_EXTRA_BITS: [u8; 30] = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13]
+const DIST_BASE: [u16; 30] = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577]
+
+fn decode_symbol(reader: &mut BitReader, tree: &HuffmanNode) -> i32:
+    let mut node = tree
+    
+    while not node.is_leaf():
+        let bit = reader.read_bits(1)
+        if bit == 0:
+            match &node.left:
+                Some(left) => node = left.as_ref()
+                None => return -1
+        else:
+            match &node.right:
+                Some(right) => node = right.as_ref()
+                None => return -1
+    
+    node.symbol
+
+# DEFLATE decompression
+fn deflate_decompress(data: &[u8]) -> Result<Vec<u8>, CompressError>:
+    let mut reader = BitReader::new(data)
+    let mut output: Vec<u8> = Vec::new()
+    
+    loop:
+        let bfinal = reader.read_bits(1)
+        let btype = reader.read_bits(2)
+        
+        match btype:
+            0 =>
+                # Stored block (no compression)
+                let len = reader.read_u16_le()
+                let nlen = reader.read_u16_le()
+                if len != (nlen ^ 0xFFFF):
+                    return Err(CompressError::InvalidData)
+                for _ in 0..len:
+                    output.push(reader.read_byte())
+            
+            1 =>
+                # Fixed Huffman codes
+                let lit_tree = build_fixed_literal_tree()
+                let dist_tree = build_fixed_distance_tree()
+                decode_huffman_block(&mut reader, &lit_tree, &dist_tree, &mut output)?
+            
+            2 =>
+                # Dynamic Huffman codes
+                let (lit_tree, dist_tree) = read_dynamic_trees(&mut reader)?
+                decode_huffman_block(&mut reader, &lit_tree, &dist_tree, &mut output)?
+            
+            _ =>
+                return Err(CompressError::InvalidData)
+        
+        if bfinal == 1:
+            break
+    
+    Ok(output)
+
+fn decode_huffman_block(reader: &mut BitReader, lit_tree: &HuffmanNode, dist_tree: &HuffmanNode, output: &mut Vec<u8>) -> Result<(), CompressError>:
+    loop:
+        let symbol = decode_symbol(reader, lit_tree)
+        
+        if symbol < 0:
+            return Err(CompressError::InvalidData)
+        else if symbol < 256:
+            output.push(symbol as u8)
+        else if symbol == 256:
+            return Ok(())  # End of block
+        else:
+            # Length/distance pair
+            let length_code = (symbol - 257) as usize
+            if length_code >= 29:
+                return Err(CompressError::InvalidData)
+            
+            let length = LENGTH_BASE[length_code] + reader.read_bits(LENGTH_EXTRA_BITS[length_code]) as u16
+            
+            let dist_code = decode_symbol(reader, dist_tree) as usize
+            if dist_code >= 30:
+                return Err(CompressError::InvalidData)
+            
+            let distance = DIST_BASE[dist_code] + reader.read_bits(DIST_EXTRA_BITS[dist_code]) as u16
+            
+            # Copy from output buffer
+            let start = output.len() - distance as usize
+            for i in 0..length as usize:
+                output.push(output[start + i])
+    
+    Ok(())
+
+fn read_dynamic_trees(reader: &mut BitReader) -> Result<(HuffmanNode, HuffmanNode), CompressError>:
+    let hlit = reader.read_bits(5) as usize + 257  # literal/length codes
+    let hdist = reader.read_bits(5) as usize + 1   # distance codes
+    let hclen = reader.read_bits(4) as usize + 4   # code length codes
+    
+    # Code length code order
+    const CL_ORDER: [usize; 19] = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]
+    
+    let mut cl_lengths: [u8; 19] = [0; 19]
+    for i in 0..hclen:
+        cl_lengths[CL_ORDER[i]] = reader.read_bits(3) as u8
+    
+    let cl_tree = build_tree_from_lengths(&cl_lengths)
+    
+    # Read literal/length and distance code lengths
+    let mut lengths: Vec<u8> = Vec::new()
+    
+    while lengths.len() < hlit + hdist:
+        let sym = decode_symbol(reader, &cl_tree)
+        
+        match sym:
+            0..=15 =>
+                lengths.push(sym as u8)
+            
+            16 =>
+                # Repeat previous 3-6 times
+                let repeat = reader.read_bits(2) as usize + 3
+                let prev = *lengths.last().unwrap_or(&0)
+                for _ in 0..repeat:
+                    lengths.push(prev)
+            
+            17 =>
+                # Repeat 0 for 3-10 times
+                let repeat = reader.read_bits(3) as usize + 3
+                for _ in 0..repeat:
+                    lengths.push(0)
+            
+            18 =>
+                # Repeat 0 for 11-138 times
+                let repeat = reader.read_bits(7) as usize + 11
+                for _ in 0..repeat:
+                    lengths.push(0)
+            
+            _ =>
+                return Err(CompressError::InvalidData)
+    
+    let lit_tree = build_tree_from_lengths(&lengths[0..hlit])
+    let dist_tree = build_tree_from_lengths(&lengths[hlit..hlit + hdist])
+    
+    Ok((lit_tree, dist_tree))
+
+# LZ77 compression for DEFLATE
+struct LZ77Match:
+    length: u16
+    distance: u16
+
+fn lz77_find_match(data: &[u8], pos: usize, window_size: usize) -> Option<LZ77Match>:
+    if pos < 1:
+        return None
+    
+    let start = if pos > window_size { pos - window_size } else { 0 }
+    let mut best_length: u16 = 0
+    let mut best_distance: u16 = 0
+    
+    for i in start..pos:
+        let mut length: usize = 0
+        while pos + length < data.len() and data[i + length] == data[pos + length] and length < 258:
+            length += 1
+        
+        if length >= 3 and length as u16 > best_length:
+            best_length = length as u16
+            best_distance = (pos - i) as u16
+    
+    if best_length >= 3:
+        Some(LZ77Match { length: best_length, distance: best_distance })
+    else:
+        None
+
+fn deflate_compress(data: &[u8], level: CompressionLevel) -> Result<Vec<u8>, CompressError>:
+    let mut writer = BitWriter::new()
+    
+    # Write single block with fixed Huffman codes
+    writer.write_bits(1, 1)  # BFINAL = 1
+    writer.write_bits(1, 2)  # BTYPE = 01 (fixed Huffman)
+    
+    let window_size = match level:
+        CompressionLevel::Fast => 1024
+        CompressionLevel::Default => 8192
+        CompressionLevel::High => 32768
+        CompressionLevel::Ultra => 32768
+    
+    let mut pos: usize = 0
+    while pos < data.len():
+        match lz77_find_match(data, pos, window_size):
+            Some(m) =>
+                # Encode length/distance pair
+                let length_code = find_length_code(m.length)
+                write_fixed_code(&mut writer, 257 + length_code as u16)
+                let extra_bits = LENGTH_EXTRA_BITS[length_code]
+                if extra_bits > 0:
+                    writer.write_bits((m.length - LENGTH_BASE[length_code]) as u32, extra_bits)
+                
+                let dist_code = find_dist_code(m.distance)
+                write_fixed_dist_code(&mut writer, dist_code as u16)
+                let dist_extra = DIST_EXTRA_BITS[dist_code]
+                if dist_extra > 0:
+                    writer.write_bits((m.distance - DIST_BASE[dist_code]) as u32, dist_extra)
+                
+                pos += m.length as usize
+            
+            None =>
+                # Encode literal
+                write_fixed_code(&mut writer, data[pos] as u16)
+                pos += 1
+    
+    # Write end of block
+    write_fixed_code(&mut writer, 256)
+    
+    Ok(writer.finish())
+
+fn find_length_code(length: u16) -> usize:
+    for i in 0..29:
+        if i == 28 or length < LENGTH_BASE[i + 1]:
+            return i
+    28
+
+fn find_dist_code(distance: u16) -> usize:
+    for i in 0..30:
+        if i == 29 or distance < DIST_BASE[i + 1]:
+            return i
+    29
+
+fn write_fixed_code(writer: &mut BitWriter, symbol: u16):
+    if symbol < 144:
+        # 8 bits: 00110000 - 10111111 (48-191)
+        let code = symbol + 48
+        write_bits_reversed(writer, code as u32, 8)
+    else if symbol < 256:
+        # 9 bits: 110010000 - 111111111 (400-511)
+        let code = symbol - 144 + 400
+        write_bits_reversed(writer, code as u32, 9)
+    else if symbol < 280:
+        # 7 bits: 0000000 - 0010111 (0-23)
+        let code = symbol - 256
+        write_bits_reversed(writer, code as u32, 7)
+    else:
+        # 8 bits: 11000000 - 11000111 (192-199)
+        let code = symbol - 280 + 192
+        write_bits_reversed(writer, code as u32, 8)
+
+fn write_fixed_dist_code(writer: &mut BitWriter, symbol: u16):
+    write_bits_reversed(writer, symbol as u32, 5)
+
+fn write_bits_reversed(writer: &mut BitWriter, value: u32, count: u8):
+    let mut rev: u32 = 0
+    for i in 0..count:
+        rev |= ((value >> i) & 1) << (count - 1 - i)
+    writer.write_bits(rev, count)
+
+# ===========================================================
+# GZIP Implementation (RFC 1952)
+# ===========================================================
+
+const GZIP_MAGIC: u16 = 0x8B1F
+
+fn gzip_compress(data: &[u8], level: CompressionLevel) -> Result<Vec<u8>, CompressError>:
+    let mut output: Vec<u8> = Vec::new()
+    
+    # Header
+    output.push(0x1F)  # Magic byte 1
+    output.push(0x8B)  # Magic byte 2
+    output.push(8)     # Compression method (deflate)
+    output.push(0)     # Flags
+    output.extend(&[0, 0, 0, 0])  # Modification time
+    output.push(match level:
+        CompressionLevel::Fast => 4
+        CompressionLevel::Ultra => 2
+        _ => 0
+    )
+    output.push(0xFF)  # OS = unknown
+    
+    # Compressed data
+    let compressed = deflate_compress(data, level)?
+    output.extend(&compressed)
+    
+    # Trailer: CRC32 + original size
+    let crc = crc32(data)
+    output.push((crc & 0xFF) as u8)
+    output.push(((crc >> 8) & 0xFF) as u8)
+    output.push(((crc >> 16) & 0xFF) as u8)
+    output.push(((crc >> 24) & 0xFF) as u8)
+    
+    let size = data.len() as u32
+    output.push((size & 0xFF) as u8)
+    output.push(((size >> 8) & 0xFF) as u8)
+    output.push(((size >> 16) & 0xFF) as u8)
+    output.push(((size >> 24) & 0xFF) as u8)
+    
+    Ok(output)
+
+fn gzip_decompress(data: &[u8]) -> Result<Vec<u8>, CompressError>:
+    if data.len() < 10:
+        return Err(CompressError::InvalidHeader)
+    
+    # Verify magic number
+    if data[0] != 0x1F or data[1] != 0x8B:
+        return Err(CompressError::InvalidHeader)
+    
+    # Check compression method
+    if data[2] != 8:
+        return Err(CompressError::InvalidData)
+    
+    let flags = data[3]
+    let mut pos: usize = 10
+    
+    # Skip optional fields based on flags
+    if flags & 0x04 != 0:  # FEXTRA
+        let xlen = (data[pos] as usize) | ((data[pos + 1] as usize) << 8)
+        pos += 2 + xlen
+    
+    if flags & 0x08 != 0:  # FNAME
+        while pos < data.len() and data[pos] != 0:
+            pos += 1
+        pos += 1  # Skip null terminator
+    
+    if flags & 0x10 != 0:  # FCOMMENT
+        while pos < data.len() and data[pos] != 0:
+            pos += 1
+        pos += 1
+    
+    if flags & 0x02 != 0:  # FHCRC
+        pos += 2
+    
+    if pos >= data.len() - 8:
+        return Err(CompressError::InvalidData)
+    
+    # Decompress
+    let compressed = &data[pos..data.len() - 8]
+    let decompressed = deflate_decompress(compressed)?
+    
+    # Verify CRC32
+    let stored_crc = (data[data.len() - 8] as u32)
+        | ((data[data.len() - 7] as u32) << 8)
+        | ((data[data.len() - 6] as u32) << 16)
+        | ((data[data.len() - 5] as u32) << 24)
+    
+    let computed_crc = crc32(&decompressed)
+    
+    if stored_crc != computed_crc:
+        return Err(CompressError::ChecksumMismatch)
+    
+    Ok(decompressed)
+
+# ===========================================================
+# ZLIB Implementation (RFC 1950)
+# ===========================================================
+
+fn zlib_compress(data: &[u8], level: CompressionLevel) -> Result<Vec<u8>, CompressError>:
+    let mut output: Vec<u8> = Vec::new()
+    
+    # Header: CMF + FLG
+    let cmf: u8 = 0x78  # CM=8 (deflate), CINFO=7 (32K window)
+    let flg: u8 = match level:
+        CompressionLevel::Fast => 0x01
+        CompressionLevel::Default => 0x9C
+        CompressionLevel::High => 0xDA
+        CompressionLevel::Ultra => 0xDA
+    
+    # Adjust FLG so (CMF * 256 + FLG) % 31 == 0
+    let check = ((cmf as u16) * 256 + (flg as u16)) % 31
+    let flg = if check == 0 { flg } else { flg + (31 - check as u8) }
+    
+    output.push(cmf)
+    output.push(flg)
+    
+    # Compressed data
+    let compressed = deflate_compress(data, level)?
+    output.extend(&compressed)
+    
+    # Adler-32 checksum (big-endian)
+    let checksum = adler32(data)
+    output.push(((checksum >> 24) & 0xFF) as u8)
+    output.push(((checksum >> 16) & 0xFF) as u8)
+    output.push(((checksum >> 8) & 0xFF) as u8)
+    output.push((checksum & 0xFF) as u8)
+    
+    Ok(output)
+
+fn zlib_decompress(data: &[u8]) -> Result<Vec<u8>, CompressError>:
+    if data.len() < 6:
+        return Err(CompressError::InvalidHeader)
+    
+    # Verify header
+    let cmf = data[0]
+    let flg = data[1]
+    
+    if ((cmf as u16) * 256 + (flg as u16)) % 31 != 0:
+        return Err(CompressError::InvalidHeader)
+    
+    if (cmf & 0x0F) != 8:  # CM != deflate
+        return Err(CompressError::InvalidData)
+    
+    let has_dict = (flg & 0x20) != 0
+    let mut pos: usize = 2
+    
+    if has_dict:
+        pos += 4  # Skip preset dictionary
+    
+    # Decompress
+    let compressed = &data[pos..data.len() - 4]
+    let decompressed = deflate_decompress(compressed)?
+    
+    # Verify Adler-32 (big-endian)
+    let stored_checksum = ((data[data.len() - 4] as u32) << 24)
+        | ((data[data.len() - 3] as u32) << 16)
+        | ((data[data.len() - 2] as u32) << 8)
+        | (data[data.len() - 1] as u32)
+    
+    let computed_checksum = adler32(&decompressed)
+    
+    if stored_checksum != computed_checksum:
+        return Err(CompressError::ChecksumMismatch)
+    
+    Ok(decompressed)
+
+# ===========================================================
+# Checksum Functions
+# ===========================================================
+
+fn adler32(data: &[u8]) -> u32:
+    const MOD_ADLER: u32 = 65521
+    let mut a: u32 = 1
+    let mut b: u32 = 0
+    
+    for byte in data:
+        a = (a + (*byte as u32)) % MOD_ADLER
+        b = (b + a) % MOD_ADLER
+    
+    (b << 16) | a
+
+# CRC32 lookup table (polynomial 0xEDB88320)
+const CRC32_TABLE: [u32; 256] = init_crc32_table()
+
+fn init_crc32_table() -> [u32; 256]:
+    let mut table: [u32; 256] = [0; 256]
+    for i in 0u32..256:
+        let mut crc = i
+        for _ in 0..8:
+            if crc & 1 == 1:
+                crc = (crc >> 1) ^ 0xEDB88320
+            else:
+                crc = crc >> 1
+        table[i as usize] = crc
+    table
+
+fn crc32(data: &[u8]) -> u32:
+    let mut crc: u32 = 0xFFFFFFFF
+    
+    for byte in data:
+        let idx = ((crc ^ (*byte as u32)) & 0xFF) as usize
+        crc = (crc >> 8) ^ CRC32_TABLE[idx]
+    
+    crc ^ 0xFFFFFFFF
+
+# ===========================================================
+# Streaming compression (for large files)
+# ===========================================================
+
+struct ZstdEncoder:
+    buffer: Vec<u8>
+    level: CompressionLevel
+    flushed: bool
+
+impl ZstdEncoder:
+    fn new(level: CompressionLevel) -> ZstdEncoder:
+        ZstdEncoder { buffer: Vec::new(), level: level, flushed: false }
+
+    fn write(mut self, data: &[u8]) -> Result<Vec<u8>, CompressError>:
+        self.buffer.extend(data)
+        
+        # Compress in chunks when buffer is large enough
+        if self.buffer.len() >= 65536:
+            let to_compress = self.buffer.drain(0..self.buffer.len() - 1024).collect()
+            zstd_compress(&to_compress, self.level)
+        else:
+            Ok(Vec::new())
+
+    fn finish(mut self) -> Result<Vec<u8>, CompressError>:
+        self.flushed = true
+        if self.buffer.is_empty():
+            Ok(Vec::new())
+        else:
+            zstd_compress(&self.buffer, self.level)
+
+struct ZstdDecoder:
+    buffer: Vec<u8>
+
+impl ZstdDecoder:
+    fn new() -> ZstdDecoder:
+        ZstdDecoder { buffer: Vec::new() }
+
+    fn write(mut self, data: &[u8]) -> Result<Vec<u8>, CompressError>:
+        self.buffer.extend(data)
+        
+        # Try to decompress when we have enough data
+        if self.buffer.len() >= 4:
+            match zstd_decompress(&self.buffer):
+                Ok(result) =>
+                    self.buffer.clear()
+                    Ok(result)
+                Err(_) =>
+                    Ok(Vec::new())  # Need more data
+        else:
+            Ok(Vec::new())
+
+    fn finish(mut self) -> Result<(), CompressError>:
+        if self.buffer.is_empty():
+            Ok(())
+        else:
+            Err(CompressError::InvalidData)
+
+# ===========================================================
+# Run-length encoding (simple compression)
+# ===========================================================
+
+fn rle_compress(data: &[u8]) -> Vec<u8>:
+    if data.is_empty():
+        return Vec::new()
+    
+    let mut output: Vec<u8> = Vec::new()
+    let mut count: u8 = 1
+    let mut prev = data[0]
+    
+    for i in 1..data.len():
+        if data[i] == prev and count < 255:
+            count += 1
+        else:
+            output.push(count)
+            output.push(prev)
+            prev = data[i]
+            count = 1
+    
+    output.push(count)
+    output.push(prev)
+    output
+
+fn rle_decompress(data: &[u8]) -> Vec<u8>:
+    let mut output: Vec<u8> = Vec::new()
+    let mut i: usize = 0
+    
+    while i + 1 < data.len():
+        let count = data[i]
+        let byte = data[i + 1]
+        for _ in 0..count:
+            output.push(byte)
+        i += 2
+    
+    output
+
+# ===========================================================
+# High-level convenience functions
+# ===========================================================
+
+fn compress(data: &[u8]) -> Result<Vec<u8>, CompressError>:
+    zlib_compress(data, CompressionLevel::Default)
+
+fn decompress(data: &[u8]) -> Result<Vec<u8>, CompressError>:
+    zlib_decompress(data)
+# ============================================
+# Advanced Compression Features
+# ============================================
+
+# Streaming compression (process data in chunks)
+struct StreamingCompressor:
+    buffer: Vec<u8>
+    compressed: Vec<u8>
+    compression_level: CompressionLevel
+
+impl StreamingCompressor:
+    fn new(level: CompressionLevel) -> StreamingCompressor:
+        StreamingCompressor {
+            buffer: Vec::new(),
+            compressed: Vec::new(),
+            compression_level: level
+        }
+    
+    fn push(&mut self, data: &[u8]) -> Result<(), CompressError>:
+        self.buffer.extend(data)
+        
+        # Compress when buffer reaches certain threshold
+        if self.buffer.len() >= 4096:
+            let chunk = zstd_compress(&self.buffer, self.compression_level)?
+            self.compressed.extend(chunk)
+            self.buffer.clear()
+        
+        Ok(())
+    
+    fn finish(mut self) -> Result<Vec<u8>, CompressError>:
+        if not self.buffer.is_empty():
+            let chunk = zstd_compress(&self.buffer, self.compression_level)?
+            self.compressed.extend(chunk)
+        
+        Ok(self.compressed)
+
+# Dictionary-based compression
+struct DictionaryCompression:
+    dictionary: Vec<u8>
+
+impl DictionaryCompression:
+    fn new(dictionary: Vec<u8>) -> DictionaryCompression:
+        DictionaryCompression { dictionary }
+    
+    fn compress(&self, data: &[u8]) -> Result<Vec<u8>, CompressError>:
+        # Use dictionary to improve compression ratio
+        # Simple implementation: prepend dictionary info
+        let mut result = Vec::new()
+        result.extend(self.dictionary.iter())
+        result.extend(data.iter())
+        zstd_compress(&result, CompressionLevel::Default)
+    
+    fn decompress(&self, data: &[u8]) -> Result<Vec<u8>, CompressError>:
+        zstd_decompress(data)
+
+# Adaptive compression (auto-selects best algorithm)
+fn compress_adaptive(data: &[u8]) -> Result<Vec<u8>, CompressError>:
+    # For small data, use LZ4 (faster)
+    if data.len() < 1024:
+        return lz4_compress(data)
+    
+    # For larger data, use Zstd (better compression)
+    zstd_compress(data, CompressionLevel::Default)
+
+fn decompress_adaptive(data: &[u8], hint: &str) -> Result<Vec<u8>, CompressError>:
+    match hint:
+        "lz4" => lz4_decompress(data, 0),  # Need original size
+        "zstd" => zstd_decompress(data),
+        "deflate" => zlib_decompress(data),
+        _ => Err(CompressError::InvalidHeader)
+
+# Parallel compression (conceptual - would need threading)
+struct ParallelCompressor:
+    chunk_size: usize
+    compression_level: CompressionLevel
+
+impl ParallelCompressor:
+    fn new(chunk_size: usize, level: CompressionLevel) -> ParallelCompressor:
+        ParallelCompressor {
+            chunk_size,
+            compression_level: level
+        }
+    
+    fn compress(&self, data: &[u8]) -> Result<Vec<u8>, CompressError>:
+        let mut result = Vec::new()
+        let mut chunk_count = 0u32
+        
+        # Write header with chunk info
+        result.extend([b'P', b'C', b'O', b'M'])  # Magic
+        
+        var offset = 0
+        while offset < data.len():
+            let end = (offset + self.chunk_size).min(data.len())
+            let chunk = &data[offset..end]
+            
+            let compressed_chunk = zstd_compress(chunk, self.compression_level)?
+            
+            # Write chunk header
+            result.push((compressed_chunk.len() >> 24) as u8)
+            result.push((compressed_chunk.len() >> 16) as u8)
+            result.push((compressed_chunk.len() >> 8) as u8)
+            result.push(compressed_chunk.len() as u8)
+            
+            result.extend(compressed_chunk.iter())
+            
+            chunk_count += 1
+            offset = end
+        
+        Ok(result)
+    
+    fn decompress(&self, data: &[u8]) -> Result<Vec<u8>, CompressError>:
+        if data.len() < 4:
+            return Err(CompressError::InvalidData)
+        
+        # Verify magic
+        if data[0] != b'P' or data[1] != b'C' or data[2] != b'O' or data[3] != b'M':
+            return Err(CompressError::InvalidHeader)
+        
+        let mut result = Vec::new()
+        var offset = 4
+        
+        while offset < data.len():
+            if offset + 4 > data.len():
+                break
+            
+            # Read chunk size
+            let chunk_size = (((data[offset] as usize) << 24) |
+                              ((data[offset + 1] as usize) << 16) |
+                              ((data[offset + 2] as usize) << 8) |
+                              (data[offset + 3] as usize)) as usize
+            
+            offset += 4
+            
+            if offset + chunk_size > data.len():
+                break
+            
+            let compressed_chunk = &data[offset..(offset + chunk_size)]
+            let decompressed = zstd_decompress(compressed_chunk)?
+            result.extend(decompressed.iter())
+            
+            offset = offset + chunk_size
+        
+        Ok(result)
+
+# Compression statistics/analysis
+struct CompressionStats:
+    original_size: usize
+    compressed_size: usize
+    compression_ratio: f64
+    time_ms: u64
+
+impl CompressionStats:
+    fn new(original_size: usize, compressed_size: usize) -> CompressionStats:
+        let ratio = (compressed_size as f64) / (original_size as f64)
+        CompressionStats {
+            original_size,
+            compressed_size,
+            compression_ratio: ratio,
+            time_ms: 0
+        }
+    
+    fn savings_percent(&self) -> f64:
+        (1.0 - self.compression_ratio) * 100.0
+
+# Entropy calculation (for testing compression effectiveness)
+fn calculate_entropy(data: &[u8]) -> f64:
+    if data.is_empty():
+        return 0.0
+    
+    let mut frequency = vec![0u32; 256]
+    
+    for byte in data:
+        frequency[*byte as usize] += 1
+    
+    let len = data.len() as f64
+    var entropy = 0.0
+    
+    for count in frequency:
+        if count > 0:
+            let prob = (count as f64) / len
+            entropy = entropy - prob * (prob.log2())
+    
+    entropy

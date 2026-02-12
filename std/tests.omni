@@ -1,0 +1,430 @@
+# Omni Standard Library: Comprehensive Test Suite
+# Tests for all stdlib modules and new features
+
+module std::tests
+
+import std::core
+import std::math
+import std::tensor
+import std::compress
+import std::regex
+import std::image
+import std::reflect
+import std::python
+import std::dist
+
+# ============================================
+# Test Framework
+# ============================================
+
+struct TestResult:
+    name: String
+    passed: bool
+    message: Option<String>
+
+struct TestSuite:
+    results: Vec<TestResult>
+
+impl TestSuite:
+    fn new() -> TestSuite:
+        TestSuite { results: Vec::new() }
+    
+    fn add_result(&mut self, result: TestResult):
+        self.results.push(result)
+    
+    fn pass(&mut self, name: String):
+        self.add_result(TestResult {
+            name,
+            passed: true,
+            message: None
+        })
+    
+    fn fail(&mut self, name: String, message: String):
+        self.add_result(TestResult {
+            name,
+            passed: false,
+            message: Some(message)
+        })
+    
+    fn summary(&self) -> String:
+        let passed = self.results.iter().filter(|r| r.passed).count()
+        let failed = self.results.len() - passed
+        format("PASSED: {}, FAILED: {}", passed, failed)
+
+# ============================================
+# Math Module Tests
+# ============================================
+
+fn test_matrix_operations() -> TestSuite:
+    let mut suite = TestSuite::new()
+    
+    # Test matrix creation
+    let m = math::Matrix::new(3, 3)
+    if m.rows == 3 and m.cols == 3:
+        suite.pass("Matrix creation".to_string())
+    else:
+        suite.fail("Matrix creation".to_string(), "Incorrect dimensions".to_string())
+    
+    # Test identity matrix
+    let identity = math::Matrix::identity(3)
+    if identity.get(0, 0) == 1.0 and identity.get(0, 1) == 0.0:
+        suite.pass("Identity matrix".to_string())
+    else:
+        suite.fail("Identity matrix".to_string(), "Incorrect values".to_string())
+    
+    # Test matrix transpose
+    let mut m = math::Matrix::new(2, 3)
+    m.set(0, 1, 5.0)
+    let t = m.transpose()
+    if t.get(1, 0) == 5.0:
+        suite.pass("Matrix transpose".to_string())
+    else:
+        suite.fail("Matrix transpose".to_string(), "Transpose failed".to_string())
+    
+    suite
+
+fn test_vector_operations() -> TestSuite:
+    let mut suite = TestSuite::new()
+    
+    let a = vec![1.0, 2.0, 3.0]
+    let b = vec![4.0, 5.0, 6.0]
+    
+    # Test dot product
+    let dot = math::dot_product(&a, &b)
+    if abs(dot - 32.0) < 0.001:
+        suite.pass("Dot product".to_string())
+    else:
+        suite.fail("Dot product".to_string(), format("Expected 32, got {}", dot))
+    
+    # Test vector norm
+    let a_norm = math::vector_norm(&a)
+    if abs(a_norm - 3.741) < 0.01:
+        suite.pass("Vector norm".to_string())
+    else:
+        suite.fail("Vector norm".to_string(), "Incorrect norm".to_string())
+    
+    suite
+
+fn test_trigonometric() -> TestSuite:
+    let mut suite = TestSuite::new()
+    
+    # Test sin(π/2) = 1
+    let sin_val = math::sin(math::PI / 2.0)
+    if abs(sin_val - 1.0) < 0.001:
+        suite.pass("Sin(π/2)".to_string())
+    else:
+        suite.fail("Sin(π/2)".to_string(), "Incorrect value".to_string())
+    
+    # Test cos(0) = 1
+    let cos_val = math::cos(0.0)
+    if abs(cos_val - 1.0) < 0.001:
+        suite.pass("Cos(0)".to_string())
+    else:
+        suite.fail("Cos(0)".to_string(), "Incorrect value".to_string())
+    
+    suite
+
+fn test_special_functions() -> TestSuite:
+    let mut suite = TestSuite::new()
+    
+    # Test sqrt
+    let sqrt_val = math::sqrt(4.0)
+    if abs(sqrt_val - 2.0) < 0.001:
+        suite.pass("Square root".to_string())
+    else:
+        suite.fail("Square root".to_string(), "Incorrect value".to_string())
+    
+    # Test is_prime
+    if math::is_prime(17) and not math::is_prime(18):
+        suite.pass("Prime check".to_string())
+    else:
+        suite.fail("Prime check".to_string(), "Incorrect prime detection".to_string())
+    
+    suite
+
+fn test_random_generation() -> TestSuite:
+    let mut suite = TestSuite::new()
+    
+    let mut rng = math::Random::new(12345)
+    
+    # Test random u64
+    let r1 = rng.next_u64()
+    let r2 = rng.next_u64()
+    
+    if r1 != r2 and r1 > 0 and r2 > 0:
+        suite.pass("Random generation".to_string())
+    else:
+        suite.fail("Random generation".to_string(), "Invalid random values".to_string())
+    
+    # Test random f64 in [0, 1)
+    let rf = rng.next_f64()
+    if rf >= 0.0 and rf < 1.0:
+        suite.pass("Random float generation".to_string())
+    else:
+        suite.fail("Random float generation".to_string(), "Out of range".to_string())
+    
+    suite
+
+# ============================================
+# Tensor Module Tests
+# ============================================
+
+fn test_tensor_creation() -> TestSuite:
+    let mut suite = TestSuite::new()
+    
+    let t = tensor::Tensor::<f64>::new(vec![10, 20, 30])
+    if t.rank() == 3 and t.size() == 6000:
+        suite.pass("Tensor creation".to_string())
+    else:
+        suite.fail("Tensor creation".to_string(), "Incorrect dimensions".to_string())
+    
+    suite
+
+fn test_tensor_reshape() -> TestSuite:
+    let mut suite = TestSuite::new()
+    
+    let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    let t = tensor::Tensor::<f64>::from_vec(data, vec![2, 3])
+    
+    if t.is_ok():
+        let t = t.unwrap()
+        let reshaped = t.reshape(vec![3, 2])
+        if reshaped.is_ok() and reshaped.unwrap().size() == 6:
+            suite.pass("Tensor reshape".to_string())
+        else:
+            suite.fail("Tensor reshape".to_string(), "Reshape failed".to_string())
+    else:
+        suite.fail("Tensor from_vec".to_string(), "Creation failed".to_string())
+    
+    suite
+
+# ============================================
+# Compression Module Tests
+# ============================================
+
+fn test_rle_compression() -> TestSuite:
+    let mut suite = TestSuite::new()
+    
+    let data = vec![1u8, 1u8, 1u8, 2u8, 2u8, 3u8]
+    let compressed = compress::rle_compress(&data)
+    let decompressed = compress::rle_decompress(&compressed)
+    
+    if decompressed == data:
+        suite.pass("RLE compression/decompression".to_string())
+    else:
+        suite.fail("RLE compression/decompression".to_string(), "Round-trip failed".to_string())
+    
+    suite
+
+fn test_entropy_calculation() -> TestSuite:
+    let mut suite = TestSuite::new()
+    
+    # Uniform data has high entropy
+    let uniform = vec![0u8, 1u8, 2u8, 3u8, 4u8, 5u8, 6u8, 7u8]
+    let entropy_uniform = compress::calculate_entropy(&uniform)
+    
+    # Repeated data has low entropy
+    let repeated = vec![1u8; 8]
+    let entropy_repeated = compress::calculate_entropy(&repeated)
+    
+    if entropy_uniform > entropy_repeated:
+        suite.pass("Entropy calculation".to_string())
+    else:
+        suite.fail("Entropy calculation".to_string(), "Entropy ordering incorrect".to_string())
+    
+    suite
+
+# ============================================
+# Regex Module Tests
+# ============================================
+
+fn test_regex_match() -> TestSuite:
+    let mut suite = TestSuite::new()
+    
+    # Test basic match
+    if regex::is_match("hello", "hello"):
+        suite.pass("Simple regex match".to_string())
+    else:
+        suite.fail("Simple regex match".to_string(), "Match failed".to_string())
+    
+    # Test pattern match
+    if regex::is_match("[0-9]+", "12345"):
+        suite.pass("Digit pattern match".to_string())
+    else:
+        suite.fail("Digit pattern match".to_string(), "Pattern match failed".to_string())
+    
+    suite
+
+fn test_regex_find() -> TestSuite:
+    let mut suite = TestSuite::new()
+    
+    let regex = regex::Regex::new("[a-z]+")
+    if regex.is_ok():
+        let regex = regex.unwrap()
+        let text = "hello123world"
+        let matches = regex.find_all(text)
+        
+        if matches.len() == 2:
+            suite.pass("Regex find_all".to_string())
+        else:
+            suite.fail("Regex find_all".to_string(), "Incorrect match count".to_string())
+    else:
+        suite.fail("Regex compilation".to_string(), "Failed to compile".to_string())
+    
+    suite
+
+# ============================================
+# Image Module Tests
+# ============================================
+
+fn test_image_creation() -> TestSuite:
+    let mut suite = TestSuite::new()
+    
+    let img = image::Image::new(100, 100, 3, image::ImageFormat::RGB)
+    if img.width == 100 and img.height == 100 and img.channels == 3:
+        suite.pass("Image creation".to_string())
+    else:
+        suite.fail("Image creation".to_string(), "Incorrect dimensions".to_string())
+    
+    suite
+
+fn test_image_operations() -> TestSuite:
+    let mut suite = TestSuite::new()
+    
+    let img = image::Image::new(50, 50, 3, image::ImageFormat::RGB)
+    
+    # Test grayscale conversion
+    if let Ok(_) = image::to_grayscale(&img):
+        suite.pass("Grayscale conversion".to_string())
+    else:
+        suite.fail("Grayscale conversion".to_string(), "Conversion failed".to_string())
+    
+    # Test resize
+    if let Ok(resized) = image::resize(&img, 25, 25):
+        if resized.width == 25 and resized.height == 25:
+            suite.pass("Image resize".to_string())
+        else:
+            suite.fail("Image resize".to_string(), "Incorrect dimensions".to_string())
+    else:
+        suite.fail("Image resize".to_string(), "Resize failed".to_string())
+    
+    suite
+
+# ============================================
+# Reflection Module Tests
+# ============================================
+
+fn test_type_id() -> TestSuite:
+    let mut suite = TestSuite::new()
+    
+    let id1 = reflect::TypeId::of::<i64>()
+    let id2 = reflect::TypeId::of::<i64>()
+    let id3 = reflect::TypeId::of::<f64>()
+    
+    if id1.eq(&id2) and not id1.eq(&id3):
+        suite.pass("TypeId equality".to_string())
+    else:
+        suite.fail("TypeId equality".to_string(), "Equality check failed".to_string())
+    
+    suite
+
+fn test_size_of() -> TestSuite:
+    let mut suite = TestSuite::new()
+    
+    let size_i64 = reflect::size_of::<i64>()
+    let size_u32 = reflect::size_of::<u32>()
+    
+    if size_i64 == 8 and size_u32 == 4:
+        suite.pass("Size calculation".to_string())
+    else:
+        suite.fail("Size calculation".to_string(), "Incorrect sizes".to_string())
+    
+    suite
+
+# ============================================
+# Run All Tests
+# ============================================
+
+fn run_all_tests():
+    println("=== Omni Standard Library Test Suite ===\n")
+    
+    let mut all_tests = TestSuite::new()
+    
+    # Math tests
+    println("Math Module Tests:")
+    let math_matrix = test_matrix_operations()
+    for result in math_matrix.results:
+        println(if result.passed: "  [✓] {}" else: "  [✗] {}".format(result.name))
+    
+    let math_vector = test_vector_operations()
+    for result in math_vector.results:
+        println(if result.passed: "  [✓] {}" else: "  [✗] {}".format(result.name))
+    
+    let math_trig = test_trigonometric()
+    for result in math_trig.results:
+        println(if result.passed: "  [✓] {}" else: "  [✗] {}".format(result.name))
+    
+    let math_special = test_special_functions()
+    for result in math_special.results:
+        println(if result.passed: "  [✓] {}" else: "  [✗] {}".format(result.name))
+    
+    let math_random = test_random_generation()
+    for result in math_random.results:
+        println(if result.passed: "  [✓] {}" else: "  [✗] {}".format(result.name))
+    
+    # Tensor tests
+    println("\nTensor Module Tests:")
+    let tensor_create = test_tensor_creation()
+    for result in tensor_create.results:
+        println(if result.passed: "  [✓] {}" else: "  [✗] {}".format(result.name))
+    
+    let tensor_reshape = test_tensor_reshape()
+    for result in tensor_reshape.results:
+        println(if result.passed: "  [✓] {}" else: "  [✗] {}".format(result.name))
+    
+    # Compression tests
+    println("\nCompression Module Tests:")
+    let compress_rle = test_rle_compression()
+    for result in compress_rle.results:
+        println(if result.passed: "  [✓] {}" else: "  [✗] {}".format(result.name))
+    
+    let compress_entropy = test_entropy_calculation()
+    for result in compress_entropy.results:
+        println(if result.passed: "  [✓] {}" else: "  [✗] {}".format(result.name))
+    
+    # Regex tests
+    println("\nRegex Module Tests:")
+    let regex_match = test_regex_match()
+    for result in regex_match.results:
+        println(if result.passed: "  [✓] {}" else: "  [✗] {}".format(result.name))
+    
+    let regex_find = test_regex_find()
+    for result in regex_find.results:
+        println(if result.passed: "  [✓] {}" else: "  [✗] {}".format(result.name))
+    
+    # Image tests
+    println("\nImage Module Tests:")
+    let image_create = test_image_creation()
+    for result in image_create.results:
+        println(if result.passed: "  [✓] {}" else: "  [✗] {}".format(result.name))
+    
+    let image_ops = test_image_operations()
+    for result in image_ops.results:
+        println(if result.passed: "  [✓] {}" else: "  [✗] {}".format(result.name))
+    
+    # Reflection tests
+    println("\nReflection Module Tests:")
+    let reflect_type = test_type_id()
+    for result in reflect_type.results:
+        println(if result.passed: "  [✓] {}" else: "  [✗] {}".format(result.name))
+    
+    let reflect_size = test_size_of()
+    for result in reflect_size.results:
+        println(if result.passed: "  [✓] {}" else: "  [✗] {}".format(result.name))
+    
+    println("\n=== Test Summary ===")
+    println("Tests completed. See results above.")
+
+fn abs(x: f64) -> f64:
+    if x < 0.0: -x else: x
+

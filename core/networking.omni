@@ -1,0 +1,304 @@
+# HELIOS Networking
+# TCP, UDP, WebSocket, and network utilities
+
+module core::networking
+
+import core::logging as log
+import core::threading
+import safety::asimov
+
+# TCP Client
+struct TcpClient:
+    socket: Socket
+    connected: bool
+    remote_addr: String
+    
+    fn connect(host: &str, port: u16) -> Result<own TcpClient, NetworkError>:
+        log::info("Connecting to {}:{}", host, port)
+        
+        let addr = format!("{}:{}", host, port)
+        let socket = Socket::connect(&addr)?
+        
+        return Ok(TcpClient {
+            socket,
+            connected: true,
+            remote_addr: addr
+        })
+    
+    fn send(&mut self, data: &[u8]) -> Result<usize, NetworkError>:
+        if !self.connected:
+            return Err(NetworkError::NotConnected)
+        return self.socket.write(data)
+    
+    fn recv(&mut self, buffer: &mut [u8]) -> Result<usize, NetworkError>:
+        if !self.connected:
+            return Err(NetworkError::NotConnected)
+        return self.socket.read(buffer)
+    
+    fn recv_all(&mut self) -> Result<Vec<u8>, NetworkError>:
+        let mut data = Vec::new()
+        let mut buffer = [0u8; 4096]
+        loop:
+            match self.socket.read(&mut buffer):
+                Ok(0): break
+                Ok(n): data.extend_from_slice(&buffer[..n])
+                Err(e): return Err(e)
+        return Ok(data)
+    
+    fn close(&mut self):
+        self.socket.close()
+        self.connected = false
+
+
+# TCP Server
+struct TcpServer:
+    listener: Listener
+    clients: Vec<TcpClient>
+    running: bool
+    
+    fn bind(host: &str, port: u16) -> Result<own TcpServer, NetworkError>:
+        log::info("Starting TCP server on {}:{}", host, port)
+        let listener = Listener::bind(&format!("{}:{}", host, port))?
+        
+        return Ok(TcpServer {
+            listener,
+            clients: Vec::new(),
+            running: false
+        })
+    
+    fn accept(&mut self) -> Result<TcpClient, NetworkError>:
+        let socket = self.listener.accept()?
+        let addr = socket.peer_addr()
+        log::info("Accepted connection from {}", addr)
+        
+        return Ok(TcpClient {
+            socket,
+            connected: true,
+            remote_addr: addr
+        })
+    
+    fn run<F>(&mut self, handler: F) where F: Fn(&mut TcpClient):
+        self.running = true
+        while self.running:
+            match self.accept():
+                Ok(mut client):
+                    handler(&mut client)
+                Err(e):
+                    log::error("Accept error: {:?}", e)
+    
+    fn stop(&mut self):
+        self.running = false
+        self.listener.close()
+
+
+# UDP Socket
+struct UdpSocket:
+    socket: RawSocket
+    local_addr: String
+    
+    fn bind(host: &str, port: u16) -> Result<own UdpSocket, NetworkError>:
+        let addr = format!("{}:{}", host, port)
+        let socket = RawSocket::bind_udp(&addr)?
+        
+        return Ok(UdpSocket {
+            socket,
+            local_addr: addr
+        })
+    
+    fn send_to(&self, data: &[u8], addr: &str) -> Result<usize, NetworkError>:
+        return self.socket.send_to(data, addr)
+    
+    fn recv_from(&self, buffer: &mut [u8]) -> Result<(usize, String), NetworkError>:
+        return self.socket.recv_from(buffer)
+
+
+# WebSocket Client
+struct WebSocket:
+    tcp: TcpClient
+    connected: bool
+    url: String
+    
+    fn connect(url: &str) -> Result<own WebSocket, NetworkError>:
+        log::info("WebSocket connecting to {}", url)
+        
+        # Parse URL
+        let (host, port, path) = parse_ws_url(url)?
+        
+        # TCP connect
+        let mut tcp = TcpClient::connect(host, port)?
+        
+        # WebSocket handshake
+        let key = base64::encode(&random_bytes(16))
+        let request = format!(
+            "GET {} HTTP/1.1\r\n\
+             Host: {}\r\n\
+             Upgrade: websocket\r\n\
+             Connection: Upgrade\r\n\
+             Sec-WebSocket-Key: {}\r\n\
+             Sec-WebSocket-Version: 13\r\n\r\n",
+            path, host, key
+        )
+        
+        tcp.send(request.as_bytes())?
+        
+        # Read response
+        let mut buffer = [0u8; 1024]
+        let n = tcp.recv(&mut buffer)?
+        let response = String::from_utf8_lossy(&buffer[..n])
+        
+        if !response.contains("101"):
+            return Err(NetworkError::HandshakeFailed)
+        
+        log::info("WebSocket connected")
+        return Ok(WebSocket {
+            tcp,
+            connected: true,
+            url: url.to_string()
+        })
+    
+    fn send(&mut self, message: &str) -> Result<(), NetworkError>:
+        let frame = encode_ws_frame(message.as_bytes(), OpCode::Text)
+        self.tcp.send(&frame)?
+        return Ok(())
+    
+    fn send_binary(&mut self, data: &[u8]) -> Result<(), NetworkError>:
+        let frame = encode_ws_frame(data, OpCode::Binary)
+        self.tcp.send(&frame)?
+        return Ok(())
+    
+    fn recv(&mut self) -> Result<WsMessage, NetworkError>:
+        let mut header = [0u8; 2]
+        self.tcp.recv(&mut header)?
+        
+        let opcode = header[0] & 0x0F
+        let masked = (header[1] & 0x80) != 0
+        let mut len = (header[1] & 0x7F) as usize
+        
+        if len == 126:
+            let mut ext = [0u8; 2]
+            self.tcp.recv(&mut ext)?
+            len = u16::from_be_bytes(ext) as usize
+        else if len == 127:
+            let mut ext = [0u8; 8]
+            self.tcp.recv(&mut ext)?
+            len = u64::from_be_bytes(ext) as usize
+        
+        let mut mask = [0u8; 4]
+        if masked:
+            self.tcp.recv(&mut mask)?
+        
+        let mut data = vec![0u8; len]
+        self.tcp.recv(&mut data)?
+        
+        if masked:
+            for i in 0..len:
+                data[i] ^= mask[i % 4]
+        
+        match opcode:
+            1: Ok(WsMessage::Text(String::from_utf8_lossy(&data).to_string()))
+            2: Ok(WsMessage::Binary(data))
+            8: Ok(WsMessage::Close)
+            9: Ok(WsMessage::Ping(data))
+            10: Ok(WsMessage::Pong(data))
+            _: Err(NetworkError::InvalidFrame)
+    
+    fn close(&mut self):
+        let frame = encode_ws_frame(&[], OpCode::Close)
+        self.tcp.send(&frame).ok()
+        self.tcp.close()
+        self.connected = false
+
+enum WsMessage:
+    Text(content: String)
+    Binary(data: Vec<u8>)
+    Close
+    Ping(data: Vec<u8>)
+    Pong(data: Vec<u8>)
+
+enum OpCode:
+    Text = 1
+    Binary = 2
+    Close = 8
+    Ping = 9
+    Pong = 10
+
+
+fn encode_ws_frame(data: &[u8], opcode: OpCode) -> Vec<u8>:
+    let mut frame = Vec::new()
+    frame.push(0x80 | (opcode as u8))  # FIN + opcode
+    
+    let len = data.len()
+    if len < 126:
+        frame.push(0x80 | len as u8)  # Masked
+    else if len < 65536:
+        frame.push(0x80 | 126)
+        frame.extend_from_slice(&(len as u16).to_be_bytes())
+    else:
+        frame.push(0x80 | 127)
+        frame.extend_from_slice(&(len as u64).to_be_bytes())
+    
+    # Mask key
+    let mask: [u8; 4] = random_bytes(4).try_into().unwrap()
+    frame.extend_from_slice(&mask)
+    
+    # Masked data
+    for (i, b) in data.iter().enumerate():
+        frame.push(b ^ mask[i % 4])
+    
+    return frame
+
+fn parse_ws_url(url: &str) -> Result<(&str, u16, &str), NetworkError>:
+    let url = url.strip_prefix("ws://")
+        .or_else(|| url.strip_prefix("wss://"))
+        .ok_or(NetworkError::InvalidUrl)?
+    
+    let (host_port, path) = url.split_once('/').unwrap_or((url, "/"))
+    let (host, port) = if host_port.contains(':'):
+        let parts = host_port.split_once(':').unwrap()
+        (parts.0, parts.1.parse().unwrap_or(80))
+    else:
+        (host_port, 80)
+    
+    return Ok((host, port, &format!("/{}", path)))
+
+
+enum NetworkError:
+    ConnectionFailed(reason: String)
+    NotConnected
+    Timeout
+    InvalidUrl
+    HandshakeFailed
+    InvalidFrame
+    IoError(message: String)
+
+
+# DNS utilities
+fn resolve(hostname: &str) -> Result<Vec<String>, NetworkError>:
+    # System DNS resolution
+    return system::dns::resolve(hostname)
+
+fn reverse_lookup(ip: &str) -> Result<String, NetworkError>:
+    return system::dns::reverse(ip)
+
+
+# Network info
+struct NetworkInfo:
+    fn local_ip() -> String:
+        system::network::local_ip()
+    
+    fn interfaces() -> Vec<NetworkInterface>:
+        system::network::interfaces()
+    
+    fn is_online() -> bool:
+        # Try to connect to well-known server
+        match TcpClient::connect("8.8.8.8", 53):
+            Ok(_): true
+            Err(_): false
+
+
+struct NetworkInterface:
+    name: String
+    mac: String
+    ipv4: Option<String>
+    ipv6: Option<String>
+    is_up: bool

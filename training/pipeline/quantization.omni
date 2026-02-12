@@ -1,0 +1,159 @@
+# Cognitive Knowledge Graph Compression
+# Memory-efficient storage and optimization for knowledge graphs
+
+module KnowledgeCompression
+
+import core::logging as log
+import brain::knowledge_graph
+
+struct CompressionConfig:
+    max_memory_gb: usize
+    min_confidence: f64
+    dedup_similarity: f64
+
+    fn default() -> own CompressionConfig:
+        return CompressionConfig {
+            max_memory_gb: 8,
+            min_confidence: 0.2,
+            dedup_similarity: 0.9
+        }
+
+# Compress knowledge graph for storage and memory efficiency
+fn compress_knowledge_graph(kg: &mut knowledge_graph::KnowledgeGraph, config: CompressionConfig):
+    log::info("Compressing knowledge graph (max: {} GB, min confidence: {})",
+        config.max_memory_gb, config.min_confidence)
+
+    let initial_nodes = kg.node_count()
+    let initial_edges = kg.edge_count()
+
+    # Step 1: Deduplicate nodes with high similarity
+    kg.deduplicate_nodes_by_similarity(config.dedup_similarity)
+
+    # Step 2: Remove edges pointing to nonexistent nodes
+    kg.remove_orphan_edges()
+
+    # Step 3: Compact internal storage (defragment)
+    kg.compact_storage()
+
+    # Step 4: Prune low-confidence nodes until under memory limit
+    while kg.memory_usage_gb() > config.max_memory_gb:
+        kg.prune_below_confidence(config.min_confidence)
+        kg.remove_orphan_edges()
+        # Increase threshold slightly for next round if still over limit
+        config.min_confidence += 0.05
+
+    let final_nodes = kg.node_count()
+    let final_edges = kg.edge_count()
+    log::info("Compression complete: nodes {} -> {} ({:.1}% reduction), edges {} -> {}",
+        initial_nodes, final_nodes,
+        (1.0 - final_nodes as f64 / initial_nodes.max(1) as f64) * 100.0,
+        initial_edges, final_edges)
+
+
+# Serialize knowledge graph to a compact binary format
+fn serialize_compact(kg: &knowledge_graph::KnowledgeGraph) -> Vec<u8>:
+    let mut buffer = Vec::new()
+
+    # Header: magic + version
+    buffer.extend_from_slice(b"OMNI_KG\x01")
+
+    # Node count
+    let nodes = kg.get_all_nodes()
+    buffer.extend_from_slice(&(nodes.len() as u64).to_le_bytes())
+
+    for node in &nodes:
+        # id (u64)
+        buffer.extend_from_slice(&node.id.to_le_bytes())
+        # label (length-prefixed utf8)
+        let label_bytes = node.label.as_bytes()
+        buffer.extend_from_slice(&(label_bytes.len() as u16).to_le_bytes())
+        buffer.extend_from_slice(label_bytes)
+        # confidence (f64)
+        buffer.extend_from_slice(&node.confidence.to_le_bytes())
+
+    # Edge count
+    let edges = kg.get_all_edges()
+    buffer.extend_from_slice(&(edges.len() as u64).to_le_bytes())
+
+    for edge in &edges:
+        buffer.extend_from_slice(&edge.from_id.to_le_bytes())
+        buffer.extend_from_slice(&edge.to_id.to_le_bytes())
+        let rel_bytes = edge.relation.as_bytes()
+        buffer.extend_from_slice(&(rel_bytes.len() as u16).to_le_bytes())
+        buffer.extend_from_slice(rel_bytes)
+        buffer.extend_from_slice(&edge.weight.to_le_bytes())
+
+    return buffer
+
+
+# Deserialize knowledge graph from compact binary format
+fn deserialize_compact(data: &[u8]) -> Result<own knowledge_graph::KnowledgeGraph, String>:
+    let mut offset = 0
+
+    # Verify magic
+    if data.len() < 8 || &data[0..8] != b"OMNI_KG\x01":
+        return Err("Invalid knowledge graph file format".to_string())
+    offset += 8
+
+    let mut graph = knowledge_graph::KnowledgeGraph::new()
+
+    # Read nodes
+    let node_count = u64::from_le_bytes(data[offset..offset+8].try_into().unwrap()) as usize
+    offset += 8
+
+    for _ in 0..node_count:
+        let id = u64::from_le_bytes(data[offset..offset+8].try_into().unwrap())
+        offset += 8
+
+        let label_len = u16::from_le_bytes(data[offset..offset+2].try_into().unwrap()) as usize
+        offset += 2
+        let label = String::from_utf8_lossy(&data[offset..offset+label_len]).to_string()
+        offset += label_len
+
+        let confidence = f64::from_le_bytes(data[offset..offset+8].try_into().unwrap())
+        offset += 8
+
+        graph.add_node_with_id(id, &label, confidence, HashMap::new())
+
+    # Read edges
+    let edge_count = u64::from_le_bytes(data[offset..offset+8].try_into().unwrap()) as usize
+    offset += 8
+
+    for _ in 0..edge_count:
+        let from_id = u64::from_le_bytes(data[offset..offset+8].try_into().unwrap())
+        offset += 8
+        let to_id = u64::from_le_bytes(data[offset..offset+8].try_into().unwrap())
+        offset += 8
+
+        let rel_len = u16::from_le_bytes(data[offset..offset+2].try_into().unwrap()) as usize
+        offset += 2
+        let relation = String::from_utf8_lossy(&data[offset..offset+rel_len]).to_string()
+        offset += rel_len
+
+        let weight = f64::from_le_bytes(data[offset..offset+8].try_into().unwrap())
+        offset += 8
+
+        graph.add_edge(from_id, to_id, &relation, weight)
+
+    return Ok(graph)
+
+
+# Compute compression statistics
+struct CompressionStats:
+    original_nodes: usize
+    final_nodes: usize
+    original_edges: usize
+    final_edges: usize
+    original_size_bytes: usize
+    final_size_bytes: usize
+
+    fn compression_ratio(&self) -> f64:
+        if self.original_size_bytes == 0:
+            return 1.0
+        return self.final_size_bytes as f64 / self.original_size_bytes as f64
+
+    fn report(&self) -> String:
+        return format("Knowledge compression: nodes {}->{} edges {}->{} ratio {:.2}%",
+            self.original_nodes, self.final_nodes,
+            self.original_edges, self.final_edges,
+            self.compression_ratio() * 100.0)

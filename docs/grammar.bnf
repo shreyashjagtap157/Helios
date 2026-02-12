@@ -1,0 +1,220 @@
+# Omni Grammar (Formal BNF)
+# This file defines the complete grammar for the Omni language
+# Used by the parser generator
+
+# ============================================================
+# TOP LEVEL
+# ============================================================
+
+program         ::= module_decl import* item*
+module_decl     ::= "module" IDENT NEWLINE
+
+import          ::= "import" path ("as" IDENT)? NEWLINE
+path            ::= IDENT ("::" IDENT)*
+
+item            ::= struct_def
+                  | fn_def
+                  | trait_def
+                  | impl_block
+                  | const_def
+                  | module_block
+
+# ============================================================
+# DEFINITIONS
+# ============================================================
+
+struct_def      ::= attrs? "struct" IDENT implements? ":" NEWLINE INDENT struct_body DEDENT
+implements      ::= "implements" IDENT
+struct_body     ::= (field | method)*
+field           ::= IDENT ":" type NEWLINE
+
+fn_def          ::= attrs? "async"? "fn" IDENT "(" params? ")" return_type? ":" NEWLINE block
+params          ::= param ("," param)*
+param           ::= self_param | regular_param
+self_param      ::= "&" "mut"? "self" | "self"
+regular_param   ::= IDENT ":" type
+return_type     ::= "->" type
+
+method          ::= fn_def
+
+trait_def       ::= attrs? "trait" IDENT ":" NEWLINE INDENT method* DEDENT
+
+impl_block      ::= attrs? "impl" IDENT "for" IDENT ":" NEWLINE INDENT method* DEDENT
+
+const_def       ::= attrs? "const" IDENT ":" type "=" expr NEWLINE
+
+module_block    ::= attrs? "module" IDENT ":" NEWLINE INDENT item* DEDENT
+
+# ============================================================
+# TYPES
+# ============================================================
+
+type            ::= ownership_mod? base_type
+ownership_mod   ::= "own" | "shared" | "&" "mut"? | "unsafe" "*"
+
+base_type       ::= primitive_type
+                  | named_type
+                  | array_type
+                  | slice_type
+                  | fn_type
+                  | tuple_type
+                  | option_type
+                  | result_type
+
+primitive_type  ::= "u8" | "u16" | "u32" | "u64" | "usize"
+                  | "i8" | "i16" | "i32" | "i64" | "isize"
+                  | "f32" | "f64"
+                  | "bool"
+                  | "str"
+
+named_type      ::= IDENT type_args?
+type_args       ::= "<" type ("," type)* ">"
+
+array_type      ::= "[" type ";" expr "]"
+slice_type      ::= "[" type "]"
+fn_type         ::= "fn" "(" type_list? ")" return_type?
+type_list       ::= type ("," type)*
+tuple_type      ::= "(" type ("," type)+ ")"
+option_type     ::= "Option" "<" type ">"
+result_type     ::= "Result" "<" type "," type ">"
+
+# ============================================================
+# STATEMENTS
+# ============================================================
+
+block           ::= INDENT statement+ DEDENT
+
+statement       ::= let_stmt
+                  | return_stmt
+                  | if_stmt
+                  | for_stmt
+                  | while_stmt
+                  | match_stmt
+                  | break_stmt
+                  | continue_stmt
+                  | expr_stmt
+
+let_stmt        ::= "let" "mut"? IDENT type_annotation? "=" expr NEWLINE
+type_annotation ::= ":" type
+
+return_stmt     ::= "return" expr? NEWLINE
+
+if_stmt         ::= "if" expr ":" NEWLINE block else_clause?
+else_clause     ::= "else" ":" NEWLINE block
+                  | "else" if_stmt
+
+for_stmt        ::= "for" IDENT "in" expr ":" NEWLINE block
+
+while_stmt      ::= "while" expr ":" NEWLINE block
+
+match_stmt      ::= "match" expr ":" NEWLINE INDENT match_arm+ DEDENT
+match_arm       ::= pattern ":" arm_body
+arm_body        ::= expr NEWLINE | NEWLINE block
+
+break_stmt      ::= "break" NEWLINE
+continue_stmt   ::= "continue" NEWLINE
+
+expr_stmt       ::= expr NEWLINE
+
+# ============================================================
+# EXPRESSIONS
+# ============================================================
+
+expr            ::= assignment_expr
+
+assignment_expr ::= or_expr (assign_op or_expr)?
+assign_op       ::= "=" | "+=" | "-=" | "*=" | "/="
+
+or_expr         ::= and_expr ("||" and_expr)*
+and_expr        ::= equality_expr ("&&" equality_expr)*
+equality_expr   ::= comparison_expr (("==" | "!=") comparison_expr)*
+comparison_expr ::= range_expr (("<" | ">" | "<=" | ">=") range_expr)*
+range_expr      ::= additive_expr (".." "="? additive_expr)?
+additive_expr   ::= multiplicative_expr (("+" | "-") multiplicative_expr)*
+multiplicative_expr ::= unary_expr (("*" | "/" | "%") unary_expr)*
+
+unary_expr      ::= unary_op unary_expr | postfix_expr
+unary_op        ::= "-" | "!" | "&" "mut"? | "*"
+
+postfix_expr    ::= primary_expr postfix_op*
+postfix_op      ::= call | index | field_access | method_call | try_op
+call            ::= "(" arg_list? ")"
+index           ::= "[" expr "]"
+field_access    ::= "." IDENT
+method_call     ::= "." IDENT "(" arg_list? ")"
+try_op          ::= "?"
+
+arg_list        ::= expr ("," expr)*
+
+primary_expr    ::= literal
+                  | IDENT
+                  | grouped_expr
+                  | array_literal
+                  | struct_literal
+                  | closure
+                  | path_expr
+
+grouped_expr    ::= "(" expr ")"
+array_literal   ::= "[" (expr ("," expr)*)? "]"
+struct_literal  ::= IDENT "{" field_init ("," field_init)* "}"
+field_init      ::= IDENT ":" expr
+closure         ::= "|" params? "|" expr
+path_expr       ::= IDENT ("::" IDENT)+
+
+# ============================================================
+# PATTERNS
+# ============================================================
+
+pattern         ::= literal_pattern
+                  | binding_pattern
+                  | struct_pattern
+                  | enum_pattern
+                  | wildcard_pattern
+                  | tuple_pattern
+
+literal_pattern ::= INT | FLOAT | STRING | "true" | "false"
+binding_pattern ::= IDENT
+struct_pattern  ::= IDENT "{" field_pattern ("," field_pattern)* "}"
+field_pattern   ::= IDENT (":" pattern)?
+enum_pattern    ::= IDENT ("::" IDENT)? ("(" pattern_list ")")?
+wildcard_pattern ::= "_"
+tuple_pattern   ::= "(" pattern ("," pattern)+ ")"
+pattern_list    ::= pattern ("," pattern)*
+
+# ============================================================
+# ATTRIBUTES
+# ============================================================
+
+attrs           ::= attr+
+attr            ::= "@" IDENT attr_args? NEWLINE
+attr_args       ::= "(" attr_arg ("," attr_arg)* ")"
+attr_arg        ::= IDENT ":" attr_value
+attr_value      ::= literal | IDENT | "[" attr_value ("," attr_value)* "]"
+
+# ============================================================
+# LITERALS
+# ============================================================
+
+literal         ::= INT | FLOAT | STRING | CHAR | "true" | "false" | "null"
+
+# ============================================================
+# LEXICAL ELEMENTS
+# ============================================================
+
+IDENT           ::= [a-zA-Z_][a-zA-Z0-9_]*
+INT             ::= DECIMAL | HEX | BINARY | OCTAL
+DECIMAL         ::= [0-9][0-9_]*
+HEX             ::= "0x" [0-9a-fA-F][0-9a-fA-F_]*
+BINARY          ::= "0b" [01][01_]*
+OCTAL           ::= "0o" [0-7][0-7_]*
+FLOAT           ::= [0-9]+ "." [0-9]+ EXPONENT?
+EXPONENT        ::= [eE] [+-]? [0-9]+
+STRING          ::= '"' (ESCAPE | [^"\\])* '"'
+CHAR            ::= "'" (ESCAPE | [^'\\]) "'"
+ESCAPE          ::= "\\" [nrt\\'"0]
+
+NEWLINE         ::= '\n' | '\r\n'
+INDENT          ::= <increase in indentation level>
+DEDENT          ::= <decrease in indentation level>
+WHITESPACE      ::= [ \t]+
+COMMENT         ::= "#" [^\n]* | "#*" .* "*#"

@@ -1,0 +1,207 @@
+# HELIOS Standard Library - System Module
+# Written in Omni - OS and hardware interaction
+
+module core::system
+
+pub use fs
+pub use time
+pub use memory
+pub use signal
+pub use process
+
+# File System
+module fs:
+    fn read(path: &str) -> Result<Vec<u8>, IoError>:
+        ...
+    
+    fn read_string(path: &str) -> Result<String, IoError>:
+        let bytes = read(path)?
+        return String::from_utf8(bytes)
+    
+    fn write(path: &str, data: &[u8]) -> Result<(), IoError>:
+        ...
+    
+    fn write_string(path: &str, data: &str) -> Result<(), IoError>:
+        return write(path, data.as_bytes())
+    
+    fn exists(path: &str) -> bool:
+        ...
+    
+    fn create_dir(path: &str) -> Result<(), IoError>:
+        ...
+    
+    fn create_dir_all(path: &str) -> Result<(), IoError>:
+        ...
+    
+    fn remove(path: &str) -> Result<(), IoError>:
+        ...
+    
+    fn remove_dir(path: &str) -> Result<(), IoError>:
+        ...
+    
+    fn copy(src: &str, dst: &str) -> Result<(), IoError>:
+        ...
+    
+    fn rename(src: &str, dst: &str) -> Result<(), IoError>:
+        ...
+    
+    fn list_dir(path: &str) -> Result<Vec<DirEntry>, IoError>:
+        ...
+    
+    struct DirEntry:
+        name: String
+        path: String
+        is_dir: bool
+        size: usize
+
+# Time
+module time:
+    fn now_ms() -> u64:
+        ...
+    
+    fn now_iso() -> String:
+        ...
+    
+    fn sleep_ms(ms: u64):
+        ...
+    
+    fn sleep_secs(secs: u64):
+        sleep_ms(secs * 1000)
+    
+    struct Duration:
+        nanos: u64
+        
+        fn from_secs(s: u64) -> own Duration:
+            return Duration { nanos: s * 1_000_000_000 }
+        
+        fn from_millis(ms: u64) -> own Duration:
+            return Duration { nanos: ms * 1_000_000 }
+        
+        fn as_secs(&self) -> u64:
+            return self.nanos / 1_000_000_000
+        
+        fn as_millis(&self) -> u64:
+            return self.nanos / 1_000_000
+
+# Memory management
+module memory:
+    fn alloc<T>(count: usize) -> own [T]:
+        ...
+    
+    fn realloc<T>(ptr: &mut [T], new_count: usize):
+        ...
+    
+    fn dealloc<T>(ptr: own [T]):
+        ...
+    
+    fn copy<T>(src: &[T], dst: &mut [T], count: usize):
+        ...
+    
+    fn zero<T>(ptr: &mut [T], count: usize):
+        ...
+    
+    fn usage() -> MemoryStats:
+        ...
+    
+    struct MemoryStats:
+        total: usize
+        used: usize
+        free: usize
+
+# Signal handling
+module signal:
+    enum Signal:
+        SIGINT
+        SIGTERM
+        SIGHUP
+        SIGUSR1
+        SIGUSR2
+    
+    fn on_signal(sig: Signal, handler: fn()):
+        ...
+    
+    fn on_interrupt(handler: fn()):
+        on_signal(Signal::SIGINT, handler)
+    
+    fn ignore(sig: Signal):
+        ...
+    
+    fn reset(sig: Signal):
+        ...
+
+# Process management
+module process:
+    fn exec(command: &str) -> Result<ProcessOutput, ProcessError>:
+        ...
+    
+    fn spawn(command: &str) -> Result<own Child, ProcessError>:
+        ...
+    
+    fn exit(code: i32):
+        ...
+    
+    fn pid() -> u32:
+        ...
+    
+    fn env(name: &str) -> Option<String>:
+        ...
+    
+    fn set_env(name: &str, value: &str):
+        ...
+    
+    struct ProcessOutput:
+        exit_code: i32
+        stdout: String
+        stderr: String
+    
+    struct Child:
+        pid: u32
+        stdin: Option<own Stdin>
+        stdout: Option<own Stdout>
+        stderr: Option<own Stderr>
+        
+        fn wait(&mut self) -> Result<i32, ProcessError>:
+            ...
+        
+        fn kill(&mut self) -> Result<(), ProcessError>:
+            ...
+
+# Standard I/O
+module stdout:
+    fn write(s: &str):
+        ...
+    
+    fn write_line(s: &str):
+        write(s)
+        write("\n")
+    
+    fn flush():
+        ...
+
+module stderr:
+    fn write(s: &str):
+        ...
+    
+    fn write_line(s: &str):
+        write(s)
+        write("\n")
+
+module stdin:
+    fn read_line() -> String:
+        ...
+    
+    fn read_all() -> String:
+        ...
+
+# Error types
+enum IoError:
+    NotFound
+    PermissionDenied
+    AlreadyExists
+    InvalidPath
+    Other(message: String)
+
+enum ProcessError:
+    NotFound
+    PermissionDenied
+    SpawnFailed(reason: String)

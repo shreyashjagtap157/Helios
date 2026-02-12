@@ -1,0 +1,381 @@
+# HELIOS Threading and Processing
+# Concurrent execution and task scheduling
+
+module core::threading
+
+import core::logging as log
+import system::memory
+
+# Thread pool for parallel execution
+struct ThreadPool:
+    workers: Vec<Worker>
+    task_queue: Channel<Task>
+    result_queue: Channel<TaskResult>
+    num_threads: usize
+    active_tasks: AtomicUsize
+    
+    fn new(num_threads: usize) -> own ThreadPool:
+        log::info("Creating thread pool with {} threads", num_threads)
+        
+        let task_queue = Channel::new(1000)
+        let result_queue = Channel::new(1000)
+        let mut workers = Vec::new()
+        
+        for i in 0..num_threads:
+            workers.push(Worker::new(i, task_queue.clone(), result_queue.clone()))
+        
+        return ThreadPool {
+            workers,
+            task_queue,
+            result_queue,
+            num_threads,
+            active_tasks: AtomicUsize::new(0)
+        }
+    
+    fn submit<F, R>(&self, task: F) -> TaskHandle<R>
+        where F: FnOnce() -> R + Send + 'static, R: Send + 'static:
+        
+        let task_id = uuid::generate()
+        self.active_tasks.fetch_add(1)
+        
+        let boxed_task = Task {
+            id: task_id.clone(),
+            func: Box::new(move || {
+                let result = task()
+                TaskResult::Success(Box::new(result) as Box<dyn Any>)
+            })
+        }
+        
+        self.task_queue.send(boxed_task)
+        
+        return TaskHandle {
+            task_id,
+            result_queue: self.result_queue.clone()
+        }
+    
+    fn submit_batch<F, R>(&self, tasks: Vec<F>) -> Vec<TaskHandle<R>>
+        where F: FnOnce() -> R + Send + 'static, R: Send + 'static:
+        
+        tasks.into_iter().map(|t| self.submit(t)).collect()
+    
+    fn shutdown(&mut self):
+        log::info("Shutting down thread pool")
+        for _ in &self.workers:
+            self.task_queue.send(Task::poison_pill())
+        for worker in &mut self.workers:
+            worker.join()
+
+
+struct Worker:
+    id: usize
+    thread: Thread
+    
+    fn new(id: usize, task_queue: Channel<Task>, result_queue: Channel<TaskResult>) -> own Worker:
+        let thread = thread::spawn(move || {
+            loop:
+                match task_queue.recv():
+                    Some(task):
+                        if task.is_poison():
+                            break
+                        let result = (task.func)()
+                        result_queue.send(TaskResult {
+                            task_id: task.id,
+                            result
+                        })
+                    None:
+                        break
+        })
+        
+        return Worker { id, thread }
+    
+    fn join(&mut self):
+        self.thread.join()
+
+
+struct Task:
+    id: String
+    func: Box<dyn FnOnce() -> TaskResult + Send>
+    
+    fn poison_pill() -> own Task:
+        return Task {
+            id: "POISON".to_string(),
+            func: Box::new(|| TaskResult::Cancelled)
+        }
+    
+    fn is_poison(&self) -> bool:
+        self.id == "POISON"
+
+
+enum TaskResult:
+    Success(value: Box<dyn Any>)
+    Error(message: String)
+    Cancelled
+
+
+struct TaskHandle<T>:
+    task_id: String
+    result_queue: Channel<TaskResult>
+    
+    fn wait(&self) -> Result<T, String>:
+        loop:
+            if let Some(result) = self.result_queue.recv():
+                if result.task_id == self.task_id:
+                    match result.result:
+                        TaskResult::Success(value):
+                            return Ok(*value.downcast::<T>().unwrap())
+                        TaskResult::Error(msg):
+                            return Err(msg)
+                        TaskResult::Cancelled:
+                            return Err("Task cancelled".to_string())
+    
+    fn is_complete(&self) -> bool:
+        # Check without blocking by attempting a non-blocking receive
+        match self.receiver.try_recv():
+            Some(result):
+                # Put it back for the actual get() call
+                self.receiver.push_back(result)
+                true
+            None:
+                false
+
+
+# Async executor for I/O bound tasks
+struct AsyncExecutor:
+    tasks: Vec<AsyncTask>
+    waker_queue: Channel<usize>
+    
+    fn new() -> own AsyncExecutor:
+        return AsyncExecutor {
+            tasks: Vec::new(),
+            waker_queue: Channel::new(1000)
+        }
+    
+    fn spawn<F>(&mut self, future: F) -> usize where F: Future + Send + 'static:
+        let id = self.tasks.len()
+        self.tasks.push(AsyncTask {
+            id,
+            future: Box::new(future),
+            state: TaskState::Pending
+        })
+        return id
+    
+    fn run(&mut self):
+        loop:
+            let mut all_done = true
+            
+            for task in &mut self.tasks:
+                if task.state == TaskState::Pending:
+                    all_done = false
+                    match task.future.poll():
+                        Poll::Ready(_):
+                            task.state = TaskState::Complete
+                        Poll::Pending:
+                            pass
+            
+            if all_done:
+                break
+            
+            # Wait for wakeup
+            thread::yield_now()
+
+
+struct AsyncTask:
+    id: usize
+    future: Box<dyn Future<Output = ()> + Send>
+    state: TaskState
+
+enum TaskState:
+    Pending
+    Running
+    Complete
+
+
+# Synchronization primitives
+struct Mutex<T>:
+    data: UnsafeCell<T>
+    locked: AtomicBool
+    
+    fn new(value: T) -> own Mutex<T>:
+        return Mutex {
+            data: UnsafeCell::new(value),
+            locked: AtomicBool::new(false)
+        }
+    
+    fn lock(&self) -> MutexGuard<T>:
+        while self.locked.compare_exchange(false, true).is_err():
+            thread::yield_now()
+        return MutexGuard { mutex: self }
+    
+    fn try_lock(&self) -> Option<MutexGuard<T>>:
+        if self.locked.compare_exchange(false, true).is_ok():
+            Some(MutexGuard { mutex: self })
+        else:
+            None
+
+struct MutexGuard<'a, T>:
+    mutex: &'a Mutex<T>
+    
+    fn get(&self) -> &T:
+        unsafe { &*self.mutex.data.get() }
+    
+    fn get_mut(&mut self) -> &mut T:
+        unsafe { &mut *self.mutex.data.get() }
+
+impl<T> Drop for MutexGuard<'_, T>:
+    fn drop(&mut self):
+        self.mutex.locked.store(false)
+
+
+struct RwLock<T>:
+    data: UnsafeCell<T>
+    readers: AtomicUsize
+    writer: AtomicBool
+
+impl<T> RwLock<T>:
+    fn new(value: T) -> own RwLock<T>:
+        return RwLock {
+            data: UnsafeCell::new(value),
+            readers: AtomicUsize::new(0),
+            writer: AtomicBool::new(false)
+        }
+    
+    fn read(&self) -> RwLockReadGuard<T>:
+        # Spin until no writer is active, then increment reader count
+        loop:
+            # Wait for writer to finish
+            while self.writer.load():
+                thread::yield_now()
+            
+            # Try to add ourselves as a reader
+            self.readers.fetch_add(1)
+            
+            # Double-check no writer snuck in
+            if self.writer.load():
+                self.readers.fetch_sub(1)
+                continue
+            
+            break
+        
+        return RwLockReadGuard { lock: self }
+    
+    fn write(&self) -> RwLockWriteGuard<T>:
+        # Acquire exclusive write access
+        # First, set the writer flag
+        while self.writer.compare_and_swap(false, true) != false:
+            thread::yield_now()
+        
+        # Wait for all readers to finish
+        while self.readers.load() > 0:
+            thread::yield_now()
+        
+        return RwLockWriteGuard { lock: self }
+    
+    fn try_read(&self) -> Option<RwLockReadGuard<T>>:
+        if self.writer.load():
+            return None
+        self.readers.fetch_add(1)
+        if self.writer.load():
+            self.readers.fetch_sub(1)
+            return None
+        Some(RwLockReadGuard { lock: self })
+    
+    fn try_write(&self) -> Option<RwLockWriteGuard<T>>:
+        if self.writer.compare_and_swap(false, true) != false:
+            return None
+        if self.readers.load() > 0:
+            self.writer.store(false)
+            return None
+        Some(RwLockWriteGuard { lock: self })
+
+struct RwLockReadGuard<'a, T>:
+    lock: &'a RwLock<T>
+    
+    fn get(&self) -> &T:
+        unsafe { &*self.lock.data.get() }
+
+impl<T> Drop for RwLockReadGuard<'_, T>:
+    fn drop(&mut self):
+        self.lock.readers.fetch_sub(1)
+
+struct RwLockWriteGuard<'a, T>:
+    lock: &'a RwLock<T>
+    
+    fn get(&self) -> &T:
+        unsafe { &*self.lock.data.get() }
+    
+    fn get_mut(&mut self) -> &mut T:
+        unsafe { &mut *self.lock.data.get() }
+
+impl<T> Drop for RwLockWriteGuard<'_, T>:
+    fn drop(&mut self):
+        self.lock.writer.store(false)
+
+
+struct Channel<T>:
+    buffer: Mutex<Vec<T>>
+    capacity: usize
+    
+    fn new(capacity: usize) -> own Channel<T>:
+        return Channel {
+            buffer: Mutex::new(Vec::new()),
+            capacity
+        }
+    
+    fn send(&self, value: T):
+        let mut guard = self.buffer.lock()
+        guard.get_mut().push(value)
+    
+    fn recv(&self) -> Option<T>:
+        let mut guard = self.buffer.lock()
+        if guard.get().is_empty():
+            None
+        else:
+            Some(guard.get_mut().remove(0))
+    
+    fn clone(&self) -> Channel<T>:
+        # Channels are shared
+        Channel {
+            buffer: self.buffer.clone(),
+            capacity: self.capacity
+        }
+
+
+# Task scheduler for background jobs
+struct Scheduler:
+    jobs: Vec<ScheduledJob>
+    running: bool
+    
+    fn new() -> own Scheduler:
+        return Scheduler {
+            jobs: Vec::new(),
+            running: false
+        }
+    
+    fn schedule(&mut self, name: &str, interval_ms: u64, task: fn()):
+        self.jobs.push(ScheduledJob {
+            name: name.to_string(),
+            interval_ms,
+            last_run: 0,
+            task
+        })
+    
+    fn start(&mut self):
+        self.running = true
+        while self.running:
+            let now = time::now_ms()
+            for job in &mut self.jobs:
+                if now - job.last_run >= job.interval_ms:
+                    log::debug("Running scheduled job: {}", job.name)
+                    (job.task)()
+                    job.last_run = now
+            thread::sleep_ms(100)
+    
+    fn stop(&mut self):
+        self.running = false
+
+
+struct ScheduledJob:
+    name: String
+    interval_ms: u64
+    last_run: u64
+    task: fn()

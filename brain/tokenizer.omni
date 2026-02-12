@@ -1,0 +1,303 @@
+# HELIOS Lexical Tokenizer
+# Text segmentation using byte-pair encoding for knowledge processing
+
+module brain::tokenizer
+
+import core::logging as log
+import system::fs
+import core::json
+
+# Special token IDs
+const PAD_TOKEN: u32 = 0
+const BOS_TOKEN: u32 = 1  # Beginning of sequence
+const EOS_TOKEN: u32 = 2  # End of sequence
+const UNK_TOKEN: u32 = 3  # Unknown token
+
+struct LexicalTokenizer:
+    vocab: HashMap<String, u32>
+    reverse_vocab: HashMap<u32, String>
+    merges: Vec<(String, String)>
+    vocab_size: usize
+    special_tokens: HashMap<String, u32>
+    
+    fn new() -> own LexicalTokenizer:
+        let mut tokenizer = LexicalTokenizer {
+            vocab: HashMap::new(),
+            reverse_vocab: HashMap::new(),
+            merges: Vec::new(),
+            vocab_size: 0,
+            special_tokens: HashMap::new()
+        }
+        tokenizer.init_special_tokens()
+        return tokenizer
+    
+    fn init_special_tokens(&mut self):
+        self.add_special_token("<PAD>", PAD_TOKEN)
+        self.add_special_token("<BOS>", BOS_TOKEN)
+        self.add_special_token("<EOS>", EOS_TOKEN)
+        self.add_special_token("<UNK>", UNK_TOKEN)
+    
+    fn add_special_token(&mut self, token: &str, id: u32):
+        self.vocab.insert(token.to_string(), id)
+        self.reverse_vocab.insert(id, token.to_string())
+        self.special_tokens.insert(token.to_string(), id)
+        self.vocab_size = self.vocab_size.max(id as usize + 1)
+    
+    fn load(path: &str) -> Result<own LexicalTokenizer, TokenizerError>:
+        log::info("Loading tokenizer from {}", path)
+        
+        let vocab_path = format("{}/vocab.json", path)
+        let merges_path = format("{}/merges.txt", path)
+        
+        let vocab_json = fs::read_string(&vocab_path)?
+        let vocab: HashMap<String, u32> = json::deserialize(&vocab_json)?
+        
+        let merges_text = fs::read_string(&merges_path)?
+        let merges = Self::parse_merges(&merges_text)
+        
+        let mut reverse_vocab = HashMap::new()
+        for (token, id) in &vocab:
+            reverse_vocab.insert(*id, token.clone())
+        
+        let vocab_size = vocab.len()
+        
+        let mut tokenizer = LexicalTokenizer {
+            vocab,
+            reverse_vocab,
+            merges,
+            vocab_size,
+            special_tokens: HashMap::new()
+        }
+        tokenizer.init_special_tokens()
+        
+        log::info("Loaded tokenizer with {} tokens", vocab_size)
+        return Ok(tokenizer)
+    
+    fn parse_merges(text: &str) -> Vec<(String, String)>:
+        let mut merges = Vec::new()
+        for line in text.lines().skip(1):  # Skip header
+            if line.is_empty():
+                continue
+            let parts: Vec<_> = line.split_whitespace().collect()
+            if parts.len() >= 2:
+                merges.push((parts[0].to_string(), parts[1].to_string()))
+        return merges
+    
+    fn save(&self, path: &str) -> Result<(), TokenizerError>:
+        log::info("Saving tokenizer to {}", path)
+        fs::create_dir_all(path)?
+        
+        let vocab_json = json::serialize(&self.vocab)
+        fs::write_string(&format("{}/vocab.json", path), &vocab_json)?
+        
+        let mut merges_text = String::from("#version: 0.2\n")
+        for (a, b) in &self.merges:
+            merges_text.push_str(&format("{} {}\n", a, b))
+        fs::write_string(&format("{}/merges.txt", path), &merges_text)?
+        
+        return Ok(())
+    
+    fn encode(&self, text: &str) -> Vec<u32>:
+        log::trace("Encoding: {} chars", text.len())
+        
+        # Pre-tokenize into words
+        let words = self.pre_tokenize(text)
+        
+        let mut tokens = Vec::new()
+        tokens.push(BOS_TOKEN)
+        
+        for word in words:
+            let word_tokens = self.encode_word(&word)
+            tokens.extend(word_tokens)
+        
+        tokens.push(EOS_TOKEN)
+        return tokens
+    
+    fn pre_tokenize(&self, text: &str) -> Vec<String>:
+        # Split on whitespace and punctuation, keeping separators
+        let mut words = Vec::new()
+        let mut current = String::new()
+        
+        for c in text.chars():
+            if c.is_whitespace():
+                if !current.is_empty():
+                    words.push(current.clone())
+                    current.clear()
+                # Add space as separate token
+                if c == ' ':
+                    words.push("Ġ".to_string())  # BPE space marker
+            else if c.is_ascii_punctuation():
+                if !current.is_empty():
+                    words.push(current.clone())
+                    current.clear()
+                words.push(c.to_string())
+            else:
+                current.push(c)
+        
+        if !current.is_empty():
+            words.push(current)
+        
+        return words
+    
+    fn encode_word(&self, word: &str) -> Vec<u32>:
+        # Convert word to character tokens
+        let mut tokens: Vec<String> = word.chars()
+            .map(|c| c.to_string())
+            .collect()
+        
+        # Apply BPE merges
+        loop:
+            let mut best_merge: Option<(usize, &(String, String))> = None
+            let mut best_rank = usize::MAX
+            
+            # Find best merge
+            for i in 0..tokens.len()-1:
+                let pair = (&tokens[i], &tokens[i+1])
+                for (rank, merge) in self.merges.iter().enumerate():
+                    if &merge.0 == pair.0 && &merge.1 == pair.1:
+                        if rank < best_rank:
+                            best_rank = rank
+                            best_merge = Some((i, merge))
+                        break
+            
+            match best_merge:
+                Some((idx, merge)):
+                    # Apply merge
+                    let merged = format("{}{}", merge.0, merge.1)
+                    tokens[idx] = merged
+                    tokens.remove(idx + 1)
+                None:
+                    break
+        
+        # Convert to token IDs
+        return tokens.iter()
+            .map(|t| self.vocab.get(t).copied().unwrap_or(UNK_TOKEN))
+            .collect()
+    
+    fn decode(&self, tokens: &[u32]) -> String:
+        log::trace("Decoding: {} tokens", tokens.len())
+        
+        let mut result = String::new()
+        
+        for token_id in tokens:
+            # Skip special tokens
+            if *token_id == PAD_TOKEN || *token_id == BOS_TOKEN || *token_id == EOS_TOKEN:
+                continue
+            
+            if let Some(token) = self.reverse_vocab.get(token_id):
+                # Handle space marker
+                if token == "Ġ":
+                    result.push(' ')
+                else if token.starts_with("Ġ"):
+                    result.push(' ')
+                    result.push_str(&token[2..])  # Skip Ġ byte
+                else:
+                    result.push_str(token)
+            else:
+                result.push_str("<UNK>")
+        
+        return result
+    
+    fn batch_encode(&self, texts: &[&str]) -> Vec<Vec<u32>>:
+        return texts.iter().map(|t| self.encode(t)).collect()
+    
+    fn batch_decode(&self, token_lists: &[Vec<u32>]) -> Vec<String>:
+        return token_lists.iter().map(|t| self.decode(t)).collect()
+    
+    # Build vocabulary from text corpus
+    fn build_vocabulary(texts: &[&str], vocab_size: usize) -> own LexicalTokenizer:
+        log::info("Building vocabulary with vocab_size={}", vocab_size)
+        
+        let mut tokenizer = LexicalTokenizer::new()
+        
+        # Initialize with character vocabulary
+        let mut char_freq: HashMap<char, usize> = HashMap::new()
+        for text in texts:
+            for c in text.chars():
+                *char_freq.entry(c).or_insert(0) += 1
+        
+        # Add characters to vocab (after special tokens)
+        let mut next_id = 4u32  # After special tokens
+        for (c, _) in char_freq.iter().sorted_by(|a, b| b.1.cmp(a.1)):
+            tokenizer.vocab.insert(c.to_string(), next_id)
+            tokenizer.reverse_vocab.insert(next_id, c.to_string())
+            next_id += 1
+        
+        # Learn BPE merges
+        while tokenizer.vocab.len() < vocab_size:
+            # Count pair frequencies
+            let mut pair_freq: HashMap<(String, String), usize> = HashMap::new()
+            
+            for text in texts:
+                let tokens = tokenizer.pre_tokenize(text)
+                for word in tokens:
+                    let word_tokens: Vec<String> = word.chars()
+                        .map(|c| c.to_string())
+                        .collect()
+                    
+                    # Apply existing merges
+                    let merged = tokenizer.apply_merges(&word_tokens)
+                    
+                    for i in 0..merged.len()-1:
+                        let pair = (merged[i].clone(), merged[i+1].clone())
+                        *pair_freq.entry(pair).or_insert(0) += 1
+            
+            # Find most frequent pair
+            let best_pair = pair_freq.iter()
+                .max_by_key(|(_, count)| *count)
+                .map(|(pair, _)| pair.clone())
+            
+            match best_pair:
+                Some((a, b)):
+                    let merged = format("{}{}", a, b)
+                    tokenizer.vocab.insert(merged.clone(), next_id)
+                    tokenizer.reverse_vocab.insert(next_id, merged)
+                    tokenizer.merges.push((a, b))
+                    next_id += 1
+                    log::debug("Merge {}: {} + {} -> {}", 
+                        tokenizer.merges.len(), a, b, merged)
+                None:
+                    break
+        
+        tokenizer.vocab_size = tokenizer.vocab.len()
+        log::info("Trained tokenizer with {} tokens, {} merges", 
+            tokenizer.vocab_size, tokenizer.merges.len())
+        
+        return tokenizer
+    
+    fn apply_merges(&self, tokens: &[String]) -> Vec<String>:
+        let mut result = tokens.to_vec()
+        
+        for merge in &self.merges:
+            let mut i = 0
+            while i < result.len() - 1:
+                if result[i] == merge.0 && result[i+1] == merge.1:
+                    result[i] = format("{}{}", merge.0, merge.1)
+                    result.remove(i + 1)
+                i += 1
+        
+        return result
+
+
+enum TokenizerError:
+    FileNotFound(path: String)
+    ParseError(message: String)
+    IoError(message: String)
+
+
+# Tests
+@test
+fn test_encode_decode():
+    let tokenizer = LexicalTokenizer::new()
+    # Add some test vocab
+    tokenizer.vocab.insert("hello".to_string(), 10)
+    tokenizer.vocab.insert("world".to_string(), 11)
+    tokenizer.reverse_vocab.insert(10, "hello".to_string())
+    tokenizer.reverse_vocab.insert(11, "world".to_string())
+    
+    let text = "hello world"
+    let encoded = tokenizer.encode(text)
+    let decoded = tokenizer.decode(&encoded)
+    
+    assert(decoded.contains("hello"))
+    assert(decoded.contains("world"))

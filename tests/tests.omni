@@ -1,0 +1,343 @@
+# HELIOS Test Suite
+# Unit and integration tests
+
+module tests::tests
+
+import core::logging as log
+import brain::tokenizer as tok
+import brain::reasoning_engine as re
+import brain::knowledge_graph as kg
+import brain::cognitive_cortex
+import std::math
+import std::collections::{HashMap, Vec}
+
+# Test framework
+struct TestRunner:
+    tests: Vec<Test>
+    passed: usize
+    failed: usize
+    
+    fn new() -> own TestRunner:
+        return TestRunner {
+            tests: Vec::new(),
+            passed: 0,
+            failed: 0
+        }
+    
+    fn add(&mut self, name: &str, test_fn: fn() -> Result<(), String>):
+        self.tests.push(Test { name: name.to_string(), test_fn })
+    
+    fn run_all(&mut self):
+        log::info("Running {} tests", self.tests.len())
+        println("=" * 60)
+        
+        for test in &self.tests:
+            print("  {} ... ", test.name)
+            match (test.test_fn)():
+                Ok(_):
+                    println("PASS")
+                    self.passed += 1
+                Err(msg):
+                    println("FAIL: {}", msg)
+                    self.failed += 1
+        
+        println("=" * 60)
+        println("Results: {} passed, {} failed", self.passed, self.failed)
+        
+        if self.failed > 0:
+            log::error("{} tests failed", self.failed)
+        else:
+            log::info("All tests passed!")
+
+struct Test:
+    name: String
+    test_fn: fn() -> Result<(), String>
+
+
+# Assertion helpers
+fn assert_eq<T: Eq + Debug>(actual: T, expected: T) -> Result<(), String>:
+    if actual == expected:
+        Ok(())
+    else:
+        Err(format!("Expected {:?}, got {:?}", expected, actual))
+
+fn assert_near(actual: f64, expected: f64, epsilon: f64) -> Result<(), String>:
+    if (actual - expected).abs() < epsilon:
+        Ok(())
+    else:
+        Err(format!("Expected {} ± {}, got {}", expected, epsilon, actual))
+
+fn assert_true(condition: bool, msg: &str) -> Result<(), String>:
+    if condition:
+        Ok(())
+    else:
+        Err(msg.to_string())
+
+
+# ============================================
+# Tokenizer Tests
+# ============================================
+fn test_tokenizer_encode_decode() -> Result<(), String>:
+    let tokenizer = tok::LexicalTokenizer::new()
+    
+    # Simple encoding
+    let text = "hello world"
+    let encoded = tokenizer.encode(text)
+    
+    assert_true(encoded.len() > 0, "Encoded should not be empty")?
+    assert_true(encoded[0] == tok::BOS_TOKEN, "Should start with BOS")?
+    assert_true(encoded[encoded.len() - 1] == tok::EOS_TOKEN, "Should end with EOS")?
+    
+    Ok(())
+
+fn test_tokenizer_special_tokens() -> Result<(), String>:
+    let tokenizer = tok::LexicalTokenizer::new()
+    
+    assert_eq(tokenizer.vocab.get("<PAD>"), Some(&tok::PAD_TOKEN))?
+    assert_eq(tokenizer.vocab.get("<BOS>"), Some(&tok::BOS_TOKEN))?
+    assert_eq(tokenizer.vocab.get("<EOS>"), Some(&tok::EOS_TOKEN))?
+    assert_eq(tokenizer.vocab.get("<UNK>"), Some(&tok::UNK_TOKEN))?
+    
+    Ok(())
+
+
+# ============================================
+# Math Tests
+# ============================================
+fn test_math_basic() -> Result<(), String>:
+    assert_near(math::sqrt(4.0), 2.0, 1e-10)?
+    assert_near(math::sqrt(2.0), 1.41421356, 1e-6)?
+    assert_near(math::exp(0.0), 1.0, 1e-10)?
+    assert_near(math::exp(1.0), 2.71828182, 1e-6)?
+    assert_near(math::log(1.0), 0.0, 1e-10)?
+    assert_near(math::log(math::E), 1.0, 1e-10)?
+    
+    Ok(())
+
+fn test_math_trig() -> Result<(), String>:
+    assert_near(math::sin(0.0), 0.0, 1e-10)?
+    assert_near(math::sin(math::PI / 2.0), 1.0, 1e-6)?
+    assert_near(math::cos(0.0), 1.0, 1e-10)?
+    assert_near(math::cos(math::PI), -1.0, 1e-6)?
+    
+    Ok(())
+
+fn test_math_activations() -> Result<(), String>:
+    assert_near(math::sigmoid(0.0), 0.5, 1e-10)?
+    assert_near(math::relu(-1.0), 0.0, 1e-10)?
+    assert_near(math::relu(1.0), 1.0, 1e-10)?
+    assert_near(math::tanh(0.0), 0.0, 1e-10)?
+    
+    Ok(())
+
+
+# ============================================
+# Tensor Tests
+# ============================================
+fn test_tensor_creation() -> Result<(), String>:
+    let zeros = Tensor::zeros(&[2, 3])
+    assert_eq(zeros.shape, vec![2, 3])?
+    assert_eq(zeros.data.len(), 6)?
+    assert_true(zeros.data.iter().all(|&x| x == 0.0), "All zeros")?
+    
+    let ones = Tensor::ones(&[3, 2])
+    assert_true(ones.data.iter().all(|&x| x == 1.0), "All ones")?
+    
+    Ok(())
+
+fn test_tensor_arithmetic() -> Result<(), String>:
+    let a = Tensor::from_slice(&[1.0, 2.0, 3.0])
+    let b = Tensor::from_slice(&[4.0, 5.0, 6.0])
+    
+    let sum = a.add(&b)
+    assert_near(sum.data[0], 5.0, 1e-10)?
+    assert_near(sum.data[1], 7.0, 1e-10)?
+    assert_near(sum.data[2], 9.0, 1e-10)?
+    
+    let prod = a.mul(&b)
+    assert_near(prod.data[0], 4.0, 1e-10)?
+    assert_near(prod.data[1], 10.0, 1e-10)?
+    assert_near(prod.data[2], 18.0, 1e-10)?
+    
+    Ok(())
+
+fn test_tensor_matmul() -> Result<(), String>:
+    # 2x3 @ 3x2 = 2x2
+    let a = Tensor::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+        .reshape(&[2, 3])
+    let b = Tensor::from_slice(&[7.0, 8.0, 9.0, 10.0, 11.0, 12.0])
+        .reshape(&[3, 2])
+    
+    let c = a.matmul(&b)
+    assert_eq(c.shape, vec![2, 2])?
+    
+    # [1,2,3] @ [[7,8],[9,10],[11,12]] = [1*7+2*9+3*11, 1*8+2*10+3*12] = [58, 64]
+    assert_near(c.data[0], 58.0, 1e-6)?
+    assert_near(c.data[1], 64.0, 1e-6)?
+    
+    Ok(())
+
+
+# ============================================
+# JSON Tests
+# ============================================
+fn test_json_parse_primitives() -> Result<(), String>:
+    let null_val = json::JsonParser::new("null").parse()?
+    assert_true(null_val.is_null(), "Should be null")?
+    
+    let bool_val = json::JsonParser::new("true").parse()?
+    assert_eq(bool_val.as_bool(), Some(true))?
+    
+    let num_val = json::JsonParser::new("42.5").parse()?
+    assert_near(num_val.as_number().unwrap(), 42.5, 1e-10)?
+    
+    let str_val = json::JsonParser::new("\"hello\"").parse()?
+    assert_eq(str_val.as_str(), Some("hello"))?
+    
+    Ok(())
+
+fn test_json_parse_array() -> Result<(), String>:
+    let arr = json::JsonParser::new("[1, 2, 3]").parse()?
+    let values = arr.as_array().unwrap()
+    
+    assert_eq(values.len(), 3)?
+    assert_near(values[0].as_number().unwrap(), 1.0, 1e-10)?
+    assert_near(values[1].as_number().unwrap(), 2.0, 1e-10)?
+    assert_near(values[2].as_number().unwrap(), 3.0, 1e-10)?
+    
+    Ok(())
+
+fn test_json_parse_object() -> Result<(), String>:
+    let obj = json::JsonParser::new("{\"name\": \"HELIOS\", \"version\": 1}").parse()?
+    
+    assert_eq(obj.get("name").and_then(|v| v.as_str()), Some("HELIOS"))?
+    assert_near(obj.get("version").and_then(|v| v.as_number()).unwrap(), 1.0, 1e-10)?
+    
+    Ok(())
+
+
+# ============================================
+# TOML Tests  
+# ============================================
+fn test_toml_parse() -> Result<(), String>:
+    let toml_str = "
+[model]
+name = \"helios\"
+reasoning_depth = 12
+
+[knowledge]
+consolidation_rate = 0.001
+chunk_size = 32
+"
+    
+    let doc = toml::parse(toml_str)?
+    
+    assert_eq(doc.get_path("model.name").and_then(|v| v.as_str()), Some("helios"))?
+    assert_eq(doc.get_path("model.reasoning_depth").and_then(|v| v.as_int()), Some(12))?
+    assert_near(doc.get_path("knowledge.consolidation_rate").and_then(|v| v.as_float()).unwrap(), 0.001, 1e-10)?
+    
+    Ok(())
+
+
+# ============================================
+# Knowledge Graph Tests
+# ============================================
+fn test_knowledge_graph_add_node() -> Result<(), String>:
+    let mut graph = kg::KnowledgeGraph::new()
+    
+    let id = graph.add_node("test_concept", 0.9, HashMap::new())
+    assert(id > 0)?
+    assert_eq(graph.node_count(), 1)?
+    
+    let node = graph.get_node(id).unwrap()
+    assert_eq(node.label, "test_concept")?
+    assert_near(node.confidence, 0.9, 1e-10)?
+    
+    Ok(())
+
+fn test_knowledge_graph_edges() -> Result<(), String>:
+    let mut graph = kg::KnowledgeGraph::new()
+    
+    let a = graph.add_node("cat", 0.95, HashMap::new())
+    let b = graph.add_node("animal", 0.99, HashMap::new())
+    
+    graph.add_edge(a, b, "is_a", 1.0)
+    
+    assert_eq(graph.edge_count(), 1)?
+    assert_eq(graph.out_edge_count(a), 1)?
+    assert_eq(graph.in_edge_count(b), 1)?
+    
+    Ok(())
+
+fn test_knowledge_graph_prune() -> Result<(), String>:
+    let mut graph = kg::KnowledgeGraph::new()
+    
+    let a = graph.add_node("high_conf", 0.9, HashMap::new())
+    let b = graph.add_node("low_conf", 0.1, HashMap::new())
+    let c = graph.add_node("mid_conf", 0.5, HashMap::new())
+    
+    graph.prune_below_confidence(0.4)
+    
+    assert_eq(graph.node_count(), 2)?  # b should be removed
+    assert(graph.get_node(a).is_some())?
+    assert(graph.get_node(b).is_none())?
+    assert(graph.get_node(c).is_some())?
+    
+    Ok(())
+
+fn test_reasoning_engine_basic() -> Result<(), String>:
+    let mut graph = kg::KnowledgeGraph::new()
+    
+    let cat = graph.add_node("cat", 0.95, HashMap::new())
+    let animal = graph.add_node("animal", 0.99, HashMap::new())
+    let has_legs = graph.add_node("has_legs", 0.98, HashMap::new())
+    
+    graph.add_edge(cat, animal, "is_a", 1.0)
+    graph.add_edge(animal, has_legs, "has_property", 0.9)
+    
+    let engine = re::ReasoningEngine::new(&graph)
+    
+    # Should be able to infer cat -> has_legs via transitive reasoning
+    let result = engine.query("cat", "has_property")
+    assert(!result.is_empty())?
+    
+    Ok(())
+
+
+# ============================================
+# Run all tests
+# ============================================
+fn run_tests():
+    let mut runner = TestRunner::new()
+    
+    # Tokenizer
+    runner.add("tokenizer_encode_decode", test_tokenizer_encode_decode)
+    runner.add("tokenizer_special_tokens", test_tokenizer_special_tokens)
+    
+    # Math
+    runner.add("math_basic", test_math_basic)
+    runner.add("math_trig", test_math_trig)
+    runner.add("math_activations", test_math_activations)
+    
+    # Tensor
+    runner.add("tensor_creation", test_tensor_creation)
+    runner.add("tensor_arithmetic", test_tensor_arithmetic)
+    runner.add("tensor_matmul", test_tensor_matmul)
+    
+    # JSON
+    runner.add("json_parse_primitives", test_json_parse_primitives)
+    runner.add("json_parse_array", test_json_parse_array)
+    runner.add("json_parse_object", test_json_parse_object)
+    
+    # TOML
+    runner.add("toml_parse", test_toml_parse)
+    
+    # Knowledge Graph
+    runner.add("kg_add_node", test_knowledge_graph_add_node)
+    runner.add("kg_edges", test_knowledge_graph_edges)
+    runner.add("kg_prune", test_knowledge_graph_prune)
+    
+    # Reasoning
+    runner.add("reasoning_basic", test_reasoning_engine_basic)
+    
+    runner.run_all()

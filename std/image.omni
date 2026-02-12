@@ -1,0 +1,469 @@
+module std::image:
+
+import std::core
+import std::fs
+import std::tensor
+
+# ============================================
+# FFI Bindings
+# ============================================
+
+extern "C":
+    fn decode_png(data: *u8, len: usize, width: *mut u32, height: *mut u32) -> *u8
+    fn decode_jpeg(data: *u8, len: usize, width: *mut u32, height: *mut u32) -> *u8
+    fn stbi_image_free(retval_from_stbi_load: *u8)
+    fn encode_png(filename: *u8, w: i32, h: i32, comp: i32, data: *u8) -> i32
+    fn encode_jpeg(filename: *u8, w: i32, h: i32, comp: i32, data: *u8, quality: i32) -> i32
+
+# ============================================
+# Color Formats
+# ============================================
+
+enum ImageFormat:
+    RGB
+    RGBA
+    Grayscale
+    GrayscaleAlpha
+
+enum ImageType:
+    PNG
+    JPEG
+    Unknown
+
+# ============================================
+# Image Structure
+# ============================================
+
+struct Image:
+    data: Tensor<u8>
+    format: ImageFormat
+    width: u32
+    height: u32
+    channels: u32
+    
+    fn new(width: u32, height: u32, channels: u32, format: ImageFormat) -> Image:
+        let shape = vec![height as usize, width as usize, channels as usize]
+        Image {
+            data: Tensor::new(shape),
+            format: format,
+            width: width,
+            height: height,
+            channels: channels
+        }
+    
+    fn width(&self) -> u32:
+        self.width
+    
+    fn height(&self) -> u32:
+        self.height
+    
+    fn channels(&self) -> u32:
+        self.channels
+    
+    fn as_tensor(&self) -> &Tensor<u8>:
+        &self.data
+
+# ============================================
+# Image Loading
+# ============================================
+
+fn detect_format(path: &str) -> Result<ImageType, Error>:
+    if path.ends_with(".png"):
+        Ok(ImageType::PNG)
+    elif path.ends_with(".jpg") or path.ends_with(".jpeg"):
+        Ok(ImageType::JPEG)
+    else:
+        Err(Error { msg: "Unsupported image format" })
+
+fn load_image(path: &str) -> Result<Image, Error>:
+    let bytes = fs::read(path)?
+    let format = detect_format(path)?
+    
+    let mut width: u32 = 0
+    let mut height: u32 = 0
+    
+    match format:
+        ImageType::PNG =>
+            let ptr = decode_png(bytes.as_ptr(), bytes.len(), &mut width, &mut height)
+            if ptr == null():
+                return Err(Error { msg: "Failed to decode PNG" })
+            
+            # Read pixel data and create image
+            let size = (width * height * 3) as usize
+            let pixel_data = slice::from_raw_parts(ptr, size).to_vec()
+            stbi_image_free(ptr)
+            
+            let shape = vec![height as usize, width as usize, 3]
+            let tensor = Tensor::from_vec(pixel_data, shape)
+            
+            Ok(Image {
+                data: tensor,
+                format: ImageFormat::RGB,
+                width: width,
+                height: height,
+                channels: 3
+            })
+        
+        ImageType::JPEG =>
+            let ptr = decode_jpeg(bytes.as_ptr(), bytes.len(), &mut width, &mut height)
+            if ptr == null():
+                return Err(Error { msg: "Failed to decode JPEG" })
+            
+            # Read pixel data and create image
+            let size = (width * height * 3) as usize
+            let pixel_data = slice::from_raw_parts(ptr, size).to_vec()
+            stbi_image_free(ptr)
+            
+            let shape = vec![height as usize, width as usize, 3]
+            let tensor = Tensor::from_vec(pixel_data, shape)
+            
+            Ok(Image {
+                data: tensor,
+                format: ImageFormat::RGB,
+                width: width,
+                height: height,
+                channels: 3
+            })
+        
+        ImageType::Unknown =>
+            Err(Error { msg: "Unknown image format" })
+
+# ============================================
+# Image Saving
+# ============================================
+
+fn save_image(image: &Image, path: &str, format: ImageType) -> Result<(), Error>:
+    let format_type = detect_format(path).unwrap_or(format)
+    let data_ptr = image.data.data.as_ptr()
+    let width = image.width as i32
+    let height = image.height as i32
+    let channels = image.channels as i32
+    
+    match format_type:
+        ImageType::PNG =>
+            let result = encode_png(
+                path.as_ptr(),
+                width,
+                height,
+                channels,
+                data_ptr
+            )
+            if result == 0:
+                Err(Error { msg: "Failed to save PNG" })
+            else:
+                Ok(())
+        
+        ImageType::JPEG =>
+            let result = encode_jpeg(
+                path.as_ptr(),
+                width,
+                height,
+                channels,
+                data_ptr,
+                90  # Quality
+            )
+            if result == 0:
+                Err(Error { msg: "Failed to save JPEG" })
+            else:
+                Ok(())
+        
+        ImageType::Unknown =>
+            Err(Error { msg: "Unknown image format" })
+
+# ============================================
+# Image Processing
+# ============================================
+
+fn to_grayscale(image: &Image) -> Result<Image, Error>:
+    if image.channels < 3:
+        return Err(Error { msg: "Image must have at least 3 channels for grayscale conversion" })
+    
+    let height = image.height as usize
+    let width = image.width as usize
+    let mut gray_data = Vec::new()
+    
+    # Standard luminosity formula: 0.299*R + 0.587*G + 0.114*B
+    for y in 0..height:
+        for x in 0..width:
+            let r = image.data.get(&vec![y, x, 0]) as f32
+            let g = image.data.get(&vec![y, x, 1]) as f32
+            let b = image.data.get(&vec![y, x, 2]) as f32
+            
+            let gray = (0.299 * r + 0.587 * g + 0.114 * b) as u8
+            gray_data.push(gray)
+    
+    let shape = vec![height, width, 1]
+    let tensor = Tensor::from_vec(gray_data, shape)
+    
+    Ok(Image {
+        data: tensor,
+        format: ImageFormat::Grayscale,
+        width: image.width,
+        height: image.height,
+        channels: 1
+    })
+
+fn resize(image: &Image, new_width: u32, new_height: u32) -> Result<Image, Error>:
+    # Bilinear resampling
+    let old_width = image.width as f32
+    let old_height = image.height as f32
+    let scale_x = old_width / (new_width as f32)
+    let scale_y = old_height / (new_height as f32)
+    
+    let mut resized_data = Vec::new()
+    
+    for y in 0..(new_height as usize):
+        for x in 0..(new_width as usize):
+            let src_x = (x as f32) * scale_x
+            let src_y = (y as f32) * scale_y
+            
+            # Simple nearest neighbor for now
+            let src_x_int = src_x as usize
+            let src_y_int = src_y as usize
+            
+            # Clamp to image bounds
+            let src_x_int = if src_x_int >= (image.width as usize) { (image.width - 1) as usize } else { src_x_int }
+            let src_y_int = if src_y_int >= (image.height as usize) { (image.height - 1) as usize } else { src_y_int }
+            
+            for c in 0..(image.channels as usize):
+                let pixel = image.data.get(&vec![src_y_int, src_x_int, c])
+                resized_data.push(*pixel)
+    
+    let shape = vec![new_height as usize, new_width as usize, image.channels as usize]
+    let tensor = Tensor::from_vec(resized_data, shape)
+    
+    Ok(Image {
+        data: tensor,
+        format: image.format,
+        width: new_width,
+        height: new_height,
+        channels: image.channels
+    })
+
+struct Error:
+    msg: String
+
+# ============================================
+# Advanced Image Filters
+# ============================================
+
+fn gaussian_blur(image: &Image, radius: u32) -> Result<Image, Error>:
+    if radius == 0:
+        return Ok(image.clone())
+    
+    let r = radius as f32
+    let sigma = r / 2.0
+    let size = (2 * radius + 1) as usize
+    let mut kernel = Vec::new()
+    
+    # Generate Gaussian kernel
+    var sum = 0.0
+    for i in 0..size:
+        for j in 0..size:
+            let x = (i as f32) - (radius as f32)
+            let y = (j as f32) - (radius as f32)
+            let dist_sq = x * x + y * y
+            let val = (1.0 / (2.0 * 3.14159 * sigma * sigma)) * 
+                      exp(-(dist_sq) / (2.0 * sigma * sigma))
+            kernel.push(val)
+            sum = sum + val
+    
+    # Normalize kernel
+    for i in 0..kernel.len():
+        kernel[i] = kernel[i] / sum
+    
+    # Apply convolution
+    let height = image.height as usize
+    let width = image.width as usize
+    let channels = image.channels as usize
+    let mut result_data = Vec::new()
+    
+    for y in 0..height:
+        for x in 0..width:
+            for c in 0..channels:
+                var pixel_val = 0.0
+                for ky in 0..size:
+                    for kx in 0..size:
+                        let iy = (y as i32 + ky as i32 - radius as i32) as usize
+                        let ix = (x as i32 + kx as i32 - radius as i32) as usize
+                        
+                        let iy = if iy < height: iy else: height - 1
+                        let ix = if ix < width: ix else: width - 1
+                        
+                        let pixel = image.data.get(&vec![iy, ix, c])
+                        pixel_val = pixel_val + (*pixel as f32) * kernel[ky * size + kx]
+                
+                result_data.push(pixel_val as u8)
+    
+    let shape = vec![height, width, channels]
+    let tensor = Tensor::from_vec(result_data, shape)?
+    
+    Ok(Image {
+        data: tensor,
+        format: image.format,
+        width: image.width,
+        height: image.height,
+        channels: image.channels as u32
+    })
+
+fn sobel_edge_detection(image: &Image) -> Result<Image, Error>:
+    let height = image.height as usize
+    let width = image.width as usize
+    let channels = image.channels as usize
+    let mut edges = Vec::new()
+    
+    # Sobel kernels
+    let gx = [
+        -1.0, 0.0, 1.0,
+        -2.0, 0.0, 2.0,
+        -1.0, 0.0, 1.0
+    ]
+    
+    let gy = [
+        -1.0, -2.0, -1.0,
+        0.0, 0.0, 0.0,
+        1.0, 2.0, 1.0
+    ]
+    
+    for y in 1..(height - 1):
+        for x in 1..(width - 1):
+            var dx = 0.0
+            var dy = 0.0
+            
+            for c in 0..channels:
+                for ky in 0..3:
+                    for kx in 0..3:
+                        let py = y + ky - 1
+                        let px = x + kx - 1
+                        let pixel = image.data.get(&vec![py, px, c]) as f32
+                        dx = dx + pixel * gx[ky * 3 + kx]
+                        dy = dy + pixel * gy[ky * 3 + kx]
+            
+            let magnitude = sqrt(dx * dx + dy * dy)
+            edges.push((magnitude.min(255.0)) as u8)
+    
+    let mut result_data = vec![0u8; height * width * channels]
+    for i in 0..edges.len():
+        result_data[i] = edges[i]
+    
+    let shape = vec![height, width, channels]
+    let tensor = Tensor::from_vec(result_data, shape)?
+    
+    Ok(Image {
+        data: tensor,
+        format: image.format,
+        width: image.width,
+        height: image.height,
+        channels: image.channels as u32
+    })
+
+fn brighten(image: &Image, factor: f32) -> Result<Image, Error>:
+    let mut result = image.clone()
+    
+    for i in 0..result.data.data.len():
+        let val = (result.data.data[i] as f32) * factor
+        result.data.data[i] = (val.min(255.0).max(0.0)) as u8
+    
+    Ok(result)
+
+fn contrast(image: &Image, factor: f32) -> Result<Image, Error>:
+    let mut result = image.clone()
+    let mid = 127.5
+    
+    for i in 0..result.data.data.len():
+        let val = mid + (result.data.data[i] as f32 - mid) * factor
+        result.data.data[i] = (val.min(255.0).max(0.0)) as u8
+    
+    Ok(result)
+
+fn rotate_90(image: &Image) -> Result<Image, Error>:
+    let height = image.height as usize
+    let width = image.width as usize
+    let channels = image.channels as usize
+    let mut rotated = Vec::new()
+    
+    for x in 0..width:
+        for y in (0..height).rev():
+            for c in 0..channels:
+                let pixel = image.data.get(&vec![y, x, c])
+                rotated.push(*pixel)
+    
+    let shape = vec![width, height, channels]
+    let tensor = Tensor::from_vec(rotated, shape)?
+    
+    Ok(Image {
+        data: tensor,
+        format: image.format,
+        width: image.height,
+        height: image.width,
+        channels: image.channels as u32
+    })
+
+fn flip_horizontal(image: &Image) -> Result<Image, Error>:
+    let height = image.height as usize
+    let width = image.width as usize
+    let channels = image.channels as usize
+    let mut flipped = Vec::new()
+    
+    for y in 0..height:
+        for x in (0..width).rev():
+            for c in 0..channels:
+                let pixel = image.data.get(&vec![y, x, c])
+                flipped.push(*pixel)
+    
+    let shape = vec![height, width, channels]
+    let tensor = Tensor::from_vec(flipped, shape)?
+    
+    Ok(Image {
+        data: tensor,
+        format: image.format,
+        width: image.width,
+        height: image.height,
+        channels: image.channels as u32
+    })
+
+fn histogram_equalization(image: &Image) -> Result<Image, Error>:
+    let height = image.height as usize
+    let width = image.width as usize
+    let channels = image.channels as usize
+    let pixel_count = height * width
+    let mut histogram = vec![0u64; 256]
+    
+    # Build histogram
+    for i in 0..image.data.data.len():
+        let pixel = image.data.data[i] as usize
+        histogram[pixel] = histogram[pixel] + 1
+    
+    # Calculate cumulative distribution
+    let mut cdf = vec![0u64; 256]
+    cdf[0] = histogram[0]
+    for i in 1..256:
+        cdf[i] = cdf[i - 1] + histogram[i]
+    
+    # Map pixels using CDF
+    let mut result_data = Vec::new()
+    for pixel in image.data.data.iter():
+        let pixel_val = *pixel as usize
+        let new_val = (cdf[pixel_val] as f32 / pixel_count as f32 * 255.0) as u8
+        result_data.push(new_val)
+    
+    let shape = vec![height, width, channels]
+    let tensor = Tensor::from_vec(result_data, shape)?
+    
+    Ok(Image {
+        data: tensor,
+        format: image.format,
+        width: image.width,
+        height: image.height,
+        channels: image.channels as u32
+    })
+
+impl Image:
+    fn clone(&self) -> Image:
+        Image {
+            data: self.data.clone(),
+            format: self.format,
+            width: self.width,
+            height: self.height,
+            channels: self.channels
+        }

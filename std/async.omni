@@ -1,0 +1,544 @@
+# Omni Standard Library: Async Runtime
+# Async/Await support using lightweight coroutines
+
+module std::async
+
+import std::core
+import std::thread
+import std::collections
+
+# ============================================
+# Core Types
+# ============================================
+
+trait Future:
+    type Output
+    fn poll(&mut self, ctx: &mut Context) -> Poll<Self::Output>
+
+enum Poll<T>:
+    Ready(T)
+    Pending
+
+struct Context:
+    waker: Waker
+    
+    fn waker(&self) -> &Waker:
+        &self.waker
+
+struct Waker:
+    data: *const ()
+    vtable: &'static WakerVtable
+    
+    fn wake(&self):
+        (self.vtable.wake)(self.data)
+        
+    fn wake_by_ref(&self):
+        (self.vtable.wake_by_ref)(self.data)
+        
+    fn clone(&self) -> Waker:
+        Waker {
+            data: (self.vtable.clone)(self.data),
+            vtable: self.vtable
+        }
+
+struct WakerVtable:
+    clone: fn(*const ()) -> *const ()
+    wake: fn(*const ())
+    wake_by_ref: fn(*const ())
+    drop: fn(*const ())
+
+# ============================================
+# Task Management
+# ============================================
+
+struct TaskId:
+    id: usize
+
+struct Task:
+    id: TaskId
+    future: Pin<Box<dyn Future<Output = ()> + Send>>
+    state: TaskState
+
+enum TaskState:
+    Ready
+    Running
+    Blocked
+    Completed
+
+struct TaskHandle<T>:
+    id: TaskId
+    result: Arc<Mutex<Option<T>>>
+    
+    fn await_result(&self) -> T:
+        loop:
+            let guard = self.result.lock()
+            match guard.take():
+                Option::Some(v) => return v
+                Option::None => thread::yield_now()
+
+# ============================================
+# Executor
+# ============================================
+
+struct Executor:
+    ready_queue: collections::Deque<TaskId>
+    tasks: collections::HashMap<usize, Task>
+    next_id: usize
+    thread_pool: Option<ThreadPool>
+    io_driver: IoDriver
+    timer_driver: TimerDriver
+    
+    fn new() -> Executor:
+        Executor { 
+            ready_queue: collections::Deque::new(),
+            tasks: collections::HashMap::new(),
+            next_id: 0,
+            thread_pool: Option::None,
+            io_driver: IoDriver::new(),
+            timer_driver: TimerDriver::new()
+        }
+        
+    fn with_threads(num_threads: usize) -> Executor:
+        let mut exec = Executor::new()
+        exec.thread_pool = Option::Some(ThreadPool::new(num_threads))
+        exec
+        
+    fn spawn<F: Future<Output = T> + Send + 'static, T: Send + 'static>(&mut self, future: F) -> TaskHandle<T>:
+        let id = TaskId { id: self.next_id }
+        self.next_id += 1
+        
+        let result = Arc::new(Mutex::new(Option::None))
+        let result_clone = result.clone()
+        
+        # Wrap the future to store result
+        let wrapped = async move:
+            let value = future.await
+            let mut guard = result_clone.lock()
+            *guard = Option::Some(value)
+        
+        let task = Task {
+            id,
+            future: Box::pin(wrapped),
+            state: TaskState::Ready
+        }
+        
+        self.tasks.insert(id.id, task)
+        self.ready_queue.push_back(id)
+        
+        TaskHandle { id, result }
+        
+    fn block_on<F: Future>(&mut self, future: F) -> F::Output:
+        let mut pinned = Box::pin(future)
+        
+        loop:
+            # Process I/O events
+            self.io_driver.poll()
+            self.timer_driver.check_timers()
+            
+            # Try to poll main future
+            let waker = self.create_main_waker()
+            let mut ctx = Context { waker }
+            
+            match pinned.as_mut().poll(&mut ctx):
+                Poll::Ready(result) => return result
+                Poll::Pending =>
+                    # Process ready tasks while waiting
+                    self.run_ready_tasks()
+                    
+    fn run(&mut self):
+        while !self.ready_queue.is_empty() || !self.tasks.is_empty():
+            self.io_driver.poll()
+            self.timer_driver.check_timers()
+            self.run_ready_tasks()
+        
+    fn run_ready_tasks(&mut self):
+        while let Option::Some(task_id) = self.ready_queue.pop_front():
+            if let Option::Some(task) = self.tasks.get_mut(&task_id.id):
+                task.state = TaskState::Running
+                
+                let waker = self.create_waker(task_id)
+                let mut ctx = Context { waker }
+                
+                match task.future.as_mut().poll(&mut ctx):
+                    Poll::Ready(_) =>
+                        task.state = TaskState::Completed
+                        self.tasks.remove(&task_id.id)
+                    Poll::Pending =>
+                        task.state = TaskState::Blocked
+                        # Task will be re-queued when waker is called
+                        
+    fn wake_task(&mut self, id: TaskId):
+        if let Option::Some(task) = self.tasks.get_mut(&id.id):
+            if matches!(task.state, TaskState::Blocked):
+                task.state = TaskState::Ready
+                self.ready_queue.push_back(id)
+                
+    fn create_waker(&self, id: TaskId) -> Waker:
+        let data = Box::into_raw(Box::new(WakerData {
+            executor: self as *const Executor as *mut Executor,
+            task_id: id
+        })) as *const ()
+        
+        Waker {
+            data,
+            vtable: &TASK_WAKER_VTABLE
+        }
+        
+    fn create_main_waker(&self) -> Waker:
+        # Main waker that just yields
+        Waker {
+            data: null() as *const (),
+            vtable: &NOOP_WAKER_VTABLE
+        }
+
+struct WakerData:
+    executor: *mut Executor
+    task_id: TaskId
+
+static TASK_WAKER_VTABLE: WakerVtable = WakerVtable {
+    clone: waker_clone,
+    wake: waker_wake,
+    wake_by_ref: waker_wake_by_ref,
+    drop: waker_drop
+}
+
+static NOOP_WAKER_VTABLE: WakerVtable = WakerVtable {
+    clone: |p| p,
+    wake: |_| {},
+    wake_by_ref: |_| {},
+    drop: |_| {}
+}
+
+fn waker_clone(data: *const ()) -> *const ():
+    let wd = unsafe { &*(data as *const WakerData) }
+    Box::into_raw(Box::new(WakerData {
+        executor: wd.executor,
+        task_id: wd.task_id
+    })) as *const ()
+
+fn waker_wake(data: *const ()):
+    let wd = unsafe { Box::from_raw(data as *mut WakerData) }
+    unsafe { (*wd.executor).wake_task(wd.task_id) }
+
+fn waker_wake_by_ref(data: *const ()):
+    let wd = unsafe { &*(data as *const WakerData) }
+    unsafe { (*wd.executor).wake_task(wd.task_id) }
+
+fn waker_drop(data: *const ()):
+    unsafe { drop(Box::from_raw(data as *mut WakerData)) }
+
+# ============================================
+# Thread Pool for CPU-bound work
+# ============================================
+
+struct ThreadPool:
+    workers: Vector<Worker>
+    sender: channel::Sender<Job>
+    
+    fn new(size: usize) -> ThreadPool:
+        let (sender, receiver) = channel::bounded(size * 4)
+        let receiver = Arc::new(Mutex::new(receiver))
+        
+        let mut workers = Vector::with_capacity(size)
+        for id in 0..size:
+            workers.push(Worker::new(id, receiver.clone()))
+            
+        ThreadPool { workers, sender }
+        
+    fn execute<F: FnOnce() + Send + 'static>(&self, f: F):
+        self.sender.send(Box::new(f))
+
+struct Worker:
+    id: usize
+    thread: Option<thread::JoinHandle<()>>
+    
+    fn new(id: usize, receiver: Arc<Mutex<channel::Receiver<Job>>>) -> Worker:
+        let thread = thread::spawn(move ||:
+            loop:
+                let job = {
+                    let guard = receiver.lock()
+                    match guard.recv():
+                        Option::Some(job) => job
+                        Option::None => return
+                }
+                job()
+        )
+        Worker { id, thread: Option::Some(thread) }
+
+type Job = Box<dyn FnOnce() + Send + 'static>
+
+# ============================================
+# I/O Driver
+# ============================================
+
+struct IoDriver:
+    selector: sys::Selector
+    events: Vector<sys::Event>
+    registrations: collections::HashMap<usize, IoRegistration>
+    
+    fn new() -> IoDriver:
+        IoDriver {
+            selector: sys::Selector::new(),
+            events: Vector::with_capacity(256),
+            registrations: collections::HashMap::new()
+        }
+        
+    fn register(&mut self, source: &impl IoSource, interest: Interest, waker: Waker) -> IoToken:
+        let token = IoToken { id: source.raw_fd() as usize }
+        self.selector.register(source.raw_fd(), token.id, interest)
+        self.registrations.insert(token.id, IoRegistration { waker, interest })
+        token
+        
+    fn poll(&mut self):
+        self.selector.poll(&mut self.events, Duration::from_millis(1))
+        for event in &self.events:
+            if let Option::Some(reg) = self.registrations.get(&event.token):
+                reg.waker.wake_by_ref()
+                
+struct IoRegistration:
+    waker: Waker
+    interest: Interest
+
+struct IoToken:
+    id: usize
+
+enum Interest:
+    Readable
+    Writable
+    Both
+
+trait IoSource:
+    fn raw_fd(&self) -> i32
+
+# ============================================
+# Timer Driver
+# ============================================
+
+struct TimerDriver:
+    timers: collections::BinaryHeap<TimerEntry>
+    
+    fn new() -> TimerDriver:
+        TimerDriver { timers: collections::BinaryHeap::new() }
+        
+    fn register(&mut self, deadline: Instant, waker: Waker):
+        self.timers.push(TimerEntry { deadline, waker })
+        
+    fn check_timers(&mut self):
+        let now = Instant::now()
+        while let Option::Some(entry) = self.timers.peek():
+            if entry.deadline <= now:
+                let entry = self.timers.pop().unwrap()
+                entry.waker.wake()
+            else:
+                break
+
+struct TimerEntry:
+    deadline: Instant
+    waker: Waker
+
+impl Ord for TimerEntry:
+    fn cmp(&self, other: &TimerEntry) -> Ordering:
+        # Reverse ordering for min-heap behavior
+        other.deadline.cmp(&self.deadline)
+
+# ============================================
+# Thread-Local Timer Driver
+# ============================================
+
+thread_local static TIMER_DRIVER: RefCell<TimerDriver> = RefCell::new(TimerDriver::new())
+
+# ============================================
+# Async Utilities
+# ============================================
+
+async fn sleep(duration: Duration):
+    Sleep { deadline: Instant::now() + duration, registered: false }.await
+
+async fn yield_for_duration(duration: Duration):
+    # Yield execution for a specified duration, registering with the timer driver
+    Sleep { deadline: Instant::now() + duration, registered: false }.await
+
+struct Sleep:
+    deadline: Instant
+    registered: bool
+
+impl Future for Sleep:
+    type Output = ()
+    
+    fn poll(&mut self, ctx: &mut Context) -> Poll<()>:
+        if Instant::now() >= self.deadline:
+            return Poll::Ready(())
+        if !self.registered:
+            TIMER_DRIVER.with(|d| d.register(self.deadline, ctx.waker().clone()))
+            self.registered = true
+        Poll::Pending
+
+async fn yield_now():
+    YieldNow { yielded: false }.await
+
+struct YieldNow:
+    yielded: bool
+
+impl Future for YieldNow:
+    type Output = ()
+    
+    fn poll(&mut self, ctx: &mut Context) -> Poll<()>:
+        if self.yielded:
+            Poll::Ready(())
+        else:
+            self.yielded = true
+            ctx.waker().wake_by_ref()
+            Poll::Pending
+
+async fn timeout<F: Future>(duration: Duration, future: F) -> Result<F::Output, TimeoutError>:
+    select!:
+        result = future => Result::Ok(result)
+        _ = sleep(duration) => Result::Err(TimeoutError)
+
+struct TimeoutError
+
+# ============================================
+# Channel (Async MPSC)
+# ============================================
+
+struct Sender<T>:
+    inner: Arc<ChannelInner<T>>
+
+struct Receiver<T>:
+    inner: Arc<ChannelInner<T>>
+
+struct ChannelInner<T>:
+    buffer: Mutex<collections::Deque<T>>
+    capacity: usize
+    send_waiters: Mutex<collections::Deque<Waker>>
+    recv_waiters: Mutex<collections::Deque<Waker>>
+    closed: AtomicBool
+
+fn channel<T>(capacity: usize) -> (Sender<T>, Receiver<T>):
+    let inner = Arc::new(ChannelInner {
+        buffer: Mutex::new(collections::Deque::new()),
+        capacity,
+        send_waiters: Mutex::new(collections::Deque::new()),
+        recv_waiters: Mutex::new(collections::Deque::new()),
+        closed: AtomicBool::new(false)
+    })
+    (Sender { inner: inner.clone() }, Receiver { inner })
+
+impl<T> Sender<T>:
+    async fn send(&self, value: T) -> Result<(), SendError<T>>:
+        Send { sender: self, value: Option::Some(value) }.await
+
+struct Send<'a, T>:
+    sender: &'a Sender<T>
+    value: Option<T>
+
+impl<'a, T> Future for Send<'a, T>:
+    type Output = Result<(), SendError<T>>
+    
+    fn poll(&mut self, ctx: &mut Context) -> Poll<Result<(), SendError<T>>>:
+        let inner = &self.sender.inner
+        
+        if inner.closed.load(Ordering::Acquire):
+            return Poll::Ready(Result::Err(SendError(self.value.take().unwrap())))
+            
+        let mut buffer = inner.buffer.lock()
+        if buffer.len() < inner.capacity:
+            buffer.push_back(self.value.take().unwrap())
+            # Wake a waiting receiver
+            let mut waiters = inner.recv_waiters.lock()
+            if let Option::Some(waker) = waiters.pop_front():
+                waker.wake()
+            Poll::Ready(Result::Ok(()))
+        else:
+            inner.send_waiters.lock().push_back(ctx.waker().clone())
+            Poll::Pending
+
+impl<T> Receiver<T>:
+    async fn recv(&self) -> Option<T>:
+        Recv { receiver: self }.await
+
+struct Recv<'a, T>:
+    receiver: &'a Receiver<T>
+
+impl<'a, T> Future for Recv<'a, T>:
+    type Output = Option<T>
+    
+    fn poll(&mut self, ctx: &mut Context) -> Poll<Option<T>>:
+        let inner = &self.receiver.inner
+        
+        let mut buffer = inner.buffer.lock()
+        if let Option::Some(value) = buffer.pop_front():
+            # Wake a waiting sender
+            let mut waiters = inner.send_waiters.lock()
+            if let Option::Some(waker) = waiters.pop_front():
+                waker.wake()
+            Poll::Ready(Option::Some(value))
+        else if inner.closed.load(Ordering::Acquire):
+            Poll::Ready(Option::None)
+        else:
+            inner.recv_waiters.lock().push_back(ctx.waker().clone())
+            Poll::Pending
+
+struct SendError<T>(T)
+
+# ============================================
+# Select Macro Support
+# ============================================
+
+# select! macro compiles to this:
+struct Select2<F1: Future, F2: Future>:
+    f1: Option<F1>
+    f2: Option<F2>
+
+impl<F1: Future, F2: Future> Future for Select2<F1, F2>:
+    type Output = Either<F1::Output, F2::Output>
+    
+    fn poll(&mut self, ctx: &mut Context) -> Poll<Self::Output>:
+        if let Option::Some(f) = &mut self.f1:
+            match Pin::new_unchecked(f).poll(ctx):
+                Poll::Ready(v) =>
+                    self.f1 = Option::None
+                    return Poll::Ready(Either::Left(v))
+                Poll::Pending => {}
+        if let Option::Some(f) = &mut self.f2:
+            match Pin::new_unchecked(f).poll(ctx):
+                Poll::Ready(v) =>
+                    self.f2 = Option::None
+                    return Poll::Ready(Either::Right(v))
+                Poll::Pending => {}
+        Poll::Pending
+
+enum Either<L, R>:
+    Left(L)
+    Right(R)
+
+# ============================================
+# Join Future
+# ============================================
+
+async fn join<F1: Future, F2: Future>(f1: F1, f2: F2) -> (F1::Output, F2::Output):
+    Join2 { f1: Option::Some(f1), f2: Option::Some(f2), r1: Option::None, r2: Option::None }.await
+
+struct Join2<F1: Future, F2: Future>:
+    f1: Option<F1>
+    f2: Option<F2>
+    r1: Option<F1::Output>
+    r2: Option<F2::Output>
+
+impl<F1: Future, F2: Future> Future for Join2<F1, F2>:
+    type Output = (F1::Output, F2::Output)
+    
+    fn poll(&mut self, ctx: &mut Context) -> Poll<(F1::Output, F2::Output)>:
+        if let Option::Some(f) = &mut self.f1:
+            if let Poll::Ready(v) = Pin::new_unchecked(f).poll(ctx):
+                self.r1 = Option::Some(v)
+                self.f1 = Option::None
+        if let Option::Some(f) = &mut self.f2:
+            if let Poll::Ready(v) = Pin::new_unchecked(f).poll(ctx):
+                self.r2 = Option::Some(v)
+                self.f2 = Option::None
+                
+        if self.r1.is_some() && self.r2.is_some():
+            Poll::Ready((self.r1.take().unwrap(), self.r2.take().unwrap()))
+        else:
+            Poll::Pending

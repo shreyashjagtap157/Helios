@@ -1,0 +1,513 @@
+# Helios Input Processor
+# Handles multi-modal input: text, voice, video
+
+module helios::input
+
+import core::io
+import core::audio
+import core::video
+import core::fs
+
+# Input processor - handles all input modalities
+struct InputProcessor:
+    # Input modes
+    text_enabled: bool
+    voice_enabled: bool
+    video_enabled: bool
+    
+    # Processors
+    voice_recognizer: Option<VoiceRecognizer>
+    video_processor: Option<VideoProcessor>
+    
+    # Configuration
+    config: InputConfig
+    
+    fn new(config: &HeliosConfig) -> own InputProcessor:
+        let input_config = config.input.clone()
+        
+        let voice_recognizer = if input_config.enable_voice:
+            Some(VoiceRecognizer::new(&input_config.voice_config))
+        else:
+            None
+        
+        let video_processor = if input_config.enable_video:
+            Some(VideoProcessor::new(&input_config.video_config))
+        else:
+            None
+        
+        InputProcessor:
+            text_enabled: input_config.enable_text,
+            voice_enabled: input_config.enable_voice,
+            video_enabled: input_config.enable_video,
+            voice_recognizer,
+            video_processor,
+            config: input_config
+    
+    # Get input from user (any modality)
+    fn get_input(&self) -> Input:
+        # Check for voice input first (if enabled)
+        if let Some(ref recognizer) = self.voice_recognizer:
+            if recognizer.has_audio():
+                return self.process_voice_input(recognizer)
+        
+        # Check for video input (if enabled)
+        if let Some(ref processor) = self.video_processor:
+            if processor.has_video():
+                return self.process_video_input(processor)
+        
+        # Default to text input
+        self.get_text_input()
+    
+    # Get text input
+    fn get_text_input(&self) -> Input:
+        io::print("> ")
+        io::flush()
+        
+        let line = io::read_line()
+        
+        Input::Text:
+            content: line.trim().to_string(),
+            timestamp: time::now()
+    
+    # Process voice input
+    fn process_voice_input(&self, recognizer: &VoiceRecognizer) -> Input:
+        let audio_data = recognizer.capture()
+        let text = recognizer.transcribe(&audio_data)
+        
+        Input::Voice:
+            transcription: text,
+            audio_data,
+            timestamp: time::now(),
+            confidence: recognizer.last_confidence()
+    
+    # Process video input
+    fn process_video_input(&self, processor: &VideoProcessor) -> Input:
+        let frame_data = processor.capture()
+        let analysis = processor.analyze(&frame_data)
+        
+        Input::Video:
+            description: analysis.description,
+            objects_detected: analysis.objects,
+            text_detected: analysis.text,
+            frame_data,
+            timestamp: time::now()
+    
+    # Parse input to normalized form
+    fn parse(&self, input: Input) -> ParsedInput:
+        let raw_text = match &input:
+            Input::Text { content, .. }: content.clone()
+            Input::Voice { transcription, .. }: transcription.clone()
+            Input::Video { description, text_detected, .. }:
+                if let Some(text) = text_detected:
+                    format("{} [Text in image: {}]", description, text)
+                else:
+                    description.clone()
+            Input::File { content, path, .. }:
+                format("[File: {}]\n{}", path, content)
+        
+        # Tokenize
+        let tokens = self.tokenize(&raw_text)
+        
+        # Extract entities
+        let entities = self.extract_entities(&tokens)
+        
+        # Determine intent
+        let intent = self.determine_intent(&tokens, &entities)
+        
+        ParsedInput:
+            raw_text,
+            original_input: input,
+            tokens,
+            entities,
+            intent,
+            timestamp: time::now()
+    
+    # Tokenize text (rule-based, not ML)
+    fn tokenize(&self, text: &str) -> Vec<Token>:
+        let mut tokens = Vec::new()
+        let words = text.split_whitespace()
+        
+        let mut position = 0
+        for word in words:
+            let token_type = self.classify_token(word)
+            tokens.push(Token:
+                text: word.to_string(),
+                position,
+                token_type
+            )
+            position += 1
+        
+        tokens
+    
+    # Classify a token (rule-based)
+    fn classify_token(&self, word: &str) -> TokenType:
+        # Check for numbers
+        if word.parse::<f64>().is_ok():
+            return TokenType::Number
+        
+        # Check for punctuation
+        if word.len() == 1 && !word.chars().next().unwrap().is_alphanumeric():
+            return TokenType::Punctuation
+        
+        # Check for question words
+        let question_words = ["what", "who", "where", "when", "why", "how", "which"]
+        if question_words.contains(&word.to_lower().as_str()):
+            return TokenType::QuestionWord
+        
+        # Check for command words
+        let command_words = ["do", "make", "create", "delete", "run", "stop", "start", 
+                            "show", "hide", "open", "close", "find", "search"]
+        if command_words.contains(&word.to_lower().as_str()):
+            return TokenType::CommandWord
+        
+        # Check for connectors
+        let connectors = ["and", "or", "but", "if", "then", "because", "when", "while"]
+        if connectors.contains(&word.to_lower().as_str()):
+            return TokenType::Connector
+        
+        TokenType::Word
+    
+    # Extract entities (rule-based NER)
+    fn extract_entities(&self, tokens: &[Token]) -> Vec<Entity>:
+        let mut entities = Vec::new()
+        let mut i = 0
+        
+        while i < tokens.len():
+            let token = &tokens[i]
+            
+            # Check for capitalized words (potential names)
+            if self.is_capitalized(&token.text) && token.position > 0:
+                let name = self.collect_capitalized_sequence(tokens, i)
+                entities.push(Entity:
+                    text: name.text.clone(),
+                    entity_type: EntityType::ProperNoun,
+                    start_position: i,
+                    end_position: i + name.length
+                )
+                i += name.length
+                continue
+            
+            # Check for quoted strings
+            if token.text.starts_with("\"") || token.text.starts_with("'"):
+                let quoted = self.collect_quoted(tokens, i)
+                entities.push(Entity:
+                    text: quoted.text.clone(),
+                    entity_type: EntityType::Quoted,
+                    start_position: i,
+                    end_position: i + quoted.length
+                )
+                i += quoted.length
+                continue
+            
+            # Check for file paths
+            if self.looks_like_path(&token.text):
+                entities.push(Entity:
+                    text: token.text.clone(),
+                    entity_type: EntityType::FilePath,
+                    start_position: i,
+                    end_position: i + 1
+                )
+            
+            # Check for URLs
+            if self.looks_like_url(&token.text):
+                entities.push(Entity:
+                    text: token.text.clone(),
+                    entity_type: EntityType::Url,
+                    start_position: i,
+                    end_position: i + 1
+                )
+            
+            i += 1
+        
+        entities
+    
+    # Determine intent from tokens and entities
+    fn determine_intent(&self, tokens: &[Token], entities: &[Entity]) -> Intent:
+        if tokens.is_empty():
+            return Intent::Empty
+        
+        let first = &tokens[0]
+        
+        # Question
+        if first.token_type == TokenType::QuestionWord:
+            return Intent::Question
+        
+        # Command
+        if first.token_type == TokenType::CommandWord:
+            return Intent::Command
+        
+        # Check for question mark at end
+        if tokens.last().map(|t| t.text.ends_with("?")).unwrap_or(false):
+            return Intent::Question
+        
+        # Default to statement
+        Intent::Statement
+    
+    # Helpers
+    fn is_capitalized(&self, word: &str) -> bool:
+        word.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
+    
+    fn collect_capitalized_sequence(&self, tokens: &[Token], start: usize) -> CollectedSequence:
+        let mut end = start
+        let mut text = String::new()
+        
+        while end < tokens.len() && self.is_capitalized(&tokens[end].text):
+            if !text.is_empty():
+                text.push(' ')
+            text.push_str(&tokens[end].text)
+            end += 1
+        
+        CollectedSequence:
+            text,
+            length: end - start
+    
+    fn collect_quoted(&self, tokens: &[Token], start: usize) -> CollectedSequence:
+        let quote_char = tokens[start].text.chars().next().unwrap()
+        let mut end = start
+        let mut text = String::new()
+        
+        while end < tokens.len():
+            text.push_str(&tokens[end].text)
+            if end > start && tokens[end].text.ends_with(quote_char):
+                end += 1
+                break
+            text.push(' ')
+            end += 1
+        
+        CollectedSequence:
+            text: text.trim_matches(quote_char).to_string(),
+            length: end - start
+    
+    fn looks_like_path(&self, text: &str) -> bool:
+        text.contains("/") || text.contains("\\") || 
+        text.starts_with("~") || text.starts_with("./")
+    
+    fn looks_like_url(&self, text: &str) -> bool:
+        text.starts_with("http://") || text.starts_with("https://") ||
+        text.starts_with("www.") || text.contains("://")
+
+
+# Input types
+enum Input:
+    Text:
+        content: String
+        timestamp: u64
+    
+    Voice:
+        transcription: String
+        audio_data: AudioData
+        timestamp: u64
+        confidence: f32
+    
+    Video:
+        description: String
+        objects_detected: Vec<DetectedObject>
+        text_detected: Option<String>
+        frame_data: FrameData
+        timestamp: u64
+    
+    File:
+        path: String
+        content: String
+        file_type: FileType
+        timestamp: u64
+    
+    fn to_string(&self) -> String:
+        match self:
+            Input::Text { content, .. }: content.clone()
+            Input::Voice { transcription, .. }: transcription.clone()
+            Input::Video { description, .. }: description.clone()
+            Input::File { path, .. }: format("[File: {}]", path)
+
+
+# Parsed input (normalized)
+struct ParsedInput:
+    raw_text: String
+    original_input: Input
+    tokens: Vec<Token>
+    entities: Vec<Entity>
+    intent: Intent
+    timestamp: u64
+
+
+# Token
+struct Token:
+    text: String
+    position: usize
+    token_type: TokenType
+
+
+enum TokenType:
+    Word
+    Number
+    Punctuation
+    QuestionWord
+    CommandWord
+    Connector
+
+
+# Entity
+struct Entity:
+    text: String
+    entity_type: EntityType
+    start_position: usize
+    end_position: usize
+
+
+enum EntityType:
+    ProperNoun
+    Quoted
+    FilePath
+    Url
+    Number
+    Date
+    Time
+
+
+# Intent
+enum Intent:
+    Question
+    Command
+    Statement
+    Empty
+
+
+# Voice recognition (rule-based speech-to-text)
+struct VoiceRecognizer:
+    config: VoiceConfig
+    last_confidence: f32
+    
+    fn new(config: &VoiceConfig) -> own VoiceRecognizer:
+        VoiceRecognizer:
+            config: config.clone(),
+            last_confidence: 0.0
+    
+    fn has_audio(&self) -> bool:
+        audio::has_input()
+    
+    fn capture(&self) -> AudioData:
+        audio::capture(self.config.sample_rate, self.config.max_duration)
+    
+    fn transcribe(&mut self, audio: &AudioData) -> String:
+        # Use system speech recognition
+        let result = audio::speech_to_text(audio, &self.config.language)
+        self.last_confidence = result.confidence
+        result.text
+    
+    fn last_confidence(&self) -> f32:
+        self.last_confidence
+
+
+# Video processor
+struct VideoProcessor:
+    config: VideoConfig
+    
+    fn new(config: &VideoConfig) -> own VideoProcessor:
+        VideoProcessor:
+            config: config.clone()
+    
+    fn has_video(&self) -> bool:
+        video::has_camera()
+    
+    fn capture(&self) -> FrameData:
+        video::capture_frame(self.config.width, self.config.height)
+    
+    fn analyze(&self, frame: &FrameData) -> VideoAnalysis:
+        # Object detection (rule-based edge detection, color analysis)
+        let objects = self.detect_objects(frame)
+        
+        # OCR for text in image
+        let text = self.extract_text(frame)
+        
+        # Generate description
+        let description = self.describe_frame(frame, &objects)
+        
+        VideoAnalysis:
+            description,
+            objects,
+            text
+    
+    fn detect_objects(&self, frame: &FrameData) -> Vec<DetectedObject>:
+        # Simple edge detection and blob analysis
+        # This is rule-based, not ML
+        video::detect_blobs(frame)
+            .iter()
+            .map(|b| DetectedObject:
+                label: b.estimated_type.clone(),
+                bounds: b.bounds.clone(),
+                confidence: b.confidence
+            )
+            .collect()
+    
+    fn extract_text(&self, frame: &FrameData) -> Option<String>:
+        video::ocr(frame).filter(|t| !t.is_empty())
+    
+    fn describe_frame(&self, frame: &FrameData, objects: &[DetectedObject]) -> String:
+        if objects.is_empty():
+            "Image with no detected objects".to_string()
+        else:
+            let obj_list: Vec<String> = objects.iter()
+                .map(|o| o.label.clone())
+                .collect()
+            format("Image containing: {}", obj_list.join(", "))
+
+
+# Supporting types
+struct AudioData:
+    samples: Vec<f32>
+    sample_rate: u32
+    channels: u8
+
+struct FrameData:
+    pixels: Vec<u8>
+    width: u32
+    height: u32
+    format: PixelFormat
+
+struct DetectedObject:
+    label: String
+    bounds: Rect
+    confidence: f32
+
+struct VideoAnalysis:
+    description: String
+    objects: Vec<DetectedObject>
+    text: Option<String>
+
+struct CollectedSequence:
+    text: String
+    length: usize
+
+struct InputConfig:
+    enable_text: bool
+    enable_voice: bool
+    enable_video: bool
+    voice_config: VoiceConfig
+    video_config: VideoConfig
+
+struct VoiceConfig:
+    sample_rate: u32
+    max_duration: f32
+    language: String
+
+struct VideoConfig:
+    width: u32
+    height: u32
+    fps: u32
+
+enum PixelFormat:
+    RGB
+    RGBA
+    Grayscale
+
+enum FileType:
+    Text
+    Code
+    Image
+    Binary
+
+struct Rect:
+    x: i32
+    y: i32
+    width: u32
+    height: u32

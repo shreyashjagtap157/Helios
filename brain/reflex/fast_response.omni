@@ -1,0 +1,364 @@
+# HELIOS Reflex Module
+# Fast, automatic responses that bypass deep reasoning
+# Implements fast thinking (System 1)
+
+module brain::reflex
+
+import core::logging as log
+import core::collections::{Vec, HashMap}
+import brain::knowledge_graph as kg
+
+# ============================================================================
+# REFLEX ENGINE - Fast Pattern-Action Responses
+# ============================================================================
+
+# Handles rapid responses that don't require deliberation
+struct ReflexEngine:
+    # Pattern-action rules (stimulus -> response)
+    reflexes: Vec<Reflex>
+    
+    # Pattern index for fast matching
+    pattern_index: HashMap<String, Vec<usize>>
+    
+    # Response history for learning
+    response_log: Vec<ReflexResponse>
+    
+    # Configuration
+    response_time_budget_ms: u64
+    min_confidence: f64
+    
+    fn new() -> own ReflexEngine:
+        let mut engine = ReflexEngine {
+            reflexes: Vec::new(),
+            pattern_index: HashMap::new(),
+            response_log: Vec::new(),
+            response_time_budget_ms: 50,  # 50ms budget for reflex
+            min_confidence: 0.8
+        }
+        
+        # Load built-in reflexes
+        engine.load_builtin_reflexes()
+        
+        return engine
+    
+    # Try to respond immediately without deep thinking
+    fn try_respond(&mut self, input: &Input) -> Option<ReflexResponse>:
+        let start_time = time::now_ms()
+        
+        # Extract key patterns from input
+        let patterns = self.extract_patterns(input)
+        
+        # Find matching reflexes (fast lookup)
+        let candidates = self.find_matching_reflexes(&patterns)
+        
+        if candidates.is_empty():
+            return None
+        
+        # Select best matching reflex
+        let best = self.select_best_reflex(&candidates, input)
+        
+        if best.confidence < self.min_confidence:
+            return None
+        
+        # Generate response
+        let response = self.generate_response(&best.reflex, input)
+        
+        let elapsed = time::now_ms() - start_time
+        log::debug("Reflex response in {}ms: {}", elapsed, response.summary())
+        
+        # Log for learning
+        self.response_log.push(response.clone())
+        
+        return Some(response)
+    
+    fn extract_patterns(&self, input: &Input) -> Vec<Pattern>:
+        let mut patterns = Vec::new()
+        
+        # Extract keyword patterns
+        let words: Vec<&str> = input.text.split_whitespace().collect()
+        for word in &words:
+            patterns.push(Pattern::Keyword(word.to_lowercase()))
+        
+        # Extract phrase patterns (bigrams, trigrams)
+        for i in 0..words.len().saturating_sub(1):
+            let bigram = format!("{} {}", words[i], words[i+1])
+            patterns.push(Pattern::Phrase(bigram.to_lowercase()))
+        
+        # Extract intent patterns
+        if input.text.ends_with("?"):
+            patterns.push(Pattern::Intent(Intent::Question))
+        elif input.text.contains("please") || input.text.contains("could you"):
+            patterns.push(Pattern::Intent(Intent::Request))
+        elif input.text.starts_with("!") || input.text.contains("stop") || input.text.contains("cancel"):
+            patterns.push(Pattern::Intent(Intent::Command))
+        
+        # Extract emotional patterns
+        let sentiment = self.detect_sentiment(&input.text)
+        if sentiment != Sentiment::Neutral:
+            patterns.push(Pattern::Sentiment(sentiment))
+        
+        return patterns
+    
+    fn detect_sentiment(&self, text: &str) -> Sentiment:
+        let lower = text.to_lowercase()
+        
+        let positive_words = ["great", "good", "excellent", "happy", "love", "thanks", "wonderful"]
+        let negative_words = ["bad", "terrible", "hate", "angry", "sad", "wrong", "awful"]
+        
+        let pos_count = positive_words.iter().filter(|w| lower.contains(*w)).count()
+        let neg_count = negative_words.iter().filter(|w| lower.contains(*w)).count()
+        
+        if pos_count > neg_count:
+            return Sentiment::Positive
+        elif neg_count > pos_count:
+            return Sentiment::Negative
+        else:
+            return Sentiment::Neutral
+    
+    fn find_matching_reflexes(&self, patterns: &[Pattern]) -> Vec<ReflexMatch>:
+        let mut matches = Vec::new()
+        let mut checked = std::collections::HashSet::new()
+        
+        for pattern in patterns:
+            let key = pattern.index_key()
+            if let Some(reflex_ids) = self.pattern_index.get(&key):
+                for &id in reflex_ids:
+                    if !checked.contains(&id):
+                        checked.insert(id)
+                        let reflex = &self.reflexes[id]
+                        let score = self.match_score(reflex, patterns)
+                        if score > 0.0:
+                            matches.push(ReflexMatch {
+                                reflex: reflex.clone(),
+                                confidence: score
+                            })
+        
+        return matches
+    
+    fn match_score(&self, reflex: &Reflex, input_patterns: &[Pattern]) -> f64:
+        let mut matched = 0
+        let total = reflex.trigger_patterns.len()
+        
+        for trigger in &reflex.trigger_patterns:
+            if input_patterns.iter().any(|p| p.matches(trigger)):
+                matched += 1
+        
+        if total == 0:
+            return 0.0
+        return matched as f64 / total as f64
+    
+    fn select_best_reflex(&self, candidates: &[ReflexMatch], input: &Input) -> ReflexMatch:
+        # Sort by confidence and priority
+        let mut sorted: Vec<_> = candidates.iter().cloned().collect()
+        sorted.sort_by(|a, b| {
+            let a_score = a.confidence * a.reflex.priority as f64
+            let b_score = b.confidence * b.reflex.priority as f64
+            b_score.partial_cmp(&a_score).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        return sorted[0].clone()
+    
+    fn generate_response(&self, reflex: &Reflex, input: &Input) -> ReflexResponse:
+        # Apply response template with input bindings
+        let response_text = self.instantiate_template(&reflex.response_template, input)
+        
+        return ReflexResponse {
+            text: response_text,
+            reflex_id: reflex.id,
+            confidence: 1.0,
+            response_type: reflex.response_type.clone(),
+            timestamp: time::now_ms()
+        }
+    
+    fn instantiate_template(&self, template: &str, input: &Input) -> String:
+        let mut result = template.to_string()
+        
+        # Replace placeholders
+        result = result.replace("{input}", &input.text)
+        result = result.replace("{user}", &input.user.unwrap_or("user".to_string()))
+        
+        return result
+    
+    # Add a new reflex rule
+    fn add_reflex(&mut self, reflex: Reflex):
+        let id = self.reflexes.len()
+        
+        # Index by trigger patterns
+        for pattern in &reflex.trigger_patterns:
+            let key = pattern.index_key()
+            self.pattern_index.entry(key)
+                .or_default()
+                .push(id)
+        
+        self.reflexes.push(reflex)
+    
+    # Learn from feedback
+    fn learn_from_feedback(&mut self, response_id: usize, was_appropriate: bool):
+        if let Some(response) = self.response_log.get(response_id):
+            if let Some(reflex) = self.reflexes.iter_mut()
+                .find(|r| r.id == response.reflex_id):
+                if was_appropriate:
+                    reflex.priority = (reflex.priority + 1).min(10)
+                else:
+                    reflex.priority = (reflex.priority - 1).max(0)
+    
+    # Load default/built-in reflexes
+    fn load_builtin_reflexes(&mut self):
+        # Greeting reflex
+        self.add_reflex(Reflex {
+            id: 0,
+            name: "greeting".to_string(),
+            trigger_patterns: vec![
+                Pattern::Keyword("hello".to_string()),
+                Pattern::Keyword("hi".to_string()),
+                Pattern::Keyword("hey".to_string())
+            ],
+            response_template: "Hello! How can I help you?".to_string(),
+            response_type: ResponseType::Greeting,
+            priority: 5
+        })
+        
+        # Farewell reflex
+        self.add_reflex(Reflex {
+            id: 1,
+            name: "farewell".to_string(),
+            trigger_patterns: vec![
+                Pattern::Keyword("bye".to_string()),
+                Pattern::Keyword("goodbye".to_string()),
+                Pattern::Phrase("see you".to_string())
+            ],
+            response_template: "Goodbye! Feel free to return anytime.".to_string(),
+            response_type: ResponseType::Farewell,
+            priority: 5
+        })
+        
+        # Thanks reflex
+        self.add_reflex(Reflex {
+            id: 2,
+            name: "thanks".to_string(),
+            trigger_patterns: vec![
+                Pattern::Keyword("thanks".to_string()),
+                Pattern::Keyword("thank".to_string()),
+                Pattern::Phrase("thank you".to_string())
+            ],
+            response_template: "You're welcome!".to_string(),
+            response_type: ResponseType::Acknowledgment,
+            priority: 5
+        })
+        
+        # Help request reflex
+        self.add_reflex(Reflex {
+            id: 3,
+            name: "help_request".to_string(),
+            trigger_patterns: vec![
+                Pattern::Keyword("help".to_string()),
+                Pattern::Phrase("how do i".to_string()),
+                Pattern::Intent(Intent::Request)
+            ],
+            response_template: "I'd be happy to help! What do you need assistance with?".to_string(),
+            response_type: ResponseType::HelpOffer,
+            priority: 4
+        })
+        
+        # Emergency stop reflex (high priority)
+        self.add_reflex(Reflex {
+            id: 4,
+            name: "emergency_stop".to_string(),
+            trigger_patterns: vec![
+                Pattern::Keyword("stop".to_string()),
+                Pattern::Keyword("cancel".to_string()),
+                Pattern::Keyword("abort".to_string()),
+                Pattern::Intent(Intent::Command)
+            ],
+            response_template: "Stopping current operation.".to_string(),
+            response_type: ResponseType::SystemAction,
+            priority: 10
+        })
+
+
+# ============================================================================
+# DATA STRUCTURES
+# ============================================================================
+
+struct Input:
+    text: String
+    user: Option<String>
+    context: Option<String>
+    timestamp: u64
+
+
+struct Reflex:
+    id: usize
+    name: String
+    trigger_patterns: Vec<Pattern>
+    response_template: String
+    response_type: ResponseType
+    priority: u8  # 0-10, higher = more priority
+
+
+#[derive(Clone)]
+struct ReflexMatch:
+    reflex: Reflex
+    confidence: f64
+
+
+#[derive(Clone)]
+struct ReflexResponse:
+    text: String
+    reflex_id: usize
+    confidence: f64
+    response_type: ResponseType
+    timestamp: u64
+    
+    fn summary(&self) -> &str:
+        &self.text
+
+
+enum Pattern:
+    Keyword(word: String)
+    Phrase(phrase: String)
+    Regex(pattern: String)
+    Intent(intent: Intent)
+    Sentiment(sentiment: Sentiment)
+    
+    fn index_key(&self) -> String:
+        match self:
+            Pattern::Keyword(w) => format!("kw:{}", w)
+            Pattern::Phrase(p) => format!("ph:{}", p)
+            Pattern::Regex(r) => format!("rx:{}", r)
+            Pattern::Intent(i) => format!("in:{:?}", i)
+            Pattern::Sentiment(s) => format!("se:{:?}", s)
+    
+    fn matches(&self, other: &Pattern) -> bool:
+        match (self, other):
+            (Pattern::Keyword(a), Pattern::Keyword(b)) => a == b
+            (Pattern::Phrase(a), Pattern::Phrase(b)) => a == b
+            (Pattern::Intent(a), Pattern::Intent(b)) => a == b
+            (Pattern::Sentiment(a), Pattern::Sentiment(b)) => a == b
+            _ => false
+
+
+enum Intent:
+    Question
+    Request
+    Command
+    Statement
+    Greeting
+    Farewell
+
+
+enum Sentiment:
+    Positive
+    Negative
+    Neutral
+
+
+#[derive(Clone)]
+enum ResponseType:
+    Greeting
+    Farewell
+    Acknowledgment
+    HelpOffer
+    Information
+    Clarification
+    SystemAction
+    Error

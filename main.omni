@@ -1,0 +1,479 @@
+# Helios Main Entry Point
+# Cognitive Framework - NOT a Machine Learning Model
+
+module main
+
+import ovm::runtime
+import core::system
+import core::memory
+import core::io
+import helios::cognitive
+import helios::knowledge
+import helios::input
+import helios::output
+import helios::service
+import config::loader
+
+# Helios Cognitive Framework
+struct Helios:
+    # Core components
+    cognitive_processor: CognitiveProcessor
+    knowledge_store: KnowledgeStore
+    experience_log: ExperienceLog
+    capability_registry: CapabilityRegistry
+    self_model: SelfModel
+    
+    # Input/Output handlers
+    input_processor: InputProcessor
+    output_generator: OutputGenerator
+    
+    # State
+    config: HeliosConfig
+    running: bool
+    session: Option<Session>
+    pending_conflicts: Option<Vec<Conflict>>
+    pending_growth: Option<GrowthProposal>
+    pending_modification: Option<ModificationProposal>
+    
+    fn new() -> own Helios:
+        io::println("Initializing Helios Cognitive Framework...")
+        
+        # Load configuration
+        let config = loader::load("config/default.toml")
+            .unwrap_or_else(|_| HeliosConfig::default())
+        
+        # Initialize knowledge store (persistent)
+        let knowledge_store = KnowledgeStore::open(&config.knowledge_path)
+            .unwrap_or_else(|_| KnowledgeStore::new(&config.knowledge_path))
+        
+        # Initialize experience log (persistent - records everything)
+        let experience_log = ExperienceLog::open(&config.experience_path)
+            .unwrap_or_else(|_| ExperienceLog::new(&config.experience_path))
+        
+        # Initialize cognitive processor
+        let cognitive_processor = CognitiveProcessor::new(&config)
+        
+        # Initialize capability registry
+        let capability_registry = CapabilityRegistry::load(&config.capabilities_path)
+            .unwrap_or_else(|_| CapabilityRegistry::default())
+        
+        # Initialize self model (what Helios knows about itself)
+        let self_model = SelfModel::new(&capability_registry, &knowledge_store)
+        
+        # Input/Output
+        let input_processor = InputProcessor::new(&config)
+        let output_generator = OutputGenerator::new(&config)
+        
+        io::println("Helios initialized successfully")
+        
+        return Helios:
+            cognitive_processor,
+            knowledge_store,
+            experience_log,
+            capability_registry,
+            self_model,
+            input_processor,
+            output_generator,
+            config,
+            running: false,
+            session: None,
+            pending_conflicts: None,
+            pending_growth: None,
+            pending_modification: None
+    
+    # Start Helios
+    fn start(&mut self):
+        self.running = true
+        self.session = Some(Session::new())
+        
+        io::println("Helios started")
+        io::println("Ready to assist. Type 'help' for commands.")
+        io::println("")
+        
+        # Log start event
+        self.experience_log.record(Experience::SystemEvent:
+            event: "Helios started",
+            timestamp: time::now()
+        )
+    
+    # Main processing loop
+    fn run(&mut self):
+        self.start()
+        
+        while self.running:
+            # Get input (any modality)
+            let input = self.input_processor.get_input()
+            
+            # Process and respond
+            match self.process(input):
+                ProcessResult::Response(response):
+                    self.output_generator.output(response)
+                ProcessResult::Action(action):
+                    self.execute_action(action)
+                ProcessResult::Exit:
+                    self.running = false
+                ProcessResult::Error(e):
+                    self.output_generator.output_error(e)
+        
+        self.stop()
+    
+    # Process any input
+    fn process(&mut self, input: Input) -> ProcessResult:
+        # Record input experience
+        let experience_id = self.experience_log.record(Experience::UserInput:
+            input: input.clone(),
+            timestamp: time::now(),
+            session: self.session.as_ref().unwrap().id
+        )
+        
+        # Parse input to normalized form
+        let parsed = self.input_processor.parse(input)
+        
+        # Check for system commands
+        if let Some(command) = self.extract_command(&parsed):
+            return self.handle_command(command)
+        
+        # Process through cognitive engine
+        let processing_result = self.cognitive_processor.process(
+            parsed,
+            &self.knowledge_store,
+            &self.capability_registry
+        )
+        
+        # Generate response
+        let response = match processing_result:
+            CognitiveResult::Understood(info):
+                self.handle_understood(info)
+            CognitiveResult::Query(query):
+                self.handle_query(query)
+            CognitiveResult::Request(request):
+                self.handle_request(request)
+            CognitiveResult::Unknown(what):
+                self.handle_unknown(what)
+            CognitiveResult::NeedsClarification(what):
+                self.ask_clarification(what)
+        
+        # Record response experience
+        self.experience_log.record(Experience::HeliosResponse:
+            response: response.clone(),
+            in_response_to: experience_id,
+            timestamp: time::now()
+        )
+        
+        return ProcessResult::Response(response)
+    
+    # Handle when information is understood
+    fn handle_understood(&mut self, info: UnderstandingResult) -> Response:
+        # Learn from the information
+        let learning_result = self.learn(info.information_units)
+        
+        match learning_result:
+            LearningResult::Learned(count):
+                Response::text(format("I've learned {} new pieces of information.", count))
+            LearningResult::Updated(count):
+                Response::text(format("I've updated {} existing knowledge items.", count))
+            LearningResult::Conflict(conflicts):
+                self.handle_conflicts(conflicts)
+            LearningResult::AlreadyKnown:
+                Response::text("I already knew that information.")
+    
+    # Handle queries (user asking for information)
+    fn handle_query(&self, query: Query) -> Response:
+        # Search knowledge store
+        let results = self.knowledge_store.query(query.clone())
+        
+        if results.is_empty():
+            # I don't know - be honest about it
+            return Response::text(format(
+                "I don't have information about '{}'. Would you like to provide it, or should I note this as something to learn?",
+                query.subject
+            ))
+        
+        # Return what we know with confidence and source
+        let mut response = String::new()
+        for (i, result) in results.enumerate():
+            response.push_str(format(
+                "{}. {} (Source: {}, Status: {}, Learned: {})\n",
+                i + 1,
+                result.content,
+                result.source,
+                result.accuracy,
+                result.acquired_at
+            ))
+        
+        return Response::text(response)
+    
+    # Handle requests (actions, capability additions, etc.)
+    fn handle_request(&mut self, request: Request) -> Response:
+        match request:
+            Request::Action(action):
+                # Check if we have this capability
+                if self.capability_registry.has(&action.capability_name):
+                    return self.execute_capability(action)
+                else:
+                    return Response::text(format(
+                        "I don't have the capability to '{}'. Would you like to teach me how?",
+                        action.capability_name
+                    ))
+            
+            Request::AddCapability(cap_request):
+                # Capability growth - requires explicit approval
+                self.propose_capability_growth(cap_request)
+            
+            Request::ModifySelf(mod_request):
+                # Self-modification - requires explicit approval
+                self.propose_self_modification(mod_request)
+    
+    # Handle unknown input - be honest
+    fn handle_unknown(&self, what: String) -> Response:
+        Response::text(format(
+            "I don't understand '{}'. Could you please rephrase or explain what you mean?",
+            what
+        ))
+    
+    # Ask for clarification
+    fn ask_clarification(&self, what: ClarificationNeeded) -> Response:
+        Response::text(format("Could you clarify: {}?", what.question))
+    
+    # Learn new information (NOT training - exact storage)
+    fn learn(&mut self, units: Vec<InformationUnit>) -> LearningResult:
+        let mut new_count = 0
+        let mut updated_count = 0
+        let mut conflicts = Vec::new()
+        
+        for unit in units:
+            # Check if we already have this information
+            let existing = self.knowledge_store.find_similar(&unit)
+            
+            if existing.is_empty():
+                # New information - store it exactly
+                self.knowledge_store.store(unit)
+                new_count += 1
+            else:
+                # Check for conflict
+                if self.is_conflicting(&unit, &existing):
+                    # Don't automatically resolve - flag for user
+                    conflicts.push(Conflict::new(unit, existing))
+                else:
+                    # Update existing information
+                    self.knowledge_store.update(unit, existing)
+                    updated_count += 1
+        
+        if !conflicts.is_empty():
+            return LearningResult::Conflict(conflicts)
+        elif new_count > 0:
+            return LearningResult::Learned(new_count)
+        elif updated_count > 0:
+            return LearningResult::Updated(updated_count)
+        else:
+            return LearningResult::AlreadyKnown
+    
+    # Handle information conflicts - ask user
+    fn handle_conflicts(&mut self, conflicts: Vec<Conflict>) -> Response:
+        let mut response = String::from("I found conflicting information:\n\n")
+        
+        for (i, conflict) in conflicts.enumerate():
+            response.push_str(format("Conflict {}:\n", i + 1))
+            response.push_str(format(
+                "  New: {} (Source: {})\n",
+                conflict.new_info.content,
+                conflict.new_info.source
+            ))
+            response.push_str(format(
+                "  Existing: {} (Source: {}, Learned: {})\n\n",
+                conflict.existing.content,
+                conflict.existing.source,
+                conflict.existing.acquired_at
+            ))
+        
+        response.push_str("Which should I consider accurate? (new/existing/both/neither)")
+        self.pending_conflicts = Some(conflicts)
+        
+        return Response::text(response)
+    
+    # Propose capability growth (user must approve)
+    fn propose_capability_growth(&mut self, request: CapabilityRequest) -> Response:
+        let proposal = self.analyze_capability_request(request)
+        
+        let mut response = String::from("Capability Growth Proposal:\n\n")
+        response.push_str(format("Requested: {}\n", proposal.name))
+        response.push_str(format("Description: {}\n", proposal.description))
+        response.push_str(format("\nChanges required:\n"))
+        for change in &proposal.changes:
+            response.push_str(format("  - {}\n", change))
+        response.push_str(format("\nRisks: {}\n", proposal.risks))
+        response.push_str(format("Reversible: {}\n", proposal.reversible))
+        response.push_str("\nDo you approve? (yes/no)")
+        
+        self.pending_growth = Some(proposal)
+        return Response::text(response)
+    
+    # Propose self-modification (user must approve)  
+    fn propose_self_modification(&mut self, request: ModificationRequest) -> Response:
+        let proposal = self.analyze_modification_request(request)
+        
+        let mut response = String::from("Self-Modification Proposal:\n\n")
+        response.push_str(format("Type: {}\n", proposal.modification_type))
+        response.push_str(format("Reason: {}\n", proposal.reason))
+        response.push_str(format("\nChanges:\n"))
+        for change in &proposal.changes:
+            response.push_str(format("  Before: {}\n  After: {}\n\n", change.before, change.after))
+        response.push_str(format("Consequences:\n"))
+        for consequence in &proposal.consequences:
+            response.push_str(format("  - {}\n", consequence))
+        response.push_str(format("\nReversible: {}\n", proposal.reversible))
+        response.push_str("\nDo you approve? (yes/no)")
+        
+        self.pending_modification = Some(proposal)
+        return Response::text(response)
+    
+    # Handle system commands
+    fn handle_command(&mut self, command: Command) -> ProcessResult:
+        match command:
+            Command::Exit:
+                ProcessResult::Exit
+            Command::Help:
+                ProcessResult::Response(self.show_help())
+            Command::Status:
+                ProcessResult::Response(self.show_status())
+            Command::Recall(query):
+                ProcessResult::Response(self.recall(query))
+            Command::Capabilities:
+                ProcessResult::Response(self.list_capabilities())
+            Command::History:
+                ProcessResult::Response(self.show_history())
+            Command::Forget(what):
+                ProcessResult::Response(self.forget(what))
+    
+    # Show help
+    fn show_help(&self) -> Response:
+        Response::text("""
+Helios Cognitive Framework - Help
+
+Commands:
+  help         - Show this help
+  status       - Show system status
+  recall       - Recall past information or experiences
+  history      - Show recent interactions
+  capabilities - List what I can do
+  exit         - Exit Helios
+
+I will:
+- Answer if I know (with source and confidence)
+- Say "I don't know" if I don't (NEVER make things up)
+- Learn new information you provide (exact storage, not training)
+- Ask for clarification when uncertain
+- Only modify myself with your explicit approval
+
+I will NEVER:
+- Hallucinate or guess information
+- Make up answers
+- Modify myself without your approval
+- Forget without your permission
+        """)
+    
+    # Show status
+    fn show_status(&self) -> Response:
+        Response::text(format("""
+Helios Status:
+  Running: {}
+  Session: {}
+  
+Knowledge Store:
+  Total facts: {}
+  Verified: {}
+  Unverified: {}
+  Conflicted: {}
+  
+Experience Log:
+  Total recorded: {}
+  This session: {}
+  
+Capabilities: {}
+Memory: {} / {}
+Processor: {}
+        """,
+            self.running,
+            self.session.as_ref().map(|s| s.id.to_string()).unwrap_or("None".to_string()),
+            self.knowledge_store.count(),
+            self.knowledge_store.count_by_status(AccuracyStatus::Accurate),
+            self.knowledge_store.count_by_status(AccuracyStatus::Unverified),
+            self.knowledge_store.count_by_status(AccuracyStatus::Conflicted),
+            self.experience_log.total_count(),
+            self.experience_log.session_count(self.session.as_ref().unwrap().id),
+            self.capability_registry.count(),
+            memory::used(),
+            memory::total(),
+            self.cognitive_processor.current_processor()
+        ))
+    
+    # Recall past information or experiences
+    fn recall(&self, query: RecallQuery) -> Response:
+        let results = match query:
+            RecallQuery::Information(topic):
+                self.knowledge_store.query_topic(topic)
+            RecallQuery::Experience(criteria):
+                self.experience_log.query(criteria)
+            RecallQuery::TimeRange(start, end):
+                self.experience_log.query_time_range(start, end)
+            RecallQuery::Session(session_id):
+                self.experience_log.query_session(session_id)
+            RecallQuery::All:
+                self.experience_log.all()
+        
+        if results.is_empty():
+            return Response::text("I don't have any matching records.")
+        
+        let mut response = String::from("Recall results:\n\n")
+        for result in results:
+            response.push_str(format("{}\n", result.format()))
+        Response::text(response)
+    
+    # Stop Helios
+    fn stop(&mut self):
+        self.experience_log.record(Experience::SystemEvent:
+            event: "Helios stopped",
+            timestamp: time::now()
+        )
+        self.knowledge_store.flush()
+        self.experience_log.flush()
+        io::println("Helios stopped")
+        self.running = false
+
+
+# Entry point
+fn main():
+    let args = system::args()
+    
+    let mode = if args.contains("--service"):
+        RunMode::Service
+    elif args.contains("--api"):
+        let port = args.get_value("--port").unwrap_or("8080")
+        RunMode::API(port.parse().unwrap_or(8080))
+    elif args.contains("--repl"):
+        RunMode::REPL
+    else:
+        RunMode::Application
+    
+    let mut helios = Helios::new()
+    
+    match mode:
+        RunMode::Service:
+            io::println("Starting Helios as system service...")
+            service::run_as_service(helios)
+        RunMode::API(port):
+            io::println("Starting Helios API on port {}...", port)
+            api::run_server(helios, port)
+        RunMode::REPL:
+            io::println("Starting Helios interactive mode...")
+            helios.run()
+        RunMode::Application:
+            io::println("Starting Helios application...")
+            app::run_gui(helios)
+
+
+enum RunMode:
+    Service
+    API(port: u16)
+    REPL
+    Application

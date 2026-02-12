@@ -1,0 +1,339 @@
+# Omni Standard Library: Benchmarks
+# Performance testing and benchmark suite for stdlib modules
+
+module std::benchmarks
+
+import std::core
+import std::math
+import std::tensor
+import std::compress
+import std::regex
+import std::image
+import std::reflect
+import std::time
+
+# ============================================
+# Benchmark Framework
+# ============================================
+
+struct Benchmark:
+    name: String
+    iterations: u64
+    start_time: u64
+    end_time: u64
+    results: Vec<f64>
+
+struct BenchmarkResult:
+    name: String
+    iterations: u64
+    total_time_ms: f64
+    avg_time_ms: f64
+    min_time_ms: f64
+    max_time_ms: f64
+    ops_per_sec: f64
+
+impl Benchmark:
+    fn new(name: String, iterations: u64) -> Benchmark:
+        Benchmark {
+            name,
+            iterations,
+            start_time: 0,
+            end_time: 0,
+            results: Vec::new()
+        }
+    
+    fn run<F>(&mut self, f: F) -> BenchmarkResult where F: Fn():
+        let mut times = Vec::new()
+        
+        for _ in 0..self.iterations:
+            let start = current_time_ms()
+            f()
+            let end = current_time_ms()
+            times.push((end - start) as f64)
+        
+        let total_time: f64 = times.iter().sum()
+        let avg_time = total_time / (self.iterations as f64)
+        let min_time = times.iter().fold(f64::INFINITY, |a, &b| a.min(b))
+        let max_time = times.iter().fold(0.0, |a, &b| a.max(b))
+        let ops_per_sec = 1000.0 / avg_time  # Assuming times in ms
+        
+        BenchmarkResult {
+            name: self.name.clone(),
+            iterations: self.iterations,
+            total_time_ms: total_time,
+            avg_time_ms: avg_time,
+            min_time_ms: min_time,
+            max_time_ms: max_time,
+            ops_per_sec
+        }
+
+impl BenchmarkResult:
+    fn display(&self) -> String:
+        format(
+            "{}: {} iterations in {:.2}ms (avg {:.4}ms, min {:.4}ms, max {:.4}ms, {:.0} ops/sec)",
+            self.name,
+            self.iterations,
+            self.total_time_ms,
+            self.avg_time_ms,
+            self.min_time_ms,
+            self.max_time_ms,
+            self.ops_per_sec
+        )
+
+fn current_time_ms() -> u64:
+    # Use system monotonic clock for precise timing
+    let now = time::Instant::now()
+    (now.secs * 1000) + (now.nanos / 1_000_000) as u64
+
+# ============================================
+# Math Module Benchmarks
+# ============================================
+
+fn bench_matrix_multiply() -> BenchmarkResult:
+    let mut bench = Benchmark::new("Matrix Multiply (100x100)".to_string(), 100)
+    
+    bench.run(|| {
+        let a = math::Matrix::new(100, 100)
+        let b = math::Matrix::new(100, 100)
+        let _ = a.multiply(&b)
+    })
+
+fn bench_matrix_inverse() -> BenchmarkResult:
+    let mut bench = Benchmark::new("Matrix Determinant".to_string(), 1000)
+    
+    bench.run(|| {
+        let m = math::Matrix::new(10, 10)
+        let _ = m.determinant()
+    })
+
+fn bench_vector_operations() -> BenchmarkResult:
+    let mut bench = Benchmark::new("Vector Dot Product (1000)".to_string(), 10000)
+    
+    bench.run(|| {
+        let a = vec![1.0; 1000]
+        let b = vec![2.0; 1000]
+        let _ = math::dot_product(&a, &b)
+    })
+
+fn bench_trig_functions() -> BenchmarkResult:
+    let mut bench = Benchmark::new("Sin/Cos Computation".to_string(), 100000)
+    
+    bench.run(|| {
+        let _ = math::sin(1.5)
+        let _ = math::cos(1.5)
+        let _ = math::tan(1.5)
+    })
+
+fn bench_random_generation() -> BenchmarkResult:
+    let mut bench = Benchmark::new("Random Number Generation (1000)".to_string(), 1000)
+    let mut rng = math::Random::from_entropy()
+    
+    bench.run(|| {
+        for _ in 0..1000:
+            let _ = rng.next_u64()
+    })
+
+# ============================================
+# Tensor Module Benchmarks
+# ============================================
+
+fn bench_tensor_creation() -> BenchmarkResult:
+    let mut bench = Benchmark::new("Tensor Creation (1000x1000)".to_string(), 1000)
+    
+    bench.run(|| {
+        let _ = tensor::Tensor::<f64>::new(vec![1000, 1000])
+    })
+
+fn bench_tensor_reshape() -> BenchmarkResult:
+    let mut bench = Benchmark::new("Tensor Reshape".to_string(), 10000)
+    let t = tensor::Tensor::<f64>::new(vec![1000, 1000])
+    
+    bench.run(|| {
+        let _ = t.reshape(vec![1000000])
+    })
+
+fn bench_tensor_permute() -> BenchmarkResult:
+    let mut bench = Benchmark::new("Tensor Permute".to_string(), 1000)
+    let t = tensor::Tensor::<f64>::new(vec![100, 100, 10])
+    
+    bench.run(|| {
+        let _ = t.permute(vec![2, 0, 1])
+    })
+
+fn bench_gemm() -> BenchmarkResult:
+    let mut bench = Benchmark::new("GEMM (100x100 x 100x100)".to_string(), 100)
+    
+    bench.run(|| {
+        let a = tensor::Tensor::<f64>::new(vec![100, 100])
+        let b = tensor::Tensor::<f64>::new(vec![100, 100])
+        let c = tensor::Tensor::<f64>::new(vec![100, 100])
+        let _ = tensor::gemm::<f64>(1.0, &a, &b, 0.0, &c)
+    })
+
+# ============================================
+# Compression Module Benchmarks
+# ============================================
+
+fn bench_zstd_compress() -> BenchmarkResult:
+    let mut bench = Benchmark::new("Zstd Compression (100KB)".to_string(), 100)
+    let data = vec![0u8; 100000]
+    
+    bench.run(|| {
+        let _ = compress::zstd_compress(&data, compress::CompressionLevel::Default)
+    })
+
+fn bench_lz4_compress() -> BenchmarkResult:
+    let mut bench = Benchmark::new("LZ4 Compression (100KB)".to_string(), 100)
+    let data = vec![0u8; 100000]
+    
+    bench.run(|| {
+        let _ = compress::lz4_compress(&data)
+    })
+
+fn bench_rle_compress() -> BenchmarkResult:
+    let mut bench = Benchmark::new("RLE Compression (100KB)".to_string(), 1000)
+    let mut data = vec![0u8; 100000]
+    # Create compressible data
+    for i in 0..100:
+        data[i * 1000] = 1
+    
+    bench.run(|| {
+        let _ = compress::rle_compress(&data)
+    })
+
+fn bench_entropy_calculation() -> BenchmarkResult:
+    let mut bench = Benchmark::new("Entropy Calculation (100KB)".to_string(), 1000)
+    let data = vec![0u8; 100000]
+    
+    bench.run(|| {
+        let _ = compress::calculate_entropy(&data)
+    })
+
+# ============================================
+# Regex Module Benchmarks
+# ============================================
+
+fn bench_regex_match() -> BenchmarkResult:
+    let mut bench = Benchmark::new("Regex Match".to_string(), 100)
+    
+    bench.run(|| {
+        let _ = regex::is_match("[0-9]+", "12345")
+    })
+
+fn bench_regex_find_all() -> BenchmarkResult:
+    let mut bench = Benchmark::new("Regex Find All (100 matches)".to_string(), 100)
+    let text = "abc 123 def 456 ghi 789 ".repeat(10)
+    
+    bench.run(|| {
+        let regex = regex::Regex::new("[0-9]+").unwrap()
+        let _ = regex.find_all(&text)
+    })
+
+fn bench_regex_split() -> BenchmarkResult:
+    let mut bench = Benchmark::new("Regex Split".to_string(), 1000)
+    let text = "a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p".repeat(10)
+    
+    bench.run(|| {
+        let regex = regex::Regex::new(",").unwrap()
+        let _ = regex.split(&text)
+    })
+
+fn bench_case_insensitive_regex() -> BenchmarkResult:
+    let mut bench = Benchmark::new("Case Insensitive Regex".to_string(), 1000)
+    
+    bench.run(|| {
+        let regex = regex::CaseInsensitiveRegex::new("[a-z]+").unwrap()
+        let _ = regex.find("HELLO WORLD")
+    })
+
+# ============================================
+# Image Module Benchmarks
+# ============================================
+
+fn bench_gaussian_blur() -> BenchmarkResult:
+    let mut bench = Benchmark::new("Gaussian Blur (512x512)".to_string(), 10)
+    
+    bench.run(|| {
+        let img = image::Image::new(512, 512, 3, image::ImageFormat::RGB)
+        let _ = image::gaussian_blur(&img, 5)
+    })
+
+fn bench_grayscale_conversion() -> BenchmarkResult:
+    let mut bench = Benchmark::new("Grayscale Conversion (512x512)".to_string(), 100)
+    
+    bench.run(|| {
+        let img = image::Image::new(512, 512, 3, image::ImageFormat::RGB)
+        let _ = image::to_grayscale(&img)
+    })
+
+fn bench_resize() -> BenchmarkResult:
+    let mut bench = Benchmark::new("Image Resize (512x512 -> 256x256)".to_string(), 50)
+    
+    bench.run(|| {
+        let img = image::Image::new(512, 512, 3, image::ImageFormat::RGB)
+        let _ = image::resize(&img, 256, 256)
+    })
+
+fn bench_edge_detection() -> BenchmarkResult:
+    let mut bench = Benchmark::new("Sobel Edge Detection (512x512)".to_string(), 10)
+    
+    bench.run(|| {
+        let img = image::Image::new(512, 512, 3, image::ImageFormat::RGB)
+        let _ = image::sobel_edge_detection(&img)
+    })
+
+# ============================================
+# Reflection Module Benchmarks
+# ============================================
+
+fn bench_type_introspection() -> BenchmarkResult:
+    let mut bench = Benchmark::new("Type Introspection".to_string(), 10000)
+    
+    bench.run(|| {
+        let _ = reflect::size_of::<i64>()
+        let _ = reflect::align_of::<i64>()
+    })
+
+fn bench_type_registry_lookup() -> BenchmarkResult:
+    let mut bench = Benchmark::new("Type Registry Lookup".to_string(), 10000)
+    
+    bench.run(|| {
+        let registry = reflect::TypeRegistry::global()
+        let _ = registry.get_by_name("i64")
+    })
+
+# ============================================
+# Comprehensive Benchmark Suite
+# ============================================
+
+fn run_all_benchmarks():
+    println("=== Omni Standard Library Benchmarks ===\n")
+    
+    # Math benchmarks
+    println("Math Module:")
+    println(bench_matrix_multiply().display())
+    println(bench_vector_operations().display())
+    println(bench_trig_functions().display())
+    println(bench_random_generation().display())
+    
+    println("\nTensor Module:")
+    println(bench_tensor_creation().display())
+    println(bench_tensor_reshape().display())
+    println(bench_gemm().display())
+    
+    println("\nCompression Module:")
+    println(bench_zstd_compress().display())
+    println(bench_lz4_compress().display())
+    println(bench_rle_compress().display())
+    
+    println("\nRegex Module:")
+    println(bench_regex_match().display())
+    println(bench_regex_find_all().display())
+    
+    println("\nImage Module:")
+    println(bench_gaussian_blur().display())
+    println(bench_grayscale_conversion().display())
+    
+    println("\nReflection Module:")
+    println(bench_type_introspection().display())
+

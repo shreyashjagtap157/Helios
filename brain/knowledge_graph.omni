@@ -1,0 +1,784 @@
+# HELIOS Knowledge Graph Engine
+# Core knowledge representation using graph-based semantic structures
+# Replaces neural embeddings with explicit knowledge representation
+
+module brain::knowledge_graph
+
+import core::logging as log
+import core::collections
+import core::storage
+import helios::knowledge
+
+# ============================================================================
+# KNOWLEDGE NODE TYPES
+# ============================================================================
+
+# A node in the knowledge graph - can be entity, concept, or relation
+struct KnowledgeNode:
+    id: usize
+    node_type: NodeType
+    name: String
+    properties: Map<String, Value>
+    created_at: Timestamp
+    updated_at: Timestamp
+    access_count: usize
+    importance_score: f64
+    
+    fn new(id: usize, node_type: NodeType, name: &str) -> own KnowledgeNode:
+        let now = Timestamp::now()
+        return KnowledgeNode {
+            id,
+            node_type,
+            name: name.to_string(),
+            properties: Map::new(),
+            created_at: now,
+            updated_at: now,
+            access_count: 0,
+            importance_score: 0.5
+        }
+    
+    fn set_property(&mut self, key: &str, value: Value):
+        self.properties.insert(key.to_string(), value)
+        self.updated_at = Timestamp::now()
+    
+    fn get_property(&self, key: &str) -> Option<&Value>:
+        self.properties.get(key)
+    
+    fn mark_accessed(&mut self):
+        self.access_count += 1
+        self.updated_at = Timestamp::now()
+        # Importance increases with access (up to limit)
+        self.importance_score = (self.importance_score + 0.01).min(1.0)
+
+enum NodeType:
+    Entity          # Concrete thing (person, place, object)
+    Concept         # Abstract idea (democracy, love, algorithm)
+    Event           # Temporal occurrence
+    Property        # Attribute type
+    Action          # Verb/procedure
+    Category        # Classification/type
+    Rule            # Logical rule or constraint
+    Meta            # Information about the graph itself
+
+# Edge connecting two nodes with semantic meaning
+struct KnowledgeEdge:
+    id: usize
+    from_id: usize
+    to_id: usize
+    relation: Relation
+    confidence: f64           # 0.0 to 1.0
+    source: KnowledgeSource
+    properties: Map<String, Value>
+    created_at: Timestamp
+    
+    fn new(id: usize, from_id: usize, to_id: usize, relation: Relation) -> own KnowledgeEdge:
+        return KnowledgeEdge {
+            id,
+            from_id,
+            to_id,
+            relation,
+            confidence: 1.0,
+            source: KnowledgeSource::Direct,
+            properties: Map::new(),
+            created_at: Timestamp::now()
+        }
+    
+    fn with_confidence(mut self, confidence: f64) -> own KnowledgeEdge:
+        self.confidence = confidence.clamp(0.0, 1.0)
+        return self
+    
+    fn with_source(mut self, source: KnowledgeSource) -> own KnowledgeEdge:
+        self.source = source
+        return self
+
+# Semantic relation types
+enum Relation:
+    # Taxonomic
+    IsA                     # "dog" IsA "animal"
+    SubclassOf              # "mammal" SubclassOf "animal"
+    InstanceOf              # "Fido" InstanceOf "dog"
+    PartOf                  # "wheel" PartOf "car"
+    HasPart                 # "car" HasPart "engine"
+    
+    # Attributes
+    HasProperty             # "apple" HasProperty "red"
+    HasValue                # "temperature" HasValue "25C"
+    
+    # Causal
+    Causes                  # "fire" Causes "heat"
+    CausedBy                # "smoke" CausedBy "fire"
+    Enables                 # "key" Enables "unlock"
+    Prevents                # "vaccine" Prevents "disease"
+    
+    # Temporal
+    Before                  # "birth" Before "death"
+    After                   # "graduation" After "enrollment"
+    During                  # "lunch" During "workday"
+    Simultaneous            # concurrent events
+    
+    # Spatial
+    LocatedAt               # "Eiffel Tower" LocatedAt "Paris"
+    Contains                # "France" Contains "Paris"
+    NearTo                  # proximity relation
+    
+    # Logical
+    Implies                 # "mortal(X)" Implies "will_die(X)"
+    Equivalent              # logical equivalence
+    Contradicts             # logical contradiction
+    
+    # Semantic
+    SimilarTo               # semantic similarity
+    OppositeTo              # antonym
+    RelatedTo               # general relation
+    DefinedAs               # definition
+    ExampleOf               # exemplification
+    
+    # Action/Agent
+    Performs                # "doctor" Performs "surgery"
+    ReceivesAction          # "patient" ReceivesAction "surgery"
+    Uses                    # "carpenter" Uses "hammer"
+    Produces                # "factory" Produces "goods"
+    
+    # Custom relation with name
+    Custom(name: String)
+
+enum KnowledgeSource:
+    Direct                  # Explicitly stated
+    Inferred                # Derived through reasoning
+    Inherited               # From parent class
+    External(source: String) # From external source
+    Hypothetical            # Tentative/uncertain
+
+# ============================================================================
+# KNOWLEDGE GRAPH STRUCTURE
+# ============================================================================
+
+# Main knowledge graph structure - unlimited growth
+struct KnowledgeGraph:
+    nodes: Map<usize, KnowledgeNode>
+    edges: Vec<KnowledgeEdge>
+    
+    # Indexes for fast lookup
+    name_index: Map<String, Vec<usize>>         # name -> node IDs
+    type_index: Map<NodeType, Vec<usize>>       # type -> node IDs
+    outgoing_edges: Map<usize, Vec<usize>>      # node ID -> edge IDs (outgoing)
+    incoming_edges: Map<usize, Vec<usize>>      # node ID -> edge IDs (incoming)
+    relation_index: Map<Relation, Vec<usize>>   # relation -> edge IDs
+    
+    next_node_id: usize
+    next_edge_id: usize
+    
+    # Persistent storage path (grows without limits)
+    storage_path: Option<String>
+    
+    fn new() -> own KnowledgeGraph:
+        return KnowledgeGraph {
+            nodes: Map::new(),
+            edges: Vec::new(),
+            name_index: Map::new(),
+            type_index: Map::new(),
+            outgoing_edges: Map::new(),
+            incoming_edges: Map::new(),
+            relation_index: Map::new(),
+            next_node_id: 1,
+            next_edge_id: 1,
+            storage_path: None
+        }
+    
+    fn with_storage(mut self, path: &str) -> own KnowledgeGraph:
+        self.storage_path = Some(path.to_string())
+        self.load_from_storage()
+        return self
+    
+    # ========================================================================
+    # NODE OPERATIONS
+    # ========================================================================
+    
+    fn add_node(&mut self, node_type: NodeType, name: &str) -> usize:
+        let id = self.next_node_id
+        self.next_node_id += 1
+        
+        let node = KnowledgeNode::new(id, node_type.clone(), name)
+        
+        # Update indexes
+        self.nodes.insert(id, node)
+        self.name_index.entry(name.to_string()).or_default().push(id)
+        self.type_index.entry(node_type).or_default().push(id)
+        self.outgoing_edges.insert(id, Vec::new())
+        self.incoming_edges.insert(id, Vec::new())
+        
+        log::trace("Added node {}: {} ({:?})", id, name, node_type)
+        return id
+    
+    fn get_node(&self, id: usize) -> Option<&KnowledgeNode>:
+        self.nodes.get(&id)
+    
+    fn get_node_mut(&mut self, id: usize) -> Option<&mut KnowledgeNode>:
+        self.nodes.get_mut(&id)
+    
+    fn find_nodes_by_name(&self, name: &str) -> Vec<usize>:
+        self.name_index.get(name).cloned().unwrap_or_default()
+    
+    fn find_nodes_by_type(&self, node_type: &NodeType) -> Vec<usize>:
+        self.type_index.get(node_type).cloned().unwrap_or_default()
+    
+    fn find_or_create_node(&mut self, node_type: NodeType, name: &str) -> usize:
+        if let Some(ids) = self.name_index.get(name):
+            for &id in ids:
+                if let Some(node) = self.nodes.get(&id):
+                    if node.node_type == node_type:
+                        return id
+        
+        self.add_node(node_type, name)
+    
+    # ========================================================================
+    # EDGE OPERATIONS
+    # ========================================================================
+    
+    fn add_edge(&mut self, from_id: usize, to_id: usize, relation: Relation) -> Result<usize, String>:
+        # Validate nodes exist
+        if !self.nodes.contains_key(&from_id):
+            return Err(format!("Source node {} does not exist", from_id))
+        if !self.nodes.contains_key(&to_id):
+            return Err(format!("Target node {} does not exist", to_id))
+        
+        let id = self.next_edge_id
+        self.next_edge_id += 1
+        
+        let edge = KnowledgeEdge::new(id, from_id, to_id, relation.clone())
+        
+        # Update indexes
+        self.edges.push(edge)
+        self.outgoing_edges.entry(from_id).or_default().push(id)
+        self.incoming_edges.entry(to_id).or_default().push(id)
+        self.relation_index.entry(relation).or_default().push(id)
+        
+        log::trace("Added edge {}: {} --{:?}--> {}", id, from_id, relation, to_id)
+        return Ok(id)
+    
+    fn add_edge_with_confidence(&mut self, from_id: usize, to_id: usize, 
+                                 relation: Relation, confidence: f64) -> Result<usize, String>:
+        let edge_id = self.add_edge(from_id, to_id, relation)?
+        if let Some(edge) = self.edges.get_mut(edge_id - 1):
+            edge.confidence = confidence.clamp(0.0, 1.0)
+        Ok(edge_id)
+    
+    fn get_outgoing_edges(&self, node_id: usize) -> Vec<&KnowledgeEdge>:
+        self.outgoing_edges.get(&node_id)
+            .map(|ids| ids.iter()
+                .filter_map(|&id| self.edges.get(id - 1))
+                .collect())
+            .unwrap_or_default()
+    
+    fn get_incoming_edges(&self, node_id: usize) -> Vec<&KnowledgeEdge>:
+        self.incoming_edges.get(&node_id)
+            .map(|ids| ids.iter()
+                .filter_map(|&id| self.edges.get(id - 1))
+                .collect())
+            .unwrap_or_default()
+    
+    fn find_edges(&self, from_id: Option<usize>, to_id: Option<usize>, 
+                  relation: Option<&Relation>) -> Vec<&KnowledgeEdge>:
+        self.edges.iter().filter(|e| {
+            (from_id.is_none() || Some(e.from_id) == from_id) &&
+            (to_id.is_none() || Some(e.to_id) == to_id) &&
+            (relation.is_none() || Some(&e.relation) == relation)
+        }).collect()
+    
+    # ========================================================================
+    # GRAPH TRAVERSAL
+    # ========================================================================
+    
+    fn neighbors(&self, node_id: usize) -> Vec<usize>:
+        let mut result = Vec::new()
+        
+        if let Some(edge_ids) = self.outgoing_edges.get(&node_id):
+            for &eid in edge_ids:
+                if let Some(edge) = self.edges.get(eid - 1):
+                    result.push(edge.to_id)
+        
+        if let Some(edge_ids) = self.incoming_edges.get(&node_id):
+            for &eid in edge_ids:
+                if let Some(edge) = self.edges.get(eid - 1):
+                    result.push(edge.from_id)
+        
+        result.sort()
+        result.dedup()
+        return result
+    
+    # Breadth-first search to find connected nodes
+    fn bfs(&self, start_id: usize, max_depth: usize) -> Vec<(usize, usize)>:  # (node_id, depth)
+        let mut visited = Set::new()
+        let mut queue = VecDeque::new()
+        let mut result = Vec::new()
+        
+        queue.push_back((start_id, 0))
+        visited.insert(start_id)
+        
+        while let Some((node_id, depth)) = queue.pop_front():
+            result.push((node_id, depth))
+            
+            if depth < max_depth:
+                for neighbor_id in self.neighbors(node_id):
+                    if !visited.contains(&neighbor_id):
+                        visited.insert(neighbor_id)
+                        queue.push_back((neighbor_id, depth + 1))
+        
+        return result
+    
+    # Find shortest path between two nodes
+    fn shortest_path(&self, from_id: usize, to_id: usize) -> Option<Vec<usize>>:
+        let mut visited = Set::new()
+        let mut queue = VecDeque::new()
+        let mut parent = Map::new()
+        
+        queue.push_back(from_id)
+        visited.insert(from_id)
+        
+        while let Some(current) = queue.pop_front():
+            if current == to_id:
+                # Reconstruct path
+                let mut path = vec![to_id]
+                let mut node = to_id
+                while let Some(&p) = parent.get(&node):
+                    path.push(p)
+                    node = p
+                path.reverse()
+                return Some(path)
+            
+            for neighbor in self.neighbors(current):
+                if !visited.contains(&neighbor):
+                    visited.insert(neighbor)
+                    parent.insert(neighbor, current)
+                    queue.push_back(neighbor)
+        
+        None
+    
+    # ========================================================================
+    # INHERITANCE & REASONING
+    # ========================================================================
+    
+    # Get all parent types (transitive closure of IsA/SubclassOf)
+    fn get_ancestors(&self, node_id: usize) -> Vec<usize>:
+        let mut ancestors = Vec::new()
+        let mut to_process = vec![node_id]
+        let mut visited = Set::new()
+        
+        while let Some(current) = to_process.pop():
+            if visited.contains(&current):
+                continue
+            visited.insert(current)
+            
+            for edge in self.get_outgoing_edges(current):
+                match edge.relation:
+                    Relation::IsA | Relation::SubclassOf | Relation::InstanceOf => {
+                        ancestors.push(edge.to_id)
+                        to_process.push(edge.to_id)
+                    }
+                    _ => {}
+        
+        return ancestors
+    
+    # Get all children (transitive closure of reverse IsA)
+    fn get_descendants(&self, node_id: usize) -> Vec<usize>:
+        let mut descendants = Vec::new()
+        let mut to_process = vec![node_id]
+        let mut visited = Set::new()
+        
+        while let Some(current) = to_process.pop():
+            if visited.contains(&current):
+                continue
+            visited.insert(current)
+            
+            for edge in self.get_incoming_edges(current):
+                match edge.relation:
+                    Relation::IsA | Relation::SubclassOf | Relation::InstanceOf => {
+                        descendants.push(edge.from_id)
+                        to_process.push(edge.from_id)
+                    }
+                    _ => {}
+        
+        return descendants
+    
+    # Check if node inherits property from ancestors
+    fn inherits_property(&self, node_id: usize, property: &str) -> Option<Value>:
+        # First check node itself
+        if let Some(node) = self.get_node(node_id):
+            if let Some(value) = node.get_property(property):
+                return Some(value.clone())
+        
+        # Then check ancestors
+        for ancestor_id in self.get_ancestors(node_id):
+            if let Some(ancestor) = self.get_node(ancestor_id):
+                if let Some(value) = ancestor.get_property(property):
+                    return Some(value.clone())
+        
+        None
+    
+    # ========================================================================
+    # QUERYING
+    # ========================================================================
+    
+    # Pattern-based query
+    fn query(&self, pattern: &GraphPattern) -> Vec<QueryMatch>:
+        let mut matches = Vec::new()
+        
+        match pattern:
+            GraphPattern::Node { node_type, name_pattern } => {
+                for (&id, node) in &self.nodes:
+                    if self.matches_node(node, node_type, name_pattern):
+                        matches.push(QueryMatch::Single(id))
+            }
+            
+            GraphPattern::Triple { subject, relation, object } => {
+                for edge in &self.edges:
+                    if self.matches_triple(edge, subject, relation, object):
+                        matches.push(QueryMatch::Triple {
+                            subject: edge.from_id,
+                            relation: edge.relation.clone(),
+                            object: edge.to_id
+                        })
+            }
+            
+            GraphPattern::Path { start, end, max_length } => {
+                if let Some(path) = self.shortest_path(*start, *end):
+                    if path.len() <= *max_length:
+                        matches.push(QueryMatch::Path(path))
+            }
+        
+        return matches
+    
+    fn matches_node(&self, node: &KnowledgeNode, node_type: &Option<NodeType>, 
+                    name_pattern: &Option<String>) -> bool:
+        if let Some(t) = node_type:
+            if node.node_type != *t:
+                return false
+        
+        if let Some(pattern) = name_pattern:
+            if !self.wildcard_match(&node.name, pattern):
+                return false
+        
+        true
+    
+    fn matches_triple(&self, edge: &KnowledgeEdge, subject: &Option<usize>,
+                      relation: &Option<Relation>, object: &Option<usize>) -> bool:
+        if let Some(s) = subject:
+            if edge.from_id != *s:
+                return false
+        
+        if let Some(r) = relation:
+            if edge.relation != *r:
+                return false
+        
+        if let Some(o) = object:
+            if edge.to_id != *o:
+                return false
+        
+        true
+    
+    fn wildcard_match(&self, text: &str, pattern: &str) -> bool:
+        # Simple wildcard matching (supports * and ?)
+        if pattern == "*":
+            return true
+        if !pattern.contains('*') && !pattern.contains('?'):
+            return text.to_lowercase().contains(&pattern.to_lowercase())
+        
+        # Convert to regex-like matching
+        let mut i = 0
+        let mut j = 0
+        let text_chars: Vec<char> = text.chars().collect()
+        let pattern_chars: Vec<char> = pattern.chars().collect()
+        
+        while i < text_chars.len() && j < pattern_chars.len():
+            match pattern_chars[j]:
+                '*' => {
+                    j += 1
+                    if j >= pattern_chars.len():
+                        return true
+                    while i < text_chars.len():
+                        if self.wildcard_match(&text[i..], &pattern[j..]):
+                            return true
+                        i += 1
+                    return false
+                }
+                '?' => {
+                    i += 1
+                    j += 1
+                }
+                c => {
+                    if text_chars[i].to_lowercase().next() != c.to_lowercase().next():
+                        return false
+                    i += 1
+                    j += 1
+                }
+        
+        i == text_chars.len() && j == pattern_chars.len()
+    
+    # ========================================================================
+    # PERSISTENCE (UNLIMITED STORAGE)
+    # ========================================================================
+    
+    fn save(&self):
+        if let Some(ref path) = self.storage_path:
+            log::info("Saving knowledge graph to {} ({} nodes, {} edges)", 
+                      path, self.nodes.len(), self.edges.len())
+            
+            let data = self.serialize()
+            storage::write_file(path, &data).expect("Failed to save knowledge graph")
+    
+    fn load_from_storage(&mut self):
+        if let Some(ref path) = self.storage_path:
+            if storage::file_exists(path):
+                log::info("Loading knowledge graph from {}", path)
+                let data = storage::read_file(path).expect("Failed to load knowledge graph")
+                self.deserialize(&data)
+                log::info("Loaded {} nodes and {} edges", self.nodes.len(), self.edges.len())
+    
+    fn serialize(&self) -> Vec<u8>:
+        # Binary serialization format
+        # Format: [node_count][nodes...][edge_count][edges...]
+        let mut bytes = Vec::new()
+        
+        # Serialize nodes
+        bytes.extend_from_slice(&(self.nodes.len() as u64).to_le_bytes())
+        for (id, node) in &self.nodes:
+            bytes.extend_from_slice(&(*id as u64).to_le_bytes())
+            bytes.extend_from_slice(&(node.node_type as u8).to_le_bytes())
+            bytes.extend_from_slice(&(node.name.len() as u32).to_le_bytes())
+            bytes.extend_from_slice(node.name.as_bytes())
+            # ... additional fields
+        
+        # Serialize edges
+        bytes.extend_from_slice(&(self.edges.len() as u64).to_le_bytes())
+        for edge in &self.edges:
+            bytes.extend_from_slice(&(edge.id as u64).to_le_bytes())
+            bytes.extend_from_slice(&(edge.from_id as u64).to_le_bytes())
+            bytes.extend_from_slice(&(edge.to_id as u64).to_le_bytes())
+            # ... relation and properties
+        
+        return bytes
+    
+    fn deserialize(&mut self, data: &[u8]):
+        # Inverse of serialize - parse binary format
+        if data.len() < 8:
+            return
+        
+        let mut offset: usize = 0
+        
+        # Read node count
+        let node_count = u64::from_le_bytes([
+            data[0], data[1], data[2], data[3],
+            data[4], data[5], data[6], data[7]
+        ]) as usize
+        offset = 8
+        
+        # Clear and rebuild nodes
+        self.nodes.clear()
+        self.node_index.clear()
+        
+        for _ in 0..node_count:
+            if offset + 16 > data.len():
+                break
+            
+            let id = u64::from_le_bytes([
+                data[offset], data[offset+1], data[offset+2], data[offset+3],
+                data[offset+4], data[offset+5], data[offset+6], data[offset+7]
+            ]) as usize
+            offset += 8
+            
+            let name_len = u64::from_le_bytes([
+                data[offset], data[offset+1], data[offset+2], data[offset+3],
+                data[offset+4], data[offset+5], data[offset+6], data[offset+7]
+            ]) as usize
+            offset += 8
+            
+            if offset + name_len > data.len():
+                break
+            
+            let name = String::from_utf8_lossy(&data[offset..offset+name_len]).to_string()
+            offset += name_len
+            
+            let node = KnowledgeNode {
+                id,
+                name,
+                node_type: NodeType::Concept,
+                properties: Map::new(),
+                connections: Vec::new(),
+            }
+            self.node_index.insert(id, self.nodes.len())
+            self.nodes.push(node)
+        
+        # Read edges (similar binary parsing)
+        if offset + 8 <= data.len():
+            let edge_count = u64::from_le_bytes([
+                data[offset], data[offset+1], data[offset+2], data[offset+3],
+                data[offset+4], data[offset+5], data[offset+6], data[offset+7]
+            ]) as usize
+            offset += 8
+            
+            self.edges.clear()
+            for _ in 0..edge_count:
+                if offset + 24 > data.len():
+                    break
+                
+                let edge_id = u64::from_le_bytes([
+                    data[offset], data[offset+1], data[offset+2], data[offset+3],
+                    data[offset+4], data[offset+5], data[offset+6], data[offset+7]
+                ]) as usize
+                offset += 8
+                
+                let from_id = u64::from_le_bytes([
+                    data[offset], data[offset+1], data[offset+2], data[offset+3],
+                    data[offset+4], data[offset+5], data[offset+6], data[offset+7]
+                ]) as usize
+                offset += 8
+                
+                let to_id = u64::from_le_bytes([
+                    data[offset], data[offset+1], data[offset+2], data[offset+3],
+                    data[offset+4], data[offset+5], data[offset+6], data[offset+7]
+                ]) as usize
+                offset += 8
+                
+                let edge = KnowledgeEdge {
+                    id: edge_id,
+                    from_id,
+                    to_id,
+                    relation: EdgeRelation::RelatedTo,
+                    weight: 1.0,
+                    properties: Map::new(),
+                }
+                self.edges.push(edge)
+    
+    # ========================================================================
+    # KNOWLEDGE MANAGEMENT
+    # ========================================================================
+    
+    fn get_all_nodes(&self) -> Vec<&KnowledgeNode>:
+        """Return references to all nodes in the graph"""
+        let mut result = Vec::new()
+        for (_, node) in &self.nodes:
+            result.push(node)
+        result
+    
+    fn merge_similar_nodes(&mut self, similarity_threshold: f64) -> usize:
+        """Merge nodes with similar names based on string similarity threshold"""
+        let mut merged_count = 0
+        let mut to_merge: Vec<(usize, usize)> = Vec::new()
+        
+        # Find similar node pairs
+        let node_ids: Vec<usize> = self.nodes.keys().cloned().collect()
+        for i in 0..node_ids.len():
+            for j in (i+1)..node_ids.len():
+                let id1 = node_ids[i]
+                let id2 = node_ids[j]
+                
+                if let (Some(node1), Some(node2)) = (self.nodes.get(&id1), self.nodes.get(&id2)):
+                    # Simple string similarity check (Jaccard on character sets)
+                    let name1 = node1.name.to_lowercase()
+                    let name2 = node2.name.to_lowercase()
+                    
+                    let chars1: Set<char> = name1.chars().collect()
+                    let chars2: Set<char> = name2.chars().collect()
+                    
+                    let intersection = chars1.intersection(&chars2).count()
+                    let union = chars1.union(&chars2).count()
+                    
+                    if union > 0:
+                        let similarity = (intersection as f64) / (union as f64)
+                        if similarity >= similarity_threshold:
+                            to_merge.push((id1, id2))
+        
+        # Merge node pairs
+        for (keep_id, remove_id) in to_merge:
+            if self.nodes.contains_key(&keep_id) and self.nodes.contains_key(&remove_id):
+                # Merge properties
+                if let Some(remove_node) = self.nodes.get(&remove_id):
+                    for (key, value) in &remove_node.properties:
+                        if let Some(keep_node) = self.nodes.get_mut(&keep_id):
+                            if not keep_node.properties.contains_key(key):
+                                keep_node.properties.insert(key.clone(), value.clone())
+                
+                # Update edges pointing to removed node
+                for edge in &mut self.edges:
+                    if edge.from_id == remove_id:
+                        edge.from_id = keep_id
+                    if edge.to_id == remove_id:
+                        edge.to_id = keep_id
+                
+                # Remove duplicate node
+                self.nodes.remove(&remove_id)
+                merged_count += 1
+        
+        merged_count
+    
+    fn prune_by_confidence(&mut self, min_confidence: f64) -> usize:
+        """Remove nodes with confidence below threshold"""
+        let mut pruned_count = 0
+        let mut to_remove = Vec::new()
+        
+        # Find nodes to prune
+        for (id, node) in &self.nodes:
+            if let Some(conf_value) = node.properties.get("confidence"):
+                if let PropertyValue::Float(conf) = conf_value:
+                    if *conf < min_confidence:
+                        to_remove.push(*id)
+        
+        # Remove low-confidence nodes
+        for id in to_remove:
+            self.nodes.remove(&id)
+            pruned_count += 1
+            
+            # Remove edges connected to this node
+            self.edges.retain(|edge| edge.from_id != id and edge.to_id != id)
+        
+        pruned_count
+    
+    fn decay_old_nodes(&mut self, max_age_hours: u64, decay_rate: f64):
+        """Apply confidence decay to nodes older than max_age_hours"""
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+        
+        let max_age_seconds = max_age_hours * 3600
+        
+        for (_, node) in &mut self.nodes:
+            if let Some(created_value) = node.properties.get("created_at"):
+                if let PropertyValue::Int(created_at) = created_value:
+                    let age_seconds = current_time - (*created_at as u64)
+                    
+                    if age_seconds > max_age_seconds:
+                        # Apply decay to confidence
+                        if let Some(conf_value) = node.properties.get_mut("confidence"):
+                            if let PropertyValue::Float(conf) = conf_value:
+                                *conf = *conf * decay_rate
+    
+    # ========================================================================
+    # STATISTICS
+    # ========================================================================
+    
+    fn node_count(&self) -> usize:
+        self.nodes.len()
+    
+    fn edge_count(&self) -> usize:
+        self.edges.len()
+    
+    fn density(&self) -> f64:
+        let n = self.nodes.len() as f64
+        if n <= 1.0:
+            return 0.0
+        self.edges.len() as f64 / (n * (n - 1.0))
+
+# ============================================================================
+# QUERY TYPES
+# ============================================================================
+
+enum GraphPattern:
+    Node { node_type: Option<NodeType>, name_pattern: Option<String> }
+    Triple { subject: Option<usize>, relation: Option<Relation>, object: Option<usize> }
+    Path { start: usize, end: usize, max_length: usize }
+
+enum QueryMatch:
+    Single(node_id: usize)
+    Triple { subject: usize, relation: Relation, object: usize }
+    Path(nodes: Vec<usize>)

@@ -1,0 +1,238 @@
+# HELIOS Hot-Swap Module System
+# Written in Omni - Runtime module replacement
+
+module kernel::hot_swap
+
+import core::logging as log
+import safety::asimov
+import system::fs
+
+# Module metadata
+struct ModuleInfo:
+    name: &str
+    version: &str
+    path: &str
+    public_interface: Vec<FunctionSignature>
+    state_fields: Vec<&str>
+    loaded_at: u64
+    
+    fn compatible_with(&self, other: &ModuleInfo) -> bool:
+        # Check interface compatibility
+        if self.public_interface.len() != other.public_interface.len():
+            return false
+        for (a, b) in self.public_interface.iter().zip(other.public_interface.iter()):
+            if a != b:
+                return false
+        return true
+
+
+struct FunctionSignature:
+    name: &str
+    params: Vec<(&str, &str)>  # (name, type)
+    return_type: &str
+
+
+# Loaded module handle
+struct LoadedModule:
+    info: ModuleInfo
+    handle: *mut void  # Native library handle
+    state: HashMap<&str, Box<dyn Any>>
+    
+    fn call(&self, func_name: &str, args: &[Value]) -> Result<Value, CallError>:
+        log::trace("Calling {}.{}", self.info.name, func_name)
+        let func_ptr = self.get_function(func_name)?
+        return func_ptr.call(args)
+
+
+# Module manager with hot-swap capability
+struct ModuleManager:
+    loaded: HashMap<&str, LoadedModule>
+    versions: HashMap<&str, Vec<&str>>  # module -> version history
+    safety: AsimovProtocol
+    sandbox: SandboxEnvironment
+    
+    fn new(safety: AsimovProtocol) -> own ModuleManager:
+        log::info("Module manager initialized")
+        return ModuleManager {
+            loaded: HashMap::new(),
+            versions: HashMap::new(),
+            safety,
+            sandbox: SandboxEnvironment::new()
+        }
+    
+    fn load(&mut self, path: &str) -> Result<&str, LoadError>:
+        log::info("Loading module from {}", path)
+        
+        # Parse module metadata
+        let info = self.parse_module_info(path)?
+        
+        # Load native library
+        let handle = system::dlopen(path)?
+        
+        let module = LoadedModule {
+            info,
+            handle,
+            state: HashMap::new()
+        }
+        
+        let name = module.info.name
+        self.loaded.insert(name, module)
+        self.versions.entry(name).or_insert(Vec::new()).push(module.info.version)
+        
+        log::info("Loaded module: {} v{}", name, module.info.version)
+        return Ok(name)
+    
+    fn swap(&mut self, module_name: &str, new_path: &str) -> Result<(), SwapError>:
+        log::info("Hot-swap requested: {} -> {}", module_name, new_path)
+        
+        # Step 0: Safety check
+        let action = Action {
+            action_type: ActionType::CodeModify(module_name, "hot-swap"),
+            timestamp: time::now_ms(),
+            source: "ModuleManager"
+        }
+        
+        match self.safety.check(&action):
+            SafetyResult::Blocked(law):
+                return Err(SwapError::SafetyViolation(law))
+            SafetyResult::RequiresAuth:
+                return Err(SwapError::AuthRequired)
+            SafetyResult::Permitted:
+                pass
+        
+        # Step 1: Get current module
+        let current = self.loaded.get(module_name)
+            .ok_or(SwapError::ModuleNotFound)?
+        
+        # Step 2: Parse new module
+        let new_info = self.parse_module_info(new_path)?
+        
+        # Step 3: Check compatibility
+        if !current.info.compatible_with(&new_info):
+            return Err(SwapError::IncompatibleInterface)
+        
+        # Step 4: Sandbox test
+        log::info("Running sandbox tests...")
+        let test_result = self.sandbox.test(new_path)
+        if test_result.failed():
+            log::error("Sandbox tests failed: {}", test_result.errors)
+            return Err(SwapError::TestFailure(test_result.errors))
+        
+        # Step 5: Create backup
+        let backup_path = self.backup(current)?
+        log::info("Backup created: {}", backup_path)
+        
+        # Step 6: Extract state from old module
+        let state = self.extract_state(current, &new_info.state_fields)
+        
+        # Step 7: Unload old module
+        self.unload(module_name)?
+        
+        # Step 8: Load new module
+        let new_handle = system::dlopen(new_path)?
+        let mut new_module = LoadedModule {
+            info: new_info,
+            handle: new_handle,
+            state: HashMap::new()
+        }
+        
+        # Step 9: Inject preserved state
+        for (key, value) in state:
+            new_module.state.insert(key, value)
+        
+        # Step 10: Register new module
+        self.loaded.insert(module_name, new_module)
+        self.versions.get_mut(module_name).unwrap().push(new_module.info.version)
+        
+        log::info("Hot-swap complete: {} now at v{}", module_name, new_module.info.version)
+        return Ok(())
+    
+    fn rollback(&mut self, module_name: &str) -> Result<(), RollbackError>:
+        log::warn("Rolling back module: {}", module_name)
+        
+        let versions = self.versions.get(module_name)
+            .ok_or(RollbackError::NoHistory)?
+        
+        if versions.len() < 2:
+            return Err(RollbackError::NoPreviousVersion)
+        
+        let previous = versions[versions.len() - 2]
+        let backup_path = format!("backups/{}/{}.omni.bak", module_name, previous)
+        
+        self.swap(module_name, &backup_path)?
+        log::info("Rolled back {} to v{}", module_name, previous)
+        return Ok(())
+    
+    fn unload(&mut self, name: &str) -> Result<(), UnloadError>:
+        log::info("Unloading module: {}", name)
+        if let Some(module) = self.loaded.remove(name):
+            system::dlclose(module.handle)
+            return Ok(())
+        return Err(UnloadError::NotLoaded)
+    
+    fn backup(&self, module: &LoadedModule) -> Result<String, BackupError>:
+        let backup_dir = format!("backups/{}", module.info.name)
+        fs::create_dir_all(&backup_dir)?
+        
+        let backup_path = format!("{}/{}.omni.bak", backup_dir, module.info.version)
+        fs::copy(&module.info.path, &backup_path)?
+        
+        return Ok(backup_path)
+    
+    fn extract_state(&self, module: &LoadedModule, fields: &[&str]) -> HashMap<&str, Box<dyn Any>>:
+        let mut state = HashMap::new()
+        for field in fields:
+            if let Some(value) = module.state.get(field):
+                state.insert(field, value.clone())
+        return state
+
+
+# Sandbox for testing modules before deployment
+struct SandboxEnvironment:
+    temp_dir: &str
+    
+    fn new() -> own SandboxEnvironment:
+        let dir = fs::create_temp_dir("helios_sandbox")
+        return SandboxEnvironment { temp_dir: dir }
+    
+    fn test(&self, module_path: &str) -> TestResult:
+        log::info("Sandbox testing: {}", module_path)
+        
+        # Copy module to sandbox
+        let sandbox_path = format!("{}/module.omni", self.temp_dir)
+        fs::copy(module_path, &sandbox_path)
+        
+        # Compile in sandbox
+        let compile_result = system::exec(&format!("omnc {} -o {}/test", sandbox_path, self.temp_dir))
+        if compile_result.exit_code != 0:
+            return TestResult::failed(vec!["Compilation failed"])
+        
+        # Run tests
+        let test_result = system::exec(&format!("{}/test --run-tests", self.temp_dir))
+        if test_result.exit_code != 0:
+            return TestResult::failed(vec!["Tests failed"])
+        
+        return TestResult::passed()
+
+
+struct TestResult:
+    passed: bool
+    errors: Vec<&str>
+    
+    fn passed() -> own TestResult:
+        return TestResult { passed: true, errors: Vec::new() }
+    
+    fn failed(errors: Vec<&str>) -> own TestResult:
+        return TestResult { passed: false, errors }
+    
+    fn failed(&self) -> bool:
+        return !self.passed
+
+
+enum SwapError:
+    ModuleNotFound
+    SafetyViolation(law: &str)
+    AuthRequired
+    IncompatibleInterface
+    TestFailure(errors: Vec<&str>)
+    BackupFailed(reason: &str)

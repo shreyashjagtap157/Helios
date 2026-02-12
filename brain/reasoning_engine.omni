@@ -1,0 +1,447 @@
+# HELIOS Reasoning Engine
+# Cognitive processing engine - NOT a neural network
+# Implements logical reasoning, pattern matching, and knowledge synthesis
+
+module brain::reasoning_engine
+
+import core::logging as log
+import core::collections::{HashMap, Vec, HashSet}
+import core::memory
+import helios::knowledge::{KnowledgeStore, InformationUnit}
+
+# ============================================================================
+# REASONING PRIMITIVES
+# ============================================================================
+
+# Logical proposition
+struct Proposition:
+    id: u64
+    content: String
+    truth_value: TruthValue
+    confidence: f64
+    supporting_evidence: Vec<u64>  # IDs of supporting propositions
+    contradicting_evidence: Vec<u64>
+    
+    fn new(content: String) -> own Proposition:
+        Proposition:
+            id: memory::next_id(),
+            content,
+            truth_value: TruthValue::Unknown,
+            confidence: 0.0,
+            supporting_evidence: Vec::new(),
+            contradicting_evidence: Vec::new()
+    
+    fn evaluate(&mut self, knowledge: &KnowledgeStore):
+        let support_count = self.supporting_evidence.len() as f64
+        let contradict_count = self.contradicting_evidence.len() as f64
+        let total = support_count + contradict_count
+        
+        if total == 0.0:
+            self.truth_value = TruthValue::Unknown
+            self.confidence = 0.0
+        else:
+            self.confidence = support_count / total
+            self.truth_value = if self.confidence > 0.7:
+                TruthValue::True
+            elif self.confidence < 0.3:
+                TruthValue::False
+            else:
+                TruthValue::Uncertain
+
+enum TruthValue:
+    True
+    False
+    Uncertain
+    Unknown
+    Contradictory
+
+
+# Logical rule for inference
+struct InferenceRule:
+    name: String
+    premises: Vec<PatternMatcher>
+    conclusion: PatternTemplate
+    confidence_factor: f64
+    
+    fn apply(&self, facts: &[InformationUnit]) -> Option<Proposition>:
+        # Check if all premises match
+        let mut bindings = HashMap::new()
+        
+        for (i, premise) in self.premises.iter().enumerate():
+            var matched = false
+            for fact in facts:
+                if let Some(new_bindings) = premise.match_fact(fact, &bindings):
+                    bindings.extend(new_bindings)
+                    matched = true
+                    break
+            
+            if !matched:
+                return None
+        
+        # All premises matched, generate conclusion
+        Some(self.conclusion.instantiate(&bindings, self.confidence_factor))
+
+
+# Pattern matching for logical inference
+struct PatternMatcher:
+    pattern: String
+    variables: Vec<String>
+    constraints: Vec<Constraint>
+    
+    fn match_fact(&self, fact: &InformationUnit, existing_bindings: &HashMap<String, String>) 
+        -> Option<HashMap<String, String>>:
+        let mut new_bindings = HashMap::new()
+        
+        # Simple pattern matching
+        let fact_words: Vec<&str> = fact.content.split_whitespace().collect()
+        let pattern_words: Vec<&str> = self.pattern.split_whitespace().collect()
+        
+        if fact_words.len() != pattern_words.len():
+            return None
+        
+        for (fw, pw) in fact_words.iter().zip(pattern_words.iter()):
+            if pw.starts_with("?"):
+                # Variable
+                let var_name = &pw[1..]
+                if let Some(existing) = existing_bindings.get(var_name):
+                    if existing != *fw:
+                        return None  # Binding conflict
+                else:
+                    new_bindings.insert(var_name.to_string(), fw.to_string())
+            else:
+                # Literal must match
+                if *fw != *pw:
+                    return None
+        
+        # Check constraints
+        for constraint in &self.constraints:
+            if !constraint.check(&new_bindings):
+                return None
+        
+        Some(new_bindings)
+
+
+struct PatternTemplate:
+    template: String
+    
+    fn instantiate(&self, bindings: &HashMap<String, String>, confidence: f64) -> Proposition:
+        var result = self.template.clone()
+        
+        for (var, value) in bindings:
+            result = result.replace(&format!("?{}", var), value)
+        
+        Proposition:
+            id: memory::next_id(),
+            content: result,
+            truth_value: TruthValue::Uncertain,
+            confidence,
+            supporting_evidence: Vec::new(),
+            contradicting_evidence: Vec::new()
+    
+    fn matches_goal(&self, goal: &str) -> bool:
+        # Check if template can produce the goal
+        let template_parts: Vec<&str> = self.template.split_whitespace().collect()
+        let goal_parts: Vec<&str> = goal.split_whitespace().collect()
+        
+        if template_parts.len() != goal_parts.len():
+            return false
+        
+        for (tp, gp) in template_parts.iter().zip(goal_parts.iter()):
+            if !tp.starts_with("?") and *tp != *gp:
+                return false
+        
+        true
+
+
+enum Constraint:
+    NotEqual(String, String)
+    TypeOf(String, String)
+    GreaterThan(String, String)
+    LessThan(String, String)
+    Contains(String, String)
+    Custom(fn(&HashMap<String, String>) -> bool)
+    
+    fn check(&self, bindings: &HashMap<String, String>) -> bool:
+        match self:
+            Constraint::NotEqual(a, b):
+                bindings.get(a) != bindings.get(b)
+            Constraint::TypeOf(var, expected_type):
+                true  # Type checking logic
+            Constraint::GreaterThan(a, b):
+                if let (Some(va), Some(vb)) = (bindings.get(a), bindings.get(b)):
+                    va.parse::<f64>().ok() > vb.parse::<f64>().ok()
+                else:
+                    false
+            Constraint::LessThan(a, b):
+                if let (Some(va), Some(vb)) = (bindings.get(a), bindings.get(b)):
+                    va.parse::<f64>().ok() < vb.parse::<f64>().ok()
+                else:
+                    false
+            Constraint::Contains(a, b):
+                if let (Some(va), Some(vb)) = (bindings.get(a), bindings.get(b)):
+                    va.contains(vb)
+                else:
+                    false
+            Constraint::Custom(f):
+                f(bindings)
+
+
+# ============================================================================
+# REASONING ENGINE
+# ============================================================================
+
+struct ReasoningEngine:
+    # Rule base
+    rules: Vec<InferenceRule>
+    
+    # Working memory
+    working_memory: Vec<Proposition>
+    
+    # Inference history
+    inference_chain: Vec<InferenceStep>
+    
+    # Configuration
+    max_inference_depth: u32
+    
+    fn new() -> own ReasoningEngine:
+        log::info("Initializing Reasoning Engine")
+        ReasoningEngine:
+            rules: Self::default_rules(),
+            working_memory: Vec::new(),
+            inference_chain: Vec::new(),
+            max_inference_depth: 10
+    
+    fn default_rules() -> Vec<InferenceRule>:
+        vec![
+            # Transitivity: if A implies B and B implies C, then A implies C
+            InferenceRule:
+                name: "transitivity".to_string(),
+                premises: vec![
+                    PatternMatcher:
+                        pattern: "?X implies ?Y".to_string(),
+                        variables: vec!["X".to_string(), "Y".to_string()],
+                        constraints: vec![],
+                    PatternMatcher:
+                        pattern: "?Y implies ?Z".to_string(),
+                        variables: vec!["Y".to_string(), "Z".to_string()],
+                        constraints: vec![Constraint::NotEqual("X".to_string(), "Z".to_string())],
+                ],
+                conclusion: PatternTemplate:
+                    template: "?X implies ?Z".to_string(),
+                confidence_factor: 0.9,
+            
+            # Modus ponens: if P and P implies Q, then Q
+            InferenceRule:
+                name: "modus_ponens".to_string(),
+                premises: vec![
+                    PatternMatcher:
+                        pattern: "?P".to_string(),
+                        variables: vec!["P".to_string()],
+                        constraints: vec![],
+                    PatternMatcher:
+                        pattern: "?P implies ?Q".to_string(),
+                        variables: vec!["P".to_string(), "Q".to_string()],
+                        constraints: vec![],
+                ],
+                conclusion: PatternTemplate:
+                    template: "?Q".to_string(),
+                confidence_factor: 0.95,
+            
+            # Categorization: if X is a Y and Y is a Z, then X is a Z
+            InferenceRule:
+                name: "categorization".to_string(),
+                premises: vec![
+                    PatternMatcher:
+                        pattern: "?X is a ?Y".to_string(),
+                        variables: vec!["X".to_string(), "Y".to_string()],
+                        constraints: vec![],
+                    PatternMatcher:
+                        pattern: "?Y is a ?Z".to_string(),
+                        variables: vec!["Y".to_string(), "Z".to_string()],
+                        constraints: vec![Constraint::NotEqual("X".to_string(), "Z".to_string())],
+                ],
+                conclusion: PatternTemplate:
+                    template: "?X is a ?Z".to_string(),
+                confidence_factor: 0.85,
+        ]
+    
+    fn add_rule(&mut self, rule: InferenceRule):
+        log::debug("Adding rule: {}", rule.name)
+        self.rules.push(rule)
+    
+    # Forward chaining inference
+    fn forward_chain(&mut self, knowledge: &KnowledgeStore) -> Vec<Proposition>:
+        log::debug("Starting forward chaining inference")
+        
+        let mut new_propositions = Vec::new()
+        let facts: Vec<InformationUnit> = knowledge.all_facts()
+        
+        for depth in 0..self.max_inference_depth:
+            var any_new = false
+            
+            for rule in &self.rules:
+                if let Some(conclusion) = rule.apply(&facts):
+                    if !self.has_proposition(&conclusion.content):
+                        log::trace("Inferred: {} (via {})", conclusion.content, rule.name)
+                        
+                        self.inference_chain.push(InferenceStep:
+                            rule_name: rule.name.clone(),
+                            premises: vec![],
+                            conclusion: conclusion.content.clone(),
+                            depth,
+                        )
+                        
+                        new_propositions.push(conclusion.clone())
+                        self.working_memory.push(conclusion)
+                        any_new = true
+            
+            if !any_new:
+                log::debug("Forward chaining converged at depth {}", depth)
+                break
+        
+        new_propositions
+    
+    # Backward chaining inference (goal-directed)
+    fn backward_chain(&mut self, goal: &str, knowledge: &KnowledgeStore) -> Option<Proposition>:
+        log::debug("Backward chaining for goal: {}", goal)
+        self.backward_chain_recursive(goal, knowledge, 0, &mut HashSet::new())
+    
+    fn backward_chain_recursive(
+        &mut self,
+        goal: &str,
+        knowledge: &KnowledgeStore,
+        depth: u32,
+        visited: &mut HashSet<String>
+    ) -> Option<Proposition>:
+        if depth > self.max_inference_depth:
+            return None
+        
+        if visited.contains(goal):
+            return None  # Avoid cycles
+        visited.insert(goal.to_string())
+        
+        # Check if goal is already known
+        if let Some(fact) = knowledge.find_exact(goal):
+            return Some(Proposition:
+                id: fact.id,
+                content: fact.content.clone(),
+                truth_value: TruthValue::True,
+                confidence: 1.0,
+                supporting_evidence: vec![],
+                contradicting_evidence: vec![],
+            )
+        
+        # Try to prove goal using rules
+        for rule in &self.rules:
+            if rule.conclusion.matches_goal(goal):
+                var all_premises_proven = true
+                var premise_props = Vec::new()
+                
+                for premise in &rule.premises:
+                    if let Some(prop) = self.backward_chain_recursive(
+                        &premise.pattern, knowledge, depth + 1, visited
+                    ):
+                        premise_props.push(prop)
+                    else:
+                        all_premises_proven = false
+                        break
+                
+                if all_premises_proven:
+                    let confidence = premise_props.iter()
+                        .map(|p| p.confidence)
+                        .product::<f64>() * rule.confidence_factor
+                    
+                    return Some(Proposition:
+                        id: memory::next_id(),
+                        content: goal.to_string(),
+                        truth_value: if confidence > 0.7 { TruthValue::True } else { TruthValue::Uncertain },
+                        confidence,
+                        supporting_evidence: premise_props.iter().map(|p| p.id).collect(),
+                        contradicting_evidence: vec![],
+                    )
+        
+        None
+    
+    fn has_proposition(&self, content: &str) -> bool:
+        self.working_memory.iter().any(|p| p.content == content)
+    
+    # Abductive reasoning: find best explanation
+    fn abductive_reason(&self, observation: &str, knowledge: &KnowledgeStore) -> Vec<Explanation>:
+        log::debug("Abductive reasoning for: {}", observation)
+        
+        var explanations = Vec::new()
+        
+        for rule in &self.rules:
+            if rule.conclusion.matches_goal(observation):
+                let premises_satisfied = rule.premises.iter()
+                    .filter(|p| knowledge.find_matching(&p.pattern).is_some())
+                    .count()
+                
+                let total_premises = rule.premises.len()
+                let coverage = premises_satisfied as f64 / total_premises as f64
+                
+                explanations.push(Explanation:
+                    hypothesis: format!("Via rule: {}", rule.name),
+                    confidence: coverage * rule.confidence_factor,
+                    supporting_facts: vec![],
+                )
+        
+        explanations.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap())
+        explanations
+    
+    # Analogical reasoning
+    fn analogical_reason(
+        &self,
+        source_domain: &str,
+        target_domain: &str,
+        knowledge: &KnowledgeStore
+    ) -> Vec<Analogy>:
+        log::debug("Analogical reasoning: {} -> {}", source_domain, target_domain)
+        
+        let source_facts = knowledge.find_by_subject(source_domain)
+        var analogies = Vec::new()
+        
+        for source_fact in source_facts:
+            if let Some(predicate) = &source_fact.predicate:
+                let target_candidates = knowledge.find_by_predicate(predicate)
+                
+                for target_fact in target_candidates:
+                    if target_fact.subject == target_domain:
+                        analogies.push(Analogy:
+                            source: source_fact.content.clone(),
+                            target: target_fact.content.clone(),
+                            mapping_confidence: 0.8,
+                            inferred: format!(
+                                "Just as {} in {}, so {} in {}",
+                                predicate, source_domain, predicate, target_domain
+                            ),
+                        )
+        
+        analogies
+    
+    fn clear_working_memory(&mut self):
+        self.working_memory.clear()
+        self.inference_chain.clear()
+    
+    fn get_inference_chain(&self) -> &[InferenceStep]:
+        &self.inference_chain
+
+
+struct InferenceStep:
+    rule_name: String
+    premises: Vec<String>
+    conclusion: String
+    depth: u32
+
+
+struct Explanation:
+    hypothesis: String
+    confidence: f64
+    supporting_facts: Vec<String>
+
+
+struct Analogy:
+    source: String
+    target: String
+    mapping_confidence: f64
+    inferred: String

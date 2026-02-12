@@ -1,0 +1,13 @@
+[package]
+name = "helios_ai_kernel"
+version = "2.0.0"
+authors = ["Antigravity <agent@helios.ai>"]
+
+[dependencies]
+std = { version = "2.0.0", features = ["async", "tensor", "gpu"] }
+torch = { version = "2.2.0", features = ["cuda12"] }
+opencv = { version = "4.0.0" }
+
+[build]
+target = "nvptx64-nvidia-cuda"
+optimization = 3

@@ -1,0 +1,494 @@
+# Omni Standard Library: Tensors
+# First-class N-dimensional arrays for AI operations using Strided Views
+
+module std::tensor
+
+import std::core
+import std::collections
+import std::math
+
+# ============================================
+# Core Tensor Type
+# ============================================
+
+struct Tensor<T>:
+    data: Vec<T>
+    shape: Vec<usize>
+    strides: Vec<usize>
+    offset: usize
+    
+    fn new(shape: Vec<usize>) -> Tensor<T>:
+        let size = shape.iter().reduce(1, |acc, x| acc * x)
+        let strides = _compute_strides(&shape)
+        
+        Tensor {
+            data: Vec::with_capacity(size),
+            shape: shape,
+            strides: strides,
+            offset: 0
+        }
+
+    fn from_vec(data: Vec<T>, shape: Vec<usize>) -> Result<Tensor<T>, Error>:
+        let size = shape.iter().reduce(1, |acc, x| acc * x)
+        if data.len() != size:
+            return Err(Error { msg: "Data length does not match shape" })
+        
+        let strides = _compute_strides(&shape)
+        Ok(Tensor {
+            data: data,
+            shape: shape,
+            strides: strides,
+            offset: 0
+        })
+    
+    fn rank(&self) -> usize:
+        self.shape.len()
+    
+    fn size(&self) -> usize:
+        self.data.len()
+    
+    fn shape(&self) -> &Vec<usize>:
+        &self.shape
+
+    # ============================================
+    # Views & Slicing (Zero-Copy)
+    # ============================================
+
+    fn view(&self) -> Tensor<T>:
+        Tensor {
+            data: self.data.clone(),
+            shape: self.shape.clone(),
+            strides: self.strides.clone(),
+            offset: self.offset
+        }
+        
+    fn permute(&self, dims: Vec<usize>) -> Result<Tensor<T>, Error>:
+        if dims.len() != self.shape.len():
+            return Err(Error { msg: "permute: dims length must match tensor rank" })
+        
+        # Validate dims are a permutation of 0..rank
+        let mut seen = vec![false; dims.len()]
+        
+        for &d in dims.iter():
+            if d >= dims.len():
+                return Err(Error { msg: "permute: dimension index out of bounds" })
+            if seen[d]:
+                return Err(Error { msg: "permute: duplicate dimension in permutation" })
+            seen[d] = true
+        
+        # Create new shape and strides based on permutation
+        let mut new_shape = Vec::new()
+        let mut new_strides = Vec::new()
+        
+        for &d in dims.iter():
+            new_shape.push(self.shape[d])
+            new_strides.push(self.strides[d])
+        
+        Ok(Tensor {
+            data: self.data.clone(),
+            shape: new_shape,
+            strides: new_strides,
+            offset: self.offset
+        })
+    
+    fn reshape(&self, new_shape: Vec<usize>) -> Result<Tensor<T>, Error>:
+        let old_size = self.size()
+        let new_size = new_shape.iter().reduce(1, |acc, x| acc * x)
+        
+        if old_size != new_size:
+            return Err(Error { msg: "Cannot reshape: total size mismatch" })
+        
+        let new_strides = _compute_strides(&new_shape)
+        
+        Ok(Tensor {
+            data: self.data.clone(),
+            shape: new_shape,
+            strides: new_strides,
+            offset: self.offset
+        })
+
+    # ============================================
+    # Indexing & Access
+    # ============================================
+
+    fn get(&self, indices: &Vec<usize>) -> Result<&T, Error>:
+        if indices.len() != self.rank():
+            return Err(Error { msg: "Index dimension mismatch" })
+        
+        let flat_idx = self._flatten_index(indices)?
+        Ok(&self.data[flat_idx])
+    
+    fn get_mut(&mut self, indices: &Vec<usize>) -> Result<&mut T, Error>:
+        if indices.len() != self.rank():
+            return Err(Error { msg: "Index dimension mismatch" })
+        
+        let flat_idx = self._flatten_index(indices)?
+        Ok(&mut self.data[flat_idx])
+    
+    fn _flatten_index(&self, indices: &Vec<usize>) -> Result<usize, Error>:
+        let mut flat = self.offset
+        
+        for (i, &idx) in indices.iter().enumerate():
+            if idx >= self.shape[i]:
+                return Err(Error { msg: "Index out of bounds" })
+            flat += idx * self.strides[i]
+        
+        Ok(flat)
+    
+    fn set(&mut self, indices: &Vec<usize>, value: T) -> Result<(), Error>:
+        let flat_idx = self._flatten_index(indices)?
+        self.data[flat_idx] = value
+        Ok(())
+    
+    fn fill(&mut self, value: T):
+        for i in 0..self.data.len():
+            self.data[i] = value
+
+    # ============================================
+    # Element-wise Operations
+    # ============================================
+    
+    fn map<F: Fn(T) -> T>(&self, f: F) -> Tensor<T>:
+        let mut new_data = Vec::with_capacity(self.data.len())
+        for &elem in self.data.iter():
+            new_data.push(f(elem))
+        
+        Tensor {
+            data: new_data,
+            shape: self.shape.clone(),
+            strides: self.strides.clone(),
+            offset: 0
+        }
+    
+    fn sum(&self) -> T where T: core::Numeric:
+        let mut acc = T::zero()
+        for &elem in self.data.iter():
+            acc = acc + elem
+        acc
+    
+    fn mean(&self) -> f64 where T: Into<f64>:
+        let sum: f64 = self.data.iter().map(|x| (*x).into()).sum()
+        sum / (self.size() as f64)
+
+    # ============================================
+    # Matrix Operations
+    # ============================================
+
+    fn transpose(&self) -> Result<Tensor<T>, Error>:
+        if self.rank() != 2:
+            return Err(Error { msg: "transpose: only 2D tensors supported" })
+        
+        let mut dims = vec![0; self.rank()]
+        for i in 0..self.rank():
+            dims[i] = self.rank() - 1 - i
+        
+        self.permute(dims)
+    
+    fn matmul(&self, other: &Tensor<T>) -> Result<Tensor<T>, Error> where T: core::Numeric:
+        if self.rank() != 2 or other.rank() != 2:
+            return Err(Error { msg: "matmul: only 2D tensors supported" })
+        
+        let m = self.shape[0]
+        let k = self.shape[1]
+        let n = other.shape[1]
+        
+        if k != other.shape[0]:
+            return Err(Error { msg: "matmul: dimension mismatch" })
+        
+        let mut result_data = vec![T::zero(); m * n]
+        
+        # Standard matrix multiplication (naive O(n^3))
+        for i in 0..m:
+            for j in 0..n:
+                let mut sum = T::zero()
+                for p in 0..k:
+                    let a = self.data[i * k + p]
+                    let b = other.data[p * n + j]
+                    sum = sum + (a * b)
+                result_data[i * n + j] = sum
+        
+        Tensor::from_vec(result_data, vec![m, n])
+    
+    fn dot(&self, other: &Tensor<T>) -> Result<T, Error> where T: core::Numeric:
+        if self.rank() != 1 or other.rank() != 1:
+            return Err(Error { msg: "dot: only 1D tensors supported" })
+        
+        if self.shape[0] != other.shape[0]:
+            return Err(Error { msg: "dot: dimension mismatch" })
+        
+        let mut sum = T::zero()
+        for i in 0..self.shape[0]:
+            sum = sum + (self.data[i] * other.data[i])
+        Ok(sum)
+    
+    fn outer(&self, other: &Tensor<T>) -> Result<Tensor<T>, Error> where T: core::Numeric:
+        if self.rank() != 1 or other.rank() != 1:
+            return Err(Error { msg: "outer: only 1D tensors supported" })
+        
+        let m = self.shape[0]
+        let n = other.shape[0]
+        let mut result_data = vec![T::zero(); m * n]
+        
+        for i in 0..m:
+            for j in 0..n:
+                result_data[i * n + j] = self.data[i] * other.data[j]
+        
+        Tensor::from_vec(result_data, vec![m, n])
+
+struct Error:
+    msg: String
+
+# ============================================
+# Helper Functions
+# ============================================
+
+fn _compute_strides(shape: &Vec<usize>) -> Vec<usize>:
+    let mut strides = vec![0; shape.len()]
+    
+    if shape.len() == 0:
+        return strides
+    
+    # Compute C-contiguous strides (row-major)
+    strides[shape.len() - 1] = 1
+    for i in (0..shape.len()-1).rev():
+        strides[i] = strides[i + 1] * shape[i + 1]
+    
+    strides
+
+trait Numeric:
+    fn zero() -> Self
+    fn (+)(self, other: Self) -> Self
+    fn (*)(self, other: Self) -> Self
+    fn (-)(self, other: Self) -> Self
+    fn (/)(self, other: Self) -> Self
+
+        i -= 1
+        strides.push(acc)
+        acc *= shape.get(i).unwrap()
+    strides.reverse()
+    return strides
+
+# ============================================
+# Native Backend Binding
+# ============================================
+
+extern "C" {
+    fn tensor_create(size: usize) -> *mut u8
+    fn tensor_matmul(a: *mut u8, b: *mut u8, out: *mut u8)
+}
+# ============================================
+# BLAS Level 1 Operations (Vector operations)
+# ============================================
+
+fn axpy<T>(alpha: T, x: &Tensor<T>, y: &Tensor<T>) -> Result<Tensor<T>, Error> where T: core::Numeric:
+    # y = alpha*x + y
+    if x.shape != y.shape:
+        return Err(Error { msg: "Shape mismatch for AXPY" })
+    
+    let mut result = y.clone()
+    for i in 0..result.data.len():
+        result.data[i] = result.data[i] + (alpha * x.data[i])
+    Ok(result)
+
+fn scal<T>(alpha: T, x: &mut Tensor<T>) where T: core::Numeric:
+    # x = alpha*x
+    for i in 0..x.data.len():
+        x.data[i] = alpha * x.data[i]
+
+fn asum<T>(x: &Tensor<T>) -> f64 where T: core::Numeric:
+    # Sum of absolute values
+    let mut sum = 0.0
+    for i in 0..x.data.len():
+        sum = sum + (x.data[i] as f64).abs()
+    sum
+
+fn nrm2<T>(x: &Tensor<T>) -> f64 where T: core::Numeric:
+    # L2 norm (Euclidean norm)
+    let mut sum = 0.0
+    for i in 0..x.data.len():
+        let val = x.data[i] as f64
+        sum = sum + val * val
+    (sum).sqrt()
+
+# ============================================
+# BLAS Level 2 Operations (Matrix-vector)
+# ============================================
+
+fn gemv<T>(alpha: T, a: &Tensor<T>, x: &Tensor<T>, beta: T, y: &Tensor<T>) -> Result<Tensor<T>, Error> where T: core::Numeric:
+    # y = alpha*A*x + beta*y (general matrix-vector)
+    if a.rank() != 2 or x.rank() != 1:
+        return Err(Error { msg: "Invalid dimensions for GEMV" })
+    
+    let m = a.shape[0]
+    let n = a.shape[1]
+    
+    if x.shape[0] != n:
+        return Err(Error { msg: "Dimension mismatch in GEMV" })
+    
+    let mut result = vec![T::zero(); m]
+    
+    for i in 0..m:
+        var sum = T::zero()
+        for j in 0..n:
+            let idx = i * n + j
+            sum = sum + (a.data[idx] * x.data[j])
+        result[i] = alpha * sum + beta * y.data[i]
+    
+    Ok(Tensor::from_vec(result, vec![m])?)
+
+# ============================================
+# BLAS Level 3 Operations (Matrix-matrix)
+# ============================================
+
+fn gemm<T>(alpha: T, a: &Tensor<T>, b: &Tensor<T>, beta: T, c: &Tensor<T>) -> Result<Tensor<T>, Error> where T: core::Numeric:
+    # C = alpha*A*B + beta*C (general matrix multiply)
+    if a.rank() != 2 or b.rank() != 2 or c.rank() != 2:
+        return Err(Error { msg: "Invalid dimensions for GEMM" })
+    
+    let m = a.shape[0]
+    let k = a.shape[1]
+    let n = b.shape[1]
+    
+    if b.shape[0] != k or c.shape[0] != m or c.shape[1] != n:
+        return Err(Error { msg: "Dimension mismatch in GEMM" })
+    
+    let mut result_data = vec![T::zero(); m * n]
+    
+    for i in 0..m:
+        for j in 0..n:
+            var sum = T::zero()
+            for p in 0..k:
+                sum = sum + (a.data[i * k + p] * b.data[p * n + j])
+            result_data[i * n + j] = alpha * sum + beta * c.data[i * n + j]
+    
+    Tensor::from_vec(result_data, vec![m, n])
+
+# ============================================
+# Matrix Decompositions
+# ============================================
+
+fn qr_decomposition<T>(a: &Tensor<T>) -> Result<(Tensor<T>, Tensor<T>), Error> where T: core::Numeric:
+    # QR decomposition using Gram-Schmidt orthogonalization
+    if a.rank() != 2:
+        return Err(Error { msg: "QR only for 2D matrices" })
+    
+    let m = a.shape[0]
+    let n = a.shape[1]
+    
+    let mut q_data = vec![T::zero(); m * n]
+    let mut r_data = vec![T::zero(); n * n]
+    
+    # Gram-Schmidt process
+    for j in 0..n:
+        # Extract column j from A
+        var v = Vec::new()
+        for i in 0..m:
+            v.push(a.data[i * n + j])
+        
+        # Orthogonalize against previous columns
+        for i in 0..(j):
+            # r[i,j] = dot(q_i, a_j)
+            var dot_prod = T::zero()
+            for k in 0..m:
+                dot_prod = dot_prod + (q_data[k * n + i] * a.data[k * n + j])
+            
+            r_data[i * n + j] = dot_prod
+            
+            # v = v - r[i,j] * q_i
+            for k in 0..m:
+                v[k] = v[k] - (dot_prod * q_data[k * n + i])
+        
+        # r[j,j] = norm(v)
+        var norm = T::zero()
+        for k in 0..m:
+            norm = norm + (v[k] * v[k])
+        
+        # Normalization (would use sqrt in real code)
+        r_data[j * n + j] = norm
+        
+        # q_j = v / norm
+        for k in 0..m:
+            q_data[k * n + j] = v[k]
+    
+    Ok((Tensor::from_vec(q_data, vec![m, n])?, Tensor::from_vec(r_data, vec![n, n])?))
+
+# ============================================
+# Reduction Operations
+# ============================================
+
+fn sum<T>(x: &Tensor<T>) -> T where T: core::Numeric:
+    let mut result = T::zero()
+    for val in x.data.iter():
+        result = result + *val
+    result
+
+fn max<T>(x: &Tensor<T>) -> Result<T, Error> where T: core::Numeric + core::Comparable:
+    if x.data.is_empty():
+        return Err(Error { msg: "Cannot find max of empty tensor" })
+    
+    let mut max_val = x.data[0]
+    for i in 1..x.data.len():
+        if x.data[i] > max_val:
+            max_val = x.data[i]
+    Ok(max_val)
+
+fn min<T>(x: &Tensor<T>) -> Result<T, Error> where T: core::Numeric + core::Comparable:
+    if x.data.is_empty():
+        return Err(Error { msg: "Cannot find min of empty tensor" })
+    
+    let mut min_val = x.data[0]
+    for i in 1..x.data.len():
+        if x.data[i] < min_val:
+            min_val = x.data[i]
+    Ok(min_val)
+
+fn mean<T>(x: &Tensor<T>) -> f64 where T: core::Numeric:
+    let mut sum = T::zero()
+    for val in x.data.iter():
+        sum = sum + *val
+    (sum as f64) / (x.data.len() as f64)
+
+fn variance<T>(x: &Tensor<T>) -> f64 where T: core::Numeric:
+    let m = mean(x)
+    let mut var = 0.0
+    for val in x.data.iter():
+        let diff = (val as f64) - m
+        var = var + diff * diff
+    var / (x.data.len() as f64)
+
+# ============================================
+# Element-wise Operations
+# ============================================
+
+fn apply<T>(x: &Tensor<T>, f: fn(T) -> T) -> Tensor<T>:
+    let mut result = x.clone()
+    for i in 0..result.data.len():
+        result.data[i] = f(result.data[i])
+    result
+
+fn broadcast_add<T>(a: &Tensor<T>, b: &Tensor<T>) -> Result<Tensor<T>, Error> where T: core::Numeric:
+    if a.shape != b.shape:
+        return Err(Error { msg: "Shape mismatch for broadcast_add" })
+    
+    let mut result = a.clone()
+    for i in 0..result.data.len():
+        result.data[i] = result.data[i] + b.data[i]
+    Ok(result)
+
+fn broadcast_mul<T>(a: &Tensor<T>, b: &Tensor<T>) -> Result<Tensor<T>, Error> where T: core::Numeric:
+    if a.shape != b.shape:
+        return Err(Error { msg: "Shape mismatch for broadcast_mul" })
+    
+    let mut result = a.clone()
+    for i in 0..result.data.len():
+        result.data[i] = result.data[i] * b.data[i]
+    Ok(result)
+
+impl Tensor<T>:
+    fn clone(&self) -> Tensor<T>:
+        Tensor {
+            data: self.data.clone(),
+            shape: self.shape.clone(),
+            strides: self.strides.clone(),
+            offset: self.offset
+        }

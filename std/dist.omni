@@ -1,0 +1,958 @@
+module std::dist:
+
+# ===========================================================
+# FFI Bindings for distributed communication
+# ===========================================================
+
+extern "NCCL" {
+    fn ncclAllReduce(sendbuf: *u8, recvbuf: *u8, count: usize, datatype: i32, op: i32, comm: *u8, stream: *u8) -> i32;
+    fn ncclBroadcast(sendbuf: *u8, recvbuf: *u8, count: usize, datatype: i32, root: i32, comm: *u8, stream: *u8) -> i32;
+    fn ncclAllGather(sendbuf: *u8, recvbuf: *u8, count: usize, datatype: i32, comm: *u8, stream: *u8) -> i32;
+    fn ncclReduceScatter(sendbuf: *u8, recvbuf: *u8, count: usize, datatype: i32, op: i32, comm: *u8, stream: *u8) -> i32;
+    fn ncclSend(sendbuf: *u8, count: usize, datatype: i32, peer: i32, comm: *u8, stream: *u8) -> i32;
+    fn ncclRecv(recvbuf: *u8, count: usize, datatype: i32, peer: i32, comm: *u8, stream: *u8) -> i32;
+    fn ncclCommInitRank(comm: *mut *u8, nranks: i32, id: *u8, rank: i32) -> i32;
+    fn ncclCommDestroy(comm: *u8) -> i32;
+    fn ncclGetUniqueId(id: *u8) -> i32;
+}
+
+extern "MPI" {
+    fn MPI_Init(argc: *i32, argv: **i8) -> i32;
+    fn MPI_Finalize() -> i32;
+    fn MPI_Comm_rank(comm: i32, rank: *i32) -> i32;
+    fn MPI_Comm_size(comm: i32, size: *i32) -> i32;
+    fn MPI_Send(buf: *u8, count: i32, datatype: i32, dest: i32, tag: i32, comm: i32) -> i32;
+    fn MPI_Recv(buf: *u8, count: i32, datatype: i32, source: i32, tag: i32, comm: i32, status: *u8) -> i32;
+    fn MPI_Barrier(comm: i32) -> i32;
+    fn MPI_Allreduce(sendbuf: *u8, recvbuf: *u8, count: i32, datatype: i32, op: i32, comm: i32) -> i32;
+}
+
+# ===========================================================
+# Distributed Computing Primitives
+# ===========================================================
+
+enum ReduceOp:
+    Sum
+    Product
+    Min
+    Max
+    Average
+
+enum DistError:
+    InitializationFailed
+    CommunicationError
+    InvalidRank
+    InvalidSize
+    AllocationFailed
+    Timeout
+
+# Sharding specification
+enum ShardingSpec:
+    Replicated     # Data is copied on all ranks
+    Sharded(dim: usize)   # Data is split along dimension `dim`
+    PartialSharded(dims: Vec<usize>, factors: Vec<usize>)  # Partial sharding
+
+# ===========================================================
+# Distributed World Context
+# ===========================================================
+
+struct DistWorld:
+    rank: i32
+    world_size: i32
+    backend: DistBackend
+    comm: *u8
+    initialized: bool
+
+enum DistBackend:
+    NCCL
+    MPI
+    Gloo
+    TCP
+
+impl DistWorld:
+    fn init(backend: DistBackend, rank: i32, world_size: i32) -> Result<DistWorld, DistError>:
+        match backend:
+            DistBackend::NCCL =>
+                let mut id: [u8; 128] = [0; 128]
+                let mut comm: *u8 = null
+                
+                if rank == 0:
+                    let ret = ncclGetUniqueId(&mut id as *u8)
+                    if ret != 0:
+                        return Err(DistError::InitializationFailed)
+                
+                # Broadcast ID to all ranks (would use MPI or TCP in real impl)
+                # ...
+                
+                let ret = ncclCommInitRank(&mut comm, world_size, &id as *u8, rank)
+                if ret != 0:
+                    return Err(DistError::InitializationFailed)
+                
+                Ok(DistWorld {
+                    rank: rank,
+                    world_size: world_size,
+                    backend: backend,
+                    comm: comm,
+                    initialized: true,
+                })
+            
+            DistBackend::MPI =>
+                let mut argc: i32 = 0
+                let argv: **i8 = null
+                
+                let ret = MPI_Init(&mut argc, argv)
+                if ret != 0:
+                    return Err(DistError::InitializationFailed)
+                
+                let mut actual_rank: i32 = 0
+                let mut actual_size: i32 = 0
+                MPI_Comm_rank(0, &mut actual_rank)
+                MPI_Comm_size(0, &mut actual_size)
+                
+                Ok(DistWorld {
+                    rank: actual_rank,
+                    world_size: actual_size,
+                    backend: backend,
+                    comm: null,
+                    initialized: true,
+                })
+            
+            _ =>
+                # TCP/Gloo backend using pure Omni
+                Ok(DistWorld {
+                    rank: rank,
+                    world_size: world_size,
+                    backend: backend,
+                    comm: null,
+                    initialized: true,
+                })
+    
+    fn finalize(mut self) -> Result<(), DistError>:
+        if not self.initialized:
+            return Ok(())
+        
+        match self.backend:
+            DistBackend::NCCL =>
+                if self.comm != null:
+                    ncclCommDestroy(self.comm)
+            DistBackend::MPI =>
+                MPI_Finalize()
+            _ =>
+                pass
+        
+        self.initialized = false
+        Ok(())
+    
+    fn barrier(&self) -> Result<(), DistError>:
+        match self.backend:
+            DistBackend::MPI =>
+                let ret = MPI_Barrier(0)
+                if ret != 0:
+                    return Err(DistError::CommunicationError)
+            DistBackend::NCCL =>
+                # NCCL doesn't have a direct barrier, use allreduce with dummy value
+                let mut dummy: [f32; 1] = [1.0]
+                ncclAllReduce(
+                    dummy.as_ptr() as *u8,
+                    dummy.as_mut_ptr() as *u8,
+                    1,
+                    0,  # ncclFloat
+                    0,  # ncclSum
+                    self.comm,
+                    null
+                )
+            DistBackend::TCP =>
+                # Software barrier using TCP
+                # Each rank sends to rank 0, rank 0 broadcasts back
+                if self.rank == 0:
+                    # Receive from all other ranks
+                    for i in 1..self.world_size:
+                        let mut buf: [u8; 1] = [0]
+                        tcp_recv(&mut buf, i)
+                    # Send ack to all
+                    for i in 1..self.world_size:
+                        let buf: [u8; 1] = [1]
+                        tcp_send(&buf, i)
+                else:
+                    # Send to rank 0 and wait for ack
+                    let buf: [u8; 1] = [1]
+                    tcp_send(&buf, 0)
+                    let mut ack: [u8; 1] = [0]
+                    tcp_recv(&mut ack, 0)
+        Ok(())
+    
+    fn is_main(&self) -> bool:
+        self.rank == 0
+
+# Global world instance
+static mut WORLD: Option<DistWorld> = None
+
+fn init_distributed(backend: DistBackend, rank: i32, world_size: i32) -> Result<(), DistError>:
+    unsafe:
+        WORLD = Some(DistWorld::init(backend, rank, world_size)?)
+    Ok(())
+
+fn get_rank() -> i32:
+    unsafe:
+        WORLD.as_ref().map(|w| w.rank).unwrap_or(0)
+
+fn get_world_size() -> i32:
+    unsafe:
+        WORLD.as_ref().map(|w| w.world_size).unwrap_or(1)
+
+fn is_distributed() -> bool:
+    unsafe:
+        WORLD.is_some()
+
+# ===========================================================
+# Distributed Tensor
+# ===========================================================
+
+struct DistTensor<T>:
+    local_data: Tensor<T>
+    sharding: ShardingSpec
+    world: &DistWorld
+
+impl DistTensor<T>:
+    fn new(local_data: Tensor<T>, sharding: ShardingSpec, world: &DistWorld) -> DistTensor<T>:
+        DistTensor {
+            local_data: local_data,
+            sharding: sharding,
+            world: world,
+        }
+    
+    fn from_global(global: Tensor<T>, sharding: ShardingSpec, world: &DistWorld) -> DistTensor<T>:
+        # Split global tensor according to sharding spec
+        let local = match &sharding:
+            ShardingSpec::Replicated =>
+                global.clone()
+            ShardingSpec::Sharded(dim) =>
+                let chunk_size = global.shape()[*dim] / world.world_size as usize
+                let start = world.rank as usize * chunk_size
+                let end = start + chunk_size
+                global.slice(*dim, start, end)
+            ShardingSpec::PartialSharded(dims, factors) =>
+                # More complex sharding logic
+                global.clone()  # Simplified
+        
+        DistTensor::new(local, sharding, world)
+    
+    async fn all_reduce(self, op: ReduceOp) -> Result<DistTensor<T>, DistError>:
+        if self.world.world_size == 1:
+            return Ok(self)
+        
+        let size = self.local_data.numel() * size_of::<T>()
+        let mut result = self.local_data.clone()
+        
+        match self.world.backend:
+            DistBackend::NCCL =>
+                let nccl_op = match op:
+                    ReduceOp::Sum => 0
+                    ReduceOp::Product => 1
+                    ReduceOp::Min => 2
+                    ReduceOp::Max => 3
+                    ReduceOp::Average => 0  # Sum then divide
+                
+                let ret = ncclAllReduce(
+                    self.local_data.data_ptr() as *u8,
+                    result.data_ptr_mut() as *u8,
+                    self.local_data.numel(),
+                    0,  # dtype
+                    nccl_op,
+                    self.world.comm,
+                    null
+                )
+                
+                if ret != 0:
+                    return Err(DistError::CommunicationError)
+                
+                # For average, divide by world size
+                if let ReduceOp::Average = op:
+                    result = result.div_scalar(self.world.world_size as f64)
+            
+            DistBackend::MPI =>
+                let mpi_op = match op:
+                    ReduceOp::Sum => 0
+                    ReduceOp::Product => 1
+                    ReduceOp::Min => 2
+                    ReduceOp::Max => 3
+                    ReduceOp::Average => 0
+                
+                let ret = MPI_Allreduce(
+                    self.local_data.data_ptr() as *u8,
+                    result.data_ptr_mut() as *u8,
+                    self.local_data.numel() as i32,
+                    0,  # dtype
+                    mpi_op,
+                    0   # MPI_COMM_WORLD
+                )
+                
+                if ret != 0:
+                    return Err(DistError::CommunicationError)
+                
+                if let ReduceOp::Average = op:
+                    result = result.div_scalar(self.world.world_size as f64)
+            
+            _ =>
+                # Pure software implementation using ring all-reduce
+                result = ring_all_reduce(&self.local_data, op, self.world)?
+        
+        Ok(DistTensor::new(result, self.sharding.clone(), self.world))
+    
+    async fn broadcast(self, root: i32) -> Result<DistTensor<T>, DistError>:
+        if self.world.world_size == 1:
+            return Ok(self)
+        
+        let mut result = self.local_data.clone()
+        
+        match self.world.backend:
+            DistBackend::NCCL =>
+                let ret = ncclBroadcast(
+                    self.local_data.data_ptr() as *u8,
+                    result.data_ptr_mut() as *u8,
+                    self.local_data.numel(),
+                    0,  # dtype
+                    root,
+                    self.world.comm,
+                    null
+                )
+                
+                if ret != 0:
+                    return Err(DistError::CommunicationError)
+            
+            _ =>
+                # Software broadcast (binary tree)
+                result = tree_broadcast(&self.local_data, root, self.world)?
+        
+        Ok(DistTensor::new(result, ShardingSpec::Replicated, self.world))
+    
+    async fn all_gather(self) -> Result<DistTensor<T>, DistError>:
+        if self.world.world_size == 1:
+            return Ok(self)
+        
+        let local_size = self.local_data.numel()
+        let total_size = local_size * self.world.world_size as usize
+        let mut result = Tensor::zeros(&[total_size])
+        
+        match self.world.backend:
+            DistBackend::NCCL =>
+                let ret = ncclAllGather(
+                    self.local_data.data_ptr() as *u8,
+                    result.data_ptr_mut() as *u8,
+                    local_size,
+                    0,  # dtype
+                    self.world.comm,
+                    null
+                )
+                
+                if ret != 0:
+                    return Err(DistError::CommunicationError)
+            
+            _ =>
+                # Ring all-gather
+                result = ring_all_gather(&self.local_data, self.world)?
+        
+        Ok(DistTensor::new(result, ShardingSpec::Replicated, self.world))
+    
+    async fn reduce_scatter(self, op: ReduceOp) -> Result<DistTensor<T>, DistError>:
+        if self.world.world_size == 1:
+            return Ok(self)
+        
+        let chunk_size = self.local_data.numel() / self.world.world_size as usize
+        let mut result = Tensor::zeros(&[chunk_size])
+        
+        match self.world.backend:
+            DistBackend::NCCL =>
+                let nccl_op = match op:
+                    ReduceOp::Sum => 0
+                    ReduceOp::Product => 1
+                    _ => 0
+                
+                let ret = ncclReduceScatter(
+                    self.local_data.data_ptr() as *u8,
+                    result.data_ptr_mut() as *u8,
+                    chunk_size,
+                    0,  # dtype
+                    nccl_op,
+                    self.world.comm,
+                    null
+                )
+                
+                if ret != 0:
+                    return Err(DistError::CommunicationError)
+            
+            _ =>
+                result = ring_reduce_scatter(&self.local_data, op, self.world)?
+        
+        Ok(DistTensor::new(result, ShardingSpec::Sharded(0), self.world))
+    
+    fn gather_to_global(self) -> Result<Tensor<T>, DistError>:
+        match &self.sharding:
+            ShardingSpec::Replicated =>
+                Ok(self.local_data.clone())
+            ShardingSpec::Sharded(dim) =>
+                # Gather all shards
+                let gathered = self.all_gather().await?
+                Ok(gathered.local_data)
+            _ =>
+                Err(DistError::CommunicationError)
+
+# ===========================================================
+# Ring Communication Algorithms (Software Implementation)
+# ===========================================================
+
+fn ring_all_reduce<T>(data: &Tensor<T>, op: ReduceOp, world: &DistWorld) -> Result<Tensor<T>, DistError>:
+    let n = world.world_size as usize
+    let chunk_size = data.numel() / n
+    let mut result = data.clone()
+    
+    # Reduce-scatter phase
+    for step in 0..n - 1:
+        let send_chunk = (world.rank as usize + n - step) % n
+        let recv_chunk = (world.rank as usize + n - step - 1) % n
+        
+        let send_to = (world.rank + 1) % world.world_size
+        let recv_from = (world.rank + world.world_size - 1) % world.world_size
+        
+        # Send and receive (simplified - would use async in real impl)
+        let send_data = result.slice(0, send_chunk * chunk_size, (send_chunk + 1) * chunk_size)
+        let recv_data = Tensor::zeros(&[chunk_size])
+        
+        # Exchange data with neighbors
+        point_to_point_exchange(&send_data, &mut recv_data, send_to, recv_from, world)?
+        
+        # Apply reduction to received chunk
+        let recv_start = recv_chunk * chunk_size
+        for i in 0..chunk_size:
+            let idx = recv_start + i
+            result[idx] = apply_reduce_op(result[idx], recv_data[i], &op)
+    
+    # All-gather phase
+    for step in 0..n - 1:
+        let send_chunk = (world.rank as usize + n - step + 1) % n
+        let recv_chunk = (world.rank as usize + n - step) % n
+        
+        let send_to = (world.rank + 1) % world.world_size
+        let recv_from = (world.rank + world.world_size - 1) % world.world_size
+        
+        let send_data = result.slice(0, send_chunk * chunk_size, (send_chunk + 1) * chunk_size)
+        let recv_start = recv_chunk * chunk_size
+        
+        point_to_point_exchange(&send_data, &mut result.slice_mut(0, recv_start, recv_start + chunk_size), send_to, recv_from, world)?
+    
+    Ok(result)
+
+fn ring_all_gather<T>(data: &Tensor<T>, world: &DistWorld) -> Result<Tensor<T>, DistError>:
+    let n = world.world_size as usize
+    let chunk_size = data.numel()
+    let mut result = Tensor::zeros(&[chunk_size * n])
+    
+    # Copy local data to result
+    let my_offset = world.rank as usize * chunk_size
+    for i in 0..chunk_size:
+        result[my_offset + i] = data[i]
+    
+    # Ring all-gather
+    for step in 0..n - 1:
+        let send_chunk = (world.rank as usize + n - step) % n
+        let recv_chunk = (world.rank as usize + n - step - 1) % n
+        
+        let send_to = (world.rank + 1) % world.world_size
+        let recv_from = (world.rank + world.world_size - 1) % world.world_size
+        
+        let send_offset = send_chunk * chunk_size
+        let recv_offset = recv_chunk * chunk_size
+        
+        let send_data = result.slice(0, send_offset, send_offset + chunk_size)
+        point_to_point_exchange(&send_data, &mut result.slice_mut(0, recv_offset, recv_offset + chunk_size), send_to, recv_from, world)?
+    
+    Ok(result)
+
+fn ring_reduce_scatter<T>(data: &Tensor<T>, op: ReduceOp, world: &DistWorld) -> Result<Tensor<T>, DistError>:
+    let n = world.world_size as usize
+    let total_size = data.numel()
+    let chunk_size = total_size / n
+    let mut temp = data.clone()
+    
+    for step in 0..n - 1:
+        let send_chunk = (world.rank as usize + n - step) % n
+        let recv_chunk = (world.rank as usize + n - step - 1) % n
+        
+        let send_to = (world.rank + 1) % world.world_size
+        let recv_from = (world.rank + world.world_size - 1) % world.world_size
+        
+        let send_offset = send_chunk * chunk_size
+        let recv_offset = recv_chunk * chunk_size
+        
+        let send_data = temp.slice(0, send_offset, send_offset + chunk_size)
+        let mut recv_data = Tensor::zeros(&[chunk_size])
+        
+        point_to_point_exchange(&send_data, &mut recv_data, send_to, recv_from, world)?
+        
+        # Reduce into receive chunk
+        for i in 0..chunk_size:
+            let idx = recv_offset + i
+            temp[idx] = apply_reduce_op(temp[idx], recv_data[i], &op)
+    
+    # Extract my chunk
+    let my_offset = world.rank as usize * chunk_size
+    Ok(temp.slice(0, my_offset, my_offset + chunk_size))
+
+fn tree_broadcast<T>(data: &Tensor<T>, root: i32, world: &DistWorld) -> Result<Tensor<T>, DistError>:
+    let mut result = if world.rank == root:
+        data.clone()
+    else:
+        Tensor::zeros(data.shape())
+    
+    # Binary tree broadcast
+    let mut mask = 1
+    while mask < world.world_size:
+        if (world.rank & (mask - 1)) == 0:
+            if (world.rank & mask) != 0:
+                # Receive from parent
+                let source = world.rank - mask
+                receive_tensor(&mut result, source, world)?
+            else if (world.rank | mask) < world.world_size:
+                # Send to child
+                let dest = world.rank | mask
+                send_tensor(&result, dest, world)?
+        mask <<= 1
+    
+    Ok(result)
+
+fn point_to_point_exchange<T>(send: &Tensor<T>, recv: &mut Tensor<T>, send_to: i32, recv_from: i32, world: &DistWorld) -> Result<(), DistError>:
+    # This would use actual network communication
+    # For now, simulate with shared memory or MPI
+    match world.backend:
+        DistBackend::MPI =>
+            MPI_Send(send.data_ptr() as *u8, send.numel() as i32, 0, send_to, 0, 0)
+            MPI_Recv(recv.data_ptr_mut() as *u8, recv.numel() as i32, 0, recv_from, 0, 0, null)
+        DistBackend::TCP =>
+            # Send-then-receive using TCP sockets
+            let send_bytes = tensor_to_bytes(send)
+            tcp_send(&send_bytes, send_to)
+            let recv_bytes = tcp_recv_vec(recv.numel() * std::mem::size_of::<T>(), recv_from)
+            bytes_to_tensor(&recv_bytes, recv)
+        _ =>
+            # Fallback: use shared memory if on same node
+            return Err(DistError::UnsupportedBackend)
+    Ok(())
+
+fn send_tensor<T>(data: &Tensor<T>, dest: i32, world: &DistWorld) -> Result<(), DistError>:
+    match world.backend:
+        DistBackend::NCCL =>
+            ncclSend(data.data_ptr() as *u8, data.numel(), 0, dest, world.comm, null)
+        DistBackend::MPI =>
+            MPI_Send(data.data_ptr() as *u8, data.numel() as i32, 0, dest, 0, 0)
+        DistBackend::TCP =>
+            let bytes = tensor_to_bytes(data)
+            tcp_send(&bytes, dest)
+        _ =>
+            return Err(DistError::UnsupportedBackend)
+    Ok(())
+
+fn receive_tensor<T>(data: &mut Tensor<T>, source: i32, world: &DistWorld) -> Result<(), DistError>:
+    match world.backend:
+        DistBackend::NCCL =>
+            ncclRecv(data.data_ptr_mut() as *u8, data.numel(), 0, source, world.comm, null)
+        DistBackend::MPI =>
+            MPI_Recv(data.data_ptr_mut() as *u8, data.numel() as i32, 0, source, 0, 0, null)
+        DistBackend::TCP =>
+            let bytes = tcp_recv_vec(data.numel() * std::mem::size_of::<T>(), source)
+            bytes_to_tensor(&bytes, data)
+        _ =>
+            return Err(DistError::UnsupportedBackend)
+    Ok(())
+
+fn apply_reduce_op<T: Numeric>(a: T, b: T, op: &ReduceOp) -> T:
+    match op:
+        ReduceOp::Sum => a + b
+        ReduceOp::Product => a * b
+        ReduceOp::Min => if a < b { a } else { b }
+        ReduceOp::Max => if a > b { a } else { b }
+        ReduceOp::Average => a + b  # Division handled separately
+
+# ===========================================================
+# Distributed Knowledge Graph Synchronization
+# ===========================================================
+
+struct DistributedKnowledgeSync:
+    world: &DistWorld
+    sync_interval: usize
+    pending_updates: Vec<KnowledgeUpdate>
+
+struct KnowledgeUpdate:
+    node_id: usize
+    operation: SyncOp
+    data: Vec<u8>
+
+enum SyncOp:
+    AddNode
+    UpdateNode
+    RemoveNode
+    AddEdge
+    UpdateEdge
+    RemoveEdge
+
+impl DistributedKnowledgeSync:
+    fn new(world: &DistWorld) -> DistributedKnowledgeSync:
+        DistributedKnowledgeSync {
+            world: world,
+            sync_interval: 100,
+            pending_updates: Vec::new(),
+        }
+    
+    fn queue_update(&mut self, update: KnowledgeUpdate):
+        self.pending_updates.push(update)
+    
+    async fn sync_knowledge(&mut self) -> Result<(), DistError>:
+        # All-gather knowledge updates across all ranks
+        for update in &self.pending_updates:
+            let data = DistTensor::new(
+                Tensor::from_bytes(&update.data),
+                ShardingSpec::Replicated,
+                self.world
+            )
+            let gathered = data.all_gather().await?
+            # Apply gathered updates to local knowledge graph
+        self.pending_updates.clear()
+        Ok(())
+
+# ===========================================================
+# Distributed Knowledge Partitioning
+# ===========================================================
+
+struct PartitionedKnowledgeGraph:
+    partitions: Vec<KnowledgePartition>
+    world: &DistWorld
+    partition_strategy: PartitionStrategy
+
+struct KnowledgePartition:
+    rank: i32
+    node_range: (usize, usize)
+    local_nodes: usize
+
+enum PartitionStrategy:
+    HashBased
+    GraphCut
+    RoundRobin
+
+impl PartitionedKnowledgeGraph:
+    fn new(world: &DistWorld, strategy: PartitionStrategy) -> PartitionedKnowledgeGraph:
+        let num_partitions = world.world_size as usize
+        let mut partitions = Vec::new()
+        
+        for i in 0..num_partitions:
+            partitions.push(KnowledgePartition {
+                rank: i as i32,
+                node_range: (0, 0),
+                local_nodes: 0,
+            })
+        
+        PartitionedKnowledgeGraph {
+            partitions: partitions,
+            world: world,
+            partition_strategy: strategy,
+        }
+    
+    fn get_partition_for_node(&self, node_id: usize) -> i32:
+        match self.partition_strategy:
+            PartitionStrategy::HashBased:
+                (node_id % self.partitions.len()) as i32
+            PartitionStrategy::RoundRobin:
+                (node_id % self.partitions.len()) as i32
+            PartitionStrategy::GraphCut:
+                # Use graph structure to determine partition
+                self.find_optimal_partition(node_id)
+    
+    async fn query_remote_node(&self, node_id: usize) -> Result<Vec<u8>, DistError>:
+        let target_rank = self.get_partition_for_node(node_id)
+        
+        if target_rank == self.world.rank:
+            return Err(DistError::InvalidRank)  # Local node, no remote query needed
+        
+        # Send query to target rank
+        let query_data = Tensor::from_scalar(node_id as f32)
+        send_tensor(&query_data, target_rank, self.world)?
+        
+        # Receive response
+        let mut response = Tensor::zeros(&[1024])
+        receive_tensor(&mut response, target_rank, self.world)?
+        
+        Ok(response.to_bytes())
+
+# ===========================================================
+# Distributed Reasoning Pipeline
+# ===========================================================
+
+struct DistributedReasoning:
+    world: &DistWorld
+    local_knowledge: &KnowledgePartition
+
+impl DistributedReasoning:
+    fn new(world: &DistWorld, partition: &KnowledgePartition) -> DistributedReasoning:
+        DistributedReasoning {
+            world: world,
+            local_knowledge: partition,
+        }
+    
+    async fn distributed_query(&self, query: Tensor<f32>) -> Result<Tensor<f32>, DistError>:
+        # Each rank processes the query against its local partition
+        let local_result = self.process_local_query(&query)
+        
+        # All-reduce to combine results from all partitions
+        let dist_result = DistTensor::new(local_result, ShardingSpec::Replicated, self.world)
+        let combined = dist_result.all_reduce(ReduceOp::Max).await?
+        
+        Ok(combined.local_data)
+# ============================================
+# Advanced Distributed Features
+# ============================================
+
+# Distributed caching layer
+struct DistributedCache:
+    rank: i32
+    world_size: i32
+    cache: Map<String, Vec<u8>>
+    cache_coherence: CoherenceProtocol
+
+enum CoherenceProtocol:
+    WriteThrough
+    WriteBack
+    InvalidateOnWrite
+
+impl DistributedCache:
+    fn new(rank: i32, world_size: i32, protocol: CoherenceProtocol) -> DistributedCache:
+        DistributedCache {
+            rank,
+            world_size,
+            cache: Map::new(),
+            cache_coherence: protocol
+        }
+    
+    fn put(&mut self, key: String, value: Vec<u8>) -> Result<(), DistError>:
+        self.cache.insert(key.clone(), value)
+        
+        match self.cache_coherence:
+            CoherenceProtocol::WriteThrough:
+                # Immediately propagate to all ranks
+                let target_rank = self._hash_key(&key) % (self.world_size as usize)
+                // Would send to target_rank
+                Ok(())
+            CoherenceProtocol::WriteBack:
+                # Lazy propagation
+                Ok(())
+            CoherenceProtocol::InvalidateOnWrite:
+                # Invalidate copies on other ranks
+                Ok(())
+    
+    fn get(&self, key: &str) -> Option<Vec<u8>>:
+        self.cache.get(key).map(|v| v.clone())
+    
+    fn _hash_key(&self, key: &str) -> usize:
+        var hash: usize = 5381
+        for c in key.chars():
+            hash = ((hash << 5) + hash) ^ (c as usize)
+        hash
+
+# Consensus and agreement protocols
+struct ConsensusState:
+    term: u64
+    voted_for: Option<String>
+    commit_index: usize
+
+struct RaftConsensus:
+    state: ConsensusState
+    log: Vec<LogEntry>
+    followers: Vec<String>
+
+struct LogEntry:
+    term: u64
+    data: Vec<u8>
+    committed: bool
+
+impl RaftConsensus:
+    fn new() -> RaftConsensus:
+        RaftConsensus {
+            state: ConsensusState {
+                term: 0,
+                voted_for: None,
+                commit_index: 0
+            },
+            log: Vec::new(),
+            followers: Vec::new()
+        }
+    
+    fn append_entry(&mut self, data: Vec<u8>) -> Result<(), DistError>:
+        let entry = LogEntry {
+            term: self.state.term,
+            data,
+            committed: false
+        }
+        self.log.push(entry)
+        Ok(())
+    
+    fn get_committed_entries(&self) -> Vec<Vec<u8>>:
+        self.log.iter()
+            .filter(|e| e.committed)
+            .map(|e| e.data.clone())
+            .collect()
+
+# Distributed transaction support
+struct DistributedTransaction:
+    id: String
+    state: TransactionState
+    participants: Vec<i32>
+    read_set: Map<String, Vec<u8>>
+    write_set: Map<String, Vec<u8>>
+
+enum TransactionState:
+    Initial
+    Active
+    Preparing
+    Prepared
+    Committing
+    Committed
+    Aborted
+
+impl DistributedTransaction:
+    fn new(id: String, participants: Vec<i32>) -> DistributedTransaction:
+        DistributedTransaction {
+            id,
+            state: TransactionState::Initial,
+            participants,
+            read_set: Map::new(),
+            write_set: Map::new()
+        }
+    
+    fn read(&mut self, key: &str, value: Vec<u8>):
+        self.read_set.insert(key.to_string(), value)
+    
+    fn write(&mut self, key: &str, value: Vec<u8>):
+        self.write_set.insert(key.to_string(), value)
+    
+    fn prepare(&mut self) -> Result<bool, DistError>:
+        self.state = TransactionState::Preparing
+        // Two-phase commit prepare phase
+        Ok(true)
+    
+    fn commit(&mut self) -> Result<(), DistError>:
+        self.state = TransactionState::Committing
+        // Two-phase commit commit phase
+        self.state = TransactionState::Committed
+        Ok(())
+
+# Load balancing strategies
+struct LoadBalancer:
+    strategy: BalancingStrategy
+    rank_loads: Vec<f64>
+
+enum BalancingStrategy:
+    RoundRobin
+    LeastLoaded
+    ConsistentHash
+    Dynamic
+
+impl LoadBalancer:
+    fn new(strategy: BalancingStrategy, num_ranks: usize) -> LoadBalancer:
+        LoadBalancer {
+            strategy,
+            rank_loads: vec![0.0; num_ranks]
+        }
+    
+    fn select_rank(&self, request_id: usize) -> usize:
+        match self.strategy:
+            BalancingStrategy::RoundRobin:
+                request_id % self.rank_loads.len()
+            BalancingStrategy::LeastLoaded:
+                let mut min_idx = 0
+                let mut min_load = self.rank_loads[0]
+                for (i, &load) in self.rank_loads.iter().enumerate():
+                    if load < min_load:
+                        min_load = load
+                        min_idx = i
+                min_idx
+            BalancingStrategy::ConsistentHash:
+                self._hash_request(request_id) % self.rank_loads.len()
+            BalancingStrategy::Dynamic:
+                // Load aware selection
+                0
+    
+    fn _hash_request(&self, request_id: usize) -> usize:
+        // Consistent hashing
+        request_id
+
+# Fault tolerance and recovery
+struct FaultDetector:
+    heartbeat_interval: u64
+    timeout: u64
+    failure_threshold: u32
+    suspected: Map<i32, u32>
+
+impl FaultDetector:
+    fn new(heartbeat_ms: u64, timeout_ms: u64) -> FaultDetector:
+        FaultDetector {
+            heartbeat_interval: heartbeat_ms,
+            timeout: timeout_ms,
+            failure_threshold: 3,
+            suspected: Map::new()
+        }
+    
+    fn on_heartbeat(&mut self, rank: i32):
+        if let Some(_) = self.suspected.get(&rank):
+            self.suspected.remove(&rank)  // Clear suspicion
+    
+    fn on_timeout(&mut self, rank: i32) -> bool:
+        let count = self.suspected.get(&rank).map(|c| c + 1).unwrap_or(1)
+        self.suspected.insert(rank, count)
+        
+        count >= self.failure_threshold
+    
+    fn is_suspected(&self, rank: i32) -> bool:
+        self.suspected.contains_key(&rank)
+
+# Service discovery and registration
+struct ServiceRegistry:
+    services: Map<String, ServiceInfo>
+
+struct ServiceInfo:
+    name: String
+    endpoint: String
+    rank: i32
+    status: ServiceStatus
+
+enum ServiceStatus:
+    Available
+    Busy
+    Unavailable
+
+impl ServiceRegistry:
+    fn new() -> ServiceRegistry:
+        ServiceRegistry { services: Map::new() }
+    
+    fn register(&mut self, name: String, endpoint: String, rank: i32):
+        let service = ServiceInfo {
+            name: name.clone(),
+            endpoint,
+            rank,
+            status: ServiceStatus::Available
+        }
+        self.services.insert(name, service)
+    
+    fn lookup(&self, name: &str) -> Option<ServiceInfo>:
+        self.services.get(name).map(|s| s.clone())
+    
+    fn deregister(&mut self, name: &str):
+        self.services.remove(name)
+
+impl ServiceInfo:
+    fn clone(&self) -> ServiceInfo:
+        ServiceInfo {
+            name: self.name.clone(),
+            endpoint: self.endpoint.clone(),
+            rank: self.rank,
+            status: match self.status:
+                ServiceStatus::Available => ServiceStatus::Available
+                ServiceStatus::Busy => ServiceStatus::Busy
+                ServiceStatus::Unavailable => ServiceStatus::Unavailable
+        }

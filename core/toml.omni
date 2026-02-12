@@ -1,0 +1,334 @@
+# HELIOS TOML Parser
+# Configuration file parsing
+
+module core::toml
+
+import core::logging as log
+
+enum TomlValue:
+    String(value: String)
+    Integer(value: i64)
+    Float(value: f64)
+    Boolean(value: bool)
+    DateTime(value: String)
+    Array(values: Vec<TomlValue>)
+    Table(fields: HashMap<String, TomlValue>)
+    
+    fn as_str(&self) -> Option<&str>:
+        match self:
+            TomlValue::String(s): Some(s)
+            _: None
+    
+    fn as_int(&self) -> Option<i64>:
+        match self:
+            TomlValue::Integer(i): Some(*i)
+            _: None
+    
+    fn as_float(&self) -> Option<f64>:
+        match self:
+            TomlValue::Float(f): Some(*f)
+            TomlValue::Integer(i): Some(*i as f64)
+            _: None
+    
+    fn as_bool(&self) -> Option<bool>:
+        match self:
+            TomlValue::Boolean(b): Some(*b)
+            _: None
+    
+    fn as_array(&self) -> Option<&Vec<TomlValue>>:
+        match self:
+            TomlValue::Array(a): Some(a)
+            _: None
+    
+    fn as_table(&self) -> Option<&HashMap<String, TomlValue>>:
+        match self:
+            TomlValue::Table(t): Some(t)
+            _: None
+    
+    fn get(&self, key: &str) -> Option<&TomlValue>:
+        match self:
+            TomlValue::Table(t): t.get(key)
+            _: None
+    
+    fn get_path(&self, path: &str) -> Option<&TomlValue>:
+        let parts: Vec<&str> = path.split('.').collect()
+        let mut current = self
+        for part in parts:
+            current = current.get(part)?
+        return Some(current)
+
+
+struct TomlParser:
+    lines: Vec<String>
+    line_idx: usize
+    
+    fn parse(input: &str) -> Result<TomlValue, TomlError>:
+        let mut parser = TomlParser {
+            lines: input.lines().map(|l| l.to_string()).collect(),
+            line_idx: 0
+        }
+        return parser.parse_document()
+    
+    fn parse_document(&mut self) -> Result<TomlValue, TomlError>:
+        let mut root = HashMap::new()
+        let mut current_table: Vec<String> = Vec::new()
+        
+        while self.line_idx < self.lines.len():
+            let line = self.lines[self.line_idx].trim()
+            self.line_idx += 1
+            
+            # Skip empty lines and comments
+            if line.is_empty() || line.starts_with('#'):
+                continue
+            
+            if line.starts_with('['):
+                # Table or array of tables
+                if line.starts_with("[["):
+                    # Array of tables
+                    let table_name = line.strip_prefix("[[")
+                        .and_then(|s| s.strip_suffix("]]"))
+                        .ok_or(TomlError::InvalidTableHeader)?
+                        .trim()
+                    current_table = table_name.split('.').map(|s| s.trim().to_string()).collect()
+                    
+                    # Create table array entry
+                    self.ensure_array_of_tables(&mut root, &current_table)?
+                else:
+                    # Regular table
+                    let table_name = line.strip_prefix('[')
+                        .and_then(|s| s.strip_suffix(']'))
+                        .ok_or(TomlError::InvalidTableHeader)?
+                        .trim()
+                    current_table = table_name.split('.').map(|s| s.trim().to_string()).collect()
+                    
+                    # Ensure table exists
+                    self.ensure_table(&mut root, &current_table)?
+            else:
+                # Key-value pair
+                let (key, value) = self.parse_key_value(line)?
+                
+                if current_table.is_empty():
+                    root.insert(key, value)
+                else:
+                    let table = self.get_table_mut(&mut root, &current_table)?
+                    table.insert(key, value)
+        
+        return Ok(TomlValue::Table(root))
+    
+    fn parse_key_value(&self, line: &str) -> Result<(String, TomlValue), TomlError>:
+        let eq_pos = line.find('=').ok_or(TomlError::ExpectedEquals)?
+        
+        let key = line[..eq_pos].trim().to_string()
+        let value_str = line[eq_pos + 1..].trim()
+        
+        let value = self.parse_value(value_str)?
+        return Ok((key, value))
+    
+    fn parse_value(&self, s: &str) -> Result<TomlValue, TomlError>:
+        let s = s.trim()
+        
+        if s.is_empty():
+            return Err(TomlError::EmptyValue)
+        
+        # String (quoted)
+        if s.starts_with('"') || s.starts_with("'"):
+            return self.parse_string(s)
+        
+        # Array
+        if s.starts_with('['):
+            return self.parse_array(s)
+        
+        # Inline table
+        if s.starts_with('{'):
+            return self.parse_inline_table(s)
+        
+        # Boolean
+        if s == "true":
+            return Ok(TomlValue::Boolean(true))
+        if s == "false":
+            return Ok(TomlValue::Boolean(false))
+        
+        # Number
+        if s.starts_with('-') || s.starts_with('+') || s.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false):
+            return self.parse_number(s)
+        
+        return Err(TomlError::InvalidValue(s.to_string()))
+    
+    fn parse_string(&self, s: &str) -> Result<TomlValue, TomlError>:
+        let quote = s.chars().next().unwrap()
+        let is_multiline = s.starts_with("\"\"\"") || s.starts_with("'''")
+        
+        if is_multiline:
+            let delimiter = if quote == '"': "\"\"\"" else: "'''"
+            let content = s.strip_prefix(delimiter)
+                .and_then(|s| s.strip_suffix(delimiter))
+                .ok_or(TomlError::UnterminatedString)?
+            return Ok(TomlValue::String(self.unescape_string(content, quote == '"')))
+        else:
+            let content = s.strip_prefix(quote)
+                .and_then(|s| s.strip_suffix(quote))
+                .ok_or(TomlError::UnterminatedString)?
+            return Ok(TomlValue::String(self.unescape_string(content, quote == '"')))
+    
+    fn unescape_string(&self, s: &str, process_escapes: bool) -> String:
+        if !process_escapes:
+            return s.to_string()
+        
+        let mut result = String::new()
+        let mut chars = s.chars().peekable()
+        
+        while let Some(c) = chars.next():
+            if c == '\\':
+                match chars.next():
+                    Some('n'): result.push('\n')
+                    Some('t'): result.push('\t')
+                    Some('r'): result.push('\r')
+                    Some('\\'): result.push('\\')
+                    Some('"'): result.push('"')
+                    Some(c): 
+                        result.push('\\')
+                        result.push(c)
+                    None: result.push('\\')
+            else:
+                result.push(c)
+        
+        return result
+    
+    fn parse_array(&self, s: &str) -> Result<TomlValue, TomlError>:
+        let content = s.strip_prefix('[')
+            .and_then(|s| s.strip_suffix(']'))
+            .ok_or(TomlError::InvalidArray)?
+            .trim()
+        
+        if content.is_empty():
+            return Ok(TomlValue::Array(Vec::new()))
+        
+        let mut values = Vec::new()
+        let mut current = String::new()
+        let mut depth = 0
+        let mut in_string = false
+        let mut string_char = ' '
+        
+        for c in content.chars():
+            match c:
+                '"' | '\'' if !in_string:
+                    in_string = true
+                    string_char = c
+                    current.push(c)
+                c if in_string && c == string_char:
+                    in_string = false
+                    current.push(c)
+                '[' | '{' if !in_string:
+                    depth += 1
+                    current.push(c)
+                ']' | '}' if !in_string:
+                    depth -= 1
+                    current.push(c)
+                ',' if !in_string && depth == 0:
+                    values.push(self.parse_value(current.trim())?)
+                    current.clear()
+                _:
+                    current.push(c)
+        
+        if !current.trim().is_empty():
+            values.push(self.parse_value(current.trim())?)
+        
+        return Ok(TomlValue::Array(values))
+    
+    fn parse_inline_table(&self, s: &str) -> Result<TomlValue, TomlError>:
+        let content = s.strip_prefix('{')
+            .and_then(|s| s.strip_suffix('}'))
+            .ok_or(TomlError::InvalidTable)?
+            .trim()
+        
+        if content.is_empty():
+            return Ok(TomlValue::Table(HashMap::new()))
+        
+        let mut table = HashMap::new()
+        
+        for pair in content.split(','):
+            let (key, value) = self.parse_key_value(pair.trim())?
+            table.insert(key, value)
+        
+        return Ok(TomlValue::Table(table))
+    
+    fn parse_number(&self, s: &str) -> Result<TomlValue, TomlError>:
+        let s = s.replace('_', "")
+        
+        if s.contains('.') || s.contains('e') || s.contains('E'):
+            match s.parse::<f64>():
+                Ok(f): Ok(TomlValue::Float(f))
+                Err(_): Err(TomlError::InvalidNumber)
+        else if s.starts_with("0x"):
+            match i64::from_str_radix(&s[2..], 16):
+                Ok(i): Ok(TomlValue::Integer(i))
+                Err(_): Err(TomlError::InvalidNumber)
+        else if s.starts_with("0o"):
+            match i64::from_str_radix(&s[2..], 8):
+                Ok(i): Ok(TomlValue::Integer(i))
+                Err(_): Err(TomlError::InvalidNumber)
+        else if s.starts_with("0b"):
+            match i64::from_str_radix(&s[2..], 2):
+                Ok(i): Ok(TomlValue::Integer(i))
+                Err(_): Err(TomlError::InvalidNumber)
+        else:
+            match s.parse::<i64>():
+                Ok(i): Ok(TomlValue::Integer(i))
+                Err(_): Err(TomlError::InvalidNumber)
+    
+    fn ensure_table(&self, root: &mut HashMap<String, TomlValue>, path: &[String]) -> Result<(), TomlError>:
+        let mut current = root
+        for key in path:
+            if !current.contains_key(key):
+                current.insert(key.clone(), TomlValue::Table(HashMap::new()))
+            match current.get_mut(key):
+                Some(TomlValue::Table(t)): current = t
+                _: return Err(TomlError::ConflictingKey)
+        return Ok(())
+    
+    fn ensure_array_of_tables(&self, root: &mut HashMap<String, TomlValue>, path: &[String]) -> Result<(), TomlError>:
+        # Navigate to parent
+        let parent_path = &path[..path.len()-1]
+        self.ensure_table(root, parent_path)?
+        
+        let parent = self.get_table_mut(root, parent_path)?
+        let key = &path[path.len()-1]
+        
+        if !parent.contains_key(key):
+            parent.insert(key.clone(), TomlValue::Array(vec![TomlValue::Table(HashMap::new())]))
+        else:
+            match parent.get_mut(key):
+                Some(TomlValue::Array(arr)):
+                    arr.push(TomlValue::Table(HashMap::new()))
+                _: return Err(TomlError::ConflictingKey)
+        
+        return Ok(())
+    
+    fn get_table_mut(&self, root: &mut HashMap<String, TomlValue>, path: &[String]) -> Result<&mut HashMap<String, TomlValue>, TomlError>:
+        let mut current = root
+        for key in path:
+            match current.get_mut(key):
+                Some(TomlValue::Table(t)): current = t
+                Some(TomlValue::Array(arr)):
+                    match arr.last_mut():
+                        Some(TomlValue::Table(t)): current = t
+                        _: return Err(TomlError::InvalidPath)
+                _: return Err(TomlError::InvalidPath)
+        return Ok(current)
+
+
+fn parse(input: &str) -> Result<TomlValue, TomlError>:
+    return TomlParser::parse(input)
+
+
+enum TomlError:
+    InvalidTableHeader
+    InvalidValue(value: String)
+    InvalidNumber
+    InvalidArray
+    InvalidTable
+    InvalidPath
+    ExpectedEquals
+    UnterminatedString
+    EmptyValue
+    ConflictingKey
