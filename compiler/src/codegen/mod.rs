@@ -15,6 +15,7 @@ pub mod gpu_fusion;
 #[cfg(test)]
 pub mod gpu_tests;
 pub mod jit;
+pub mod jit_complete;
 pub mod mlir;
 pub mod native_codegen;
 pub mod native_extended;
@@ -24,6 +25,7 @@ pub mod optimizing_jit;
 pub mod ovm;
 pub mod python_buffer;
 pub mod python_interop;
+pub mod self_hosting;
 
 #[cfg(feature = "llvm")]
 pub mod llvm_backend;
