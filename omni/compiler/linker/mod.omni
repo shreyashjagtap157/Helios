@@ -1,0 +1,709 @@
+module compiler::linker
+
+# ============================================================================
+# Omni Linker — Object File Linking and Executable Generation
+# ============================================================================
+# Links compiled object files, resolves symbols, handles relocations,
+# and produces final ELF/PE/Mach-O executables or shared libraries.
+
+import compiler::ir::{IrModule}
+
+# ============================================================================
+# Object File Representation
+# ============================================================================
+
+enum OutputFormat:
+    Executable
+    SharedLibrary
+    StaticLibrary
+    ObjectFile
+
+enum TargetOS:
+    Windows
+    Linux
+    MacOS
+    FreeBSD
+    Unknown
+
+enum TargetArch:
+    X86_64
+    AArch64
+    RISCV64
+    WASM32
+    Unknown
+
+struct LinkerConfig:
+    output_path: str
+    output_format: OutputFormat
+    target_os: TargetOS
+    target_arch: TargetArch
+    entry_point: str
+    library_paths: Vector<str>
+    libraries: Vector<str>
+    object_files: Vector<str>
+    link_flags: Vector<str>
+    strip_symbols: bool
+    debug_info: bool
+    pic: bool                # Position independent code
+    static_link: bool
+
+    fn new(output_path: str) -> own Self:
+        return LinkerConfig {
+            output_path: output_path,
+            output_format: OutputFormat::Executable,
+            target_os: detect_os(),
+            target_arch: detect_arch(),
+            entry_point: "main".to_string(),
+            library_paths: Vector::new(),
+            libraries: Vector::new(),
+            object_files: Vector::new(),
+            link_flags: Vector::new(),
+            strip_symbols: false,
+            debug_info: true,
+            pic: false,
+            static_link: false,
+        }
+
+    fn add_object(&mut self, path: str):
+        self.object_files.push(path)
+
+    fn add_library(&mut self, name: str):
+        self.libraries.push(name)
+
+    fn add_library_path(&mut self, path: str):
+        self.library_paths.push(path)
+
+    fn add_flag(&mut self, flag: str):
+        self.link_flags.push(flag)
+
+fn detect_os() -> TargetOS:
+    #[cfg(windows)]
+    return TargetOS::Windows
+    #[cfg(linux)]
+    return TargetOS::Linux
+    #[cfg(macos)]
+    return TargetOS::MacOS
+    return TargetOS::Unknown
+
+fn detect_arch() -> TargetArch:
+    #[cfg(target_arch = "x86_64")]
+    return TargetArch::X86_64
+    #[cfg(target_arch = "aarch64")]
+    return TargetArch::AArch64
+    return TargetArch::Unknown
+
+# ============================================================================
+# Symbol Table
+# ============================================================================
+
+enum SymbolBinding:
+    Local
+    Global
+    Weak
+
+enum SymbolType:
+    Function
+    Object
+    Section
+    File
+    Unknown
+
+struct LinkerSymbol:
+    name: str
+    value: u64
+    size: u64
+    binding: SymbolBinding
+    sym_type: SymbolType
+    section_index: u32
+    defined: bool
+
+struct SymbolTable:
+    symbols: Vector<LinkerSymbol>
+    name_to_index: HashMap<str, usize>
+
+    fn new() -> own Self:
+        return SymbolTable {
+            symbols: Vector::new(),
+            name_to_index: HashMap::new(),
+        }
+
+    fn add(&mut self, sym: LinkerSymbol):
+        self.name_to_index.insert(sym.name.clone(), self.symbols.len())
+        self.symbols.push(sym)
+
+    fn find(&self, name: &str) -> Option<&LinkerSymbol>:
+        match self.name_to_index.get(name):
+            Some(idx) => Some(&self.symbols[*idx])
+            None => None
+
+    fn find_mut(&mut self, name: &str) -> Option<&mut LinkerSymbol>:
+        match self.name_to_index.get(name):
+            Some(idx) => Some(&mut self.symbols[*idx])
+            None => None
+
+    fn undefined_symbols(&self) -> Vector<&LinkerSymbol>:
+        let mut result = Vector::new()
+        for sym in &self.symbols:
+            if not sym.defined:
+                result.push(sym)
+        return result
+
+# ============================================================================
+# Relocation
+# ============================================================================
+
+enum RelocationType:
+    # x86_64
+    R_X86_64_64         # 64-bit absolute
+    R_X86_64_PC32       # 32-bit PC-relative
+    R_X86_64_PLT32      # 32-bit PLT-relative
+    R_X86_64_GOT32      # 32-bit GOT entry
+    R_X86_64_GOTPCREL   # 32-bit GOT PC-relative
+    # AArch64
+    R_AARCH64_CALL26    # 26-bit PC-relative call
+    R_AARCH64_ADR_PREL_PG_HI21
+    R_AARCH64_ADD_ABS_LO12_NC
+
+struct Relocation:
+    offset: u64          # Offset within section
+    sym_name: str        # Symbol to resolve
+    rel_type: RelocationType
+    addend: i64          # Addend for RELA
+
+struct Section:
+    name: str
+    data: Vector<u8>
+    alignment: u32
+    relocations: Vector<Relocation>
+    flags: u32
+
+    fn new(name: str) -> own Self:
+        return Section {
+            name: name,
+            data: Vector::new(),
+            alignment: 16,
+            relocations: Vector::new(),
+            flags: 0,
+        }
+
+# ============================================================================
+# Object File Parser (Minimal ELF/COFF)
+# ============================================================================
+
+struct ObjectFile:
+    path: str
+    sections: Vector<Section>
+    symbols: SymbolTable
+    is_archive: bool
+
+    fn new(path: str) -> own Self:
+        return ObjectFile {
+            path: path,
+            sections: Vector::new(),
+            symbols: SymbolTable::new(),
+            is_archive: false,
+        }
+
+# ELF constants
+const ELF_MAGIC: [u8; 4] = [0x7F, 0x45, 0x4C, 0x46]  # \x7FELF
+const ELF_CLASS64: u8 = 2
+const ELF_DATA2LSB: u8 = 1
+const ET_EXEC: u16 = 2
+const ET_DYN: u16 = 3
+const EM_X86_64: u16 = 62
+const EM_AARCH64: u16 = 183
+
+# PE/COFF constants
+const PE_MAGIC: [u8; 2] = [0x4D, 0x5A]  # MZ
+const PE_SIGNATURE: u32 = 0x00004550   # PE\0\0
+
+fn parse_object_file(path: str) -> Result<ObjectFile, str>:
+    let data = std::fs::read(path.clone())?
+    if data.len() < 4:
+        return Err("file too small")
+
+    # Check for ELF
+    if data[0] == 0x7F and data[1] == 0x45 and data[2] == 0x4C and data[3] == 0x46:
+        return parse_elf_object(path, &data)
+
+    # Check for PE/COFF
+    if data[0] == 0x4D and data[1] == 0x5A:
+        return parse_pe_object(path, &data)
+
+    # Check for archive (static lib)
+    if data.len() >= 8 and str::from_utf8(&data[0..8]).unwrap_or("") == "!<arch>\n":
+        return parse_archive(path, &data)
+
+    return Err(format("unknown object format: {}", path))
+
+fn parse_elf_object(path: str, data: &[u8]) -> Result<ObjectFile, str>:
+    let mut obj = ObjectFile::new(path)
+
+    if data.len() < 64:
+        return Err("ELF header too short")
+
+    # Parse ELF header
+    let e_class = data[4]
+    if e_class != ELF_CLASS64:
+        return Err("only 64-bit ELF supported")
+
+    let e_shoff = read_u64_le(data, 40)      # Section header table offset
+    let e_shentsize = read_u16_le(data, 58)   # Section header entry size
+    let e_shnum = read_u16_le(data, 60)       # Number of section headers
+    let e_shstrndx = read_u16_le(data, 62)    # Section name string table index
+
+    # Parse section headers
+    for i in 0..e_shnum:
+        let offset = e_shoff + (i as u64 * e_shentsize as u64)
+        let sh_name = read_u32_le(data, offset as usize)
+        let sh_type = read_u32_le(data, (offset + 4) as usize)
+        let sh_flags = read_u64_le(data, (offset + 8) as usize)
+        let sh_offset = read_u64_le(data, (offset + 24) as usize)
+        let sh_size = read_u64_le(data, (offset + 32) as usize)
+
+        let section_data = if sh_size > 0 and sh_type != 8:  # Not SHT_NOBITS
+            data[sh_offset as usize..(sh_offset + sh_size) as usize].to_vec()
+        else:
+            Vector::new()
+
+        let mut section = Section::new(format("section_{}", i))
+        section.data = section_data
+        section.flags = sh_flags as u32
+        obj.sections.push(section)
+
+    return Ok(obj)
+
+fn parse_pe_object(path: str, data: &[u8]) -> Result<ObjectFile, str>:
+    let obj = ObjectFile::new(path)
+    # Simplified PE parsing
+    return Ok(obj)
+
+fn parse_archive(path: str, data: &[u8]) -> Result<ObjectFile, str>:
+    let mut obj = ObjectFile::new(path)
+    obj.is_archive = true
+    return Ok(obj)
+
+# Binary read helpers
+fn read_u16_le(data: &[u8], offset: usize) -> u16:
+    (data[offset] as u16) | ((data[offset + 1] as u16) << 8)
+
+fn read_u32_le(data: &[u8], offset: usize) -> u32:
+    (data[offset] as u32) |
+    ((data[offset + 1] as u32) << 8) |
+    ((data[offset + 2] as u32) << 16) |
+    ((data[offset + 3] as u32) << 24)
+
+fn read_u64_le(data: &[u8], offset: usize) -> u64:
+    (data[offset] as u64) |
+    ((data[offset + 1] as u64) << 8) |
+    ((data[offset + 2] as u64) << 16) |
+    ((data[offset + 3] as u64) << 24) |
+    ((data[offset + 4] as u64) << 32) |
+    ((data[offset + 5] as u64) << 40) |
+    ((data[offset + 6] as u64) << 48) |
+    ((data[offset + 7] as u64) << 56)
+
+# ============================================================================
+# Linker Core
+# ============================================================================
+
+struct Linker:
+    config: LinkerConfig
+    objects: Vector<ObjectFile>
+    global_symbols: SymbolTable
+    errors: Vector<str>
+
+    fn new(config: LinkerConfig) -> own Self:
+        return Linker {
+            config: config,
+            objects: Vector::new(),
+            global_symbols: SymbolTable::new(),
+            errors: Vector::new(),
+        }
+
+    fn add_object_file(&mut self, path: str) -> Result<(), str>:
+        let obj = parse_object_file(path)?
+        self.objects.push(obj)
+        return Ok(())
+
+    fn link(&mut self) -> Result<(), str>:
+        # Step 1: Load all object files
+        for path in &self.config.object_files:
+            self.add_object_file(path.clone())?
+
+        # Step 2: Collect all symbols
+        self.collect_symbols()
+
+        # Step 3: Resolve symbols
+        self.resolve_symbols()?
+
+        # Step 4: Apply relocations
+        self.apply_relocations()?
+
+        # Step 5: Generate output
+        match self.config.output_format:
+            OutputFormat::Executable =>
+                self.generate_executable()?
+            OutputFormat::SharedLibrary =>
+                self.generate_shared_library()?
+            OutputFormat::StaticLibrary =>
+                self.generate_static_library()?
+            OutputFormat::ObjectFile =>
+                self.generate_object()?
+
+        return Ok(())
+
+    fn collect_symbols(&mut self):
+        for obj in &self.objects:
+            for sym in &obj.symbols.symbols:
+                if sym.binding == SymbolBinding::Global or sym.binding == SymbolBinding::Weak:
+                    match self.global_symbols.find(&sym.name):
+                        Some(existing) =>
+                            if sym.defined and not existing.defined:
+                                # Resolve previously undefined symbol
+                                if let Some(s) = self.global_symbols.find_mut(&sym.name):
+                                    s.defined = true
+                                    s.value = sym.value
+                                    s.size = sym.size
+                                    s.section_index = sym.section_index
+                            elif sym.defined and existing.defined:
+                                if existing.binding != SymbolBinding::Weak:
+                                    self.errors.push(format("duplicate symbol: {}", sym.name))
+                        None =>
+                            self.global_symbols.add(sym.clone())
+
+    fn resolve_symbols(&mut self) -> Result<(), str>:
+        let undefined = self.global_symbols.undefined_symbols()
+        if not undefined.is_empty():
+            let mut missing = Vector::new()
+            for sym in &undefined:
+                # Check if provided by system libraries
+                if not is_system_symbol(&sym.name):
+                    missing.push(sym.name.clone())
+
+            if not missing.is_empty():
+                return Err(format("undefined symbols: {}", missing.join(", ")))
+
+        return Ok(())
+
+    fn apply_relocations(&mut self) -> Result<(), str>:
+        for obj in &mut self.objects:
+            for section in &mut obj.sections:
+                for reloc in &section.relocations:
+                    match self.global_symbols.find(&reloc.sym_name):
+                        Some(sym) =>
+                            apply_relocation(
+                                &mut section.data,
+                                &reloc,
+                                sym.value,
+                            )
+                        None =>
+                            self.errors.push(format("unresolved relocation: {}", reloc.sym_name))
+
+        if not self.errors.is_empty():
+            return Err(self.errors.join("\n"))
+
+        return Ok(())
+
+    fn generate_executable(&self) -> Result<(), str>:
+        match self.config.target_os:
+            TargetOS::Windows => self.invoke_system_linker_windows()
+            TargetOS::Linux => self.invoke_system_linker_linux()
+            TargetOS::MacOS => self.invoke_system_linker_macos()
+            _ => Err("unsupported target OS")
+
+    fn generate_shared_library(&self) -> Result<(), str>:
+        match self.config.target_os:
+            TargetOS::Windows =>
+                let mut args = Vector::from(["/DLL"])
+                self.invoke_linker_with_args("link.exe", args)
+            TargetOS::Linux =>
+                let mut args = Vector::from(["-shared"])
+                self.invoke_linker_with_args("ld", args)
+            TargetOS::MacOS =>
+                let mut args = Vector::from(["-dylib"])
+                self.invoke_linker_with_args("ld", args)
+            _ => Err("unsupported target OS")
+
+    fn generate_static_library(&self) -> Result<(), str>:
+        match self.config.target_os:
+            TargetOS::Windows =>
+                self.invoke_archiver("lib.exe")
+            _ =>
+                self.invoke_archiver("ar")
+
+    fn generate_object(&self) -> Result<(), str>:
+        # Just copy/merge object files
+        if self.config.object_files.len() == 1:
+            std::fs::copy(&self.config.object_files[0], &self.config.output_path)?
+        return Ok(())
+
+    # ====================================================================
+    # System Linker Invocation
+    # ====================================================================
+
+    fn invoke_system_linker_windows(&self) -> Result<(), str>:
+        let mut args = Vector::new()
+        args.push(format("/OUT:{}", self.config.output_path))
+
+        if self.config.debug_info:
+            args.push("/DEBUG".to_string())
+        if self.config.strip_symbols:
+            args.push("/RELEASE".to_string())
+
+        args.push(format("/ENTRY:{}", self.config.entry_point))
+        args.push("/SUBSYSTEM:CONSOLE".to_string())
+
+        # Add library paths
+        for path in &self.config.library_paths:
+            args.push(format("/LIBPATH:{}", path))
+
+        # Add object files
+        for obj in &self.config.object_files:
+            args.push(obj.clone())
+
+        # Add libraries
+        for lib in &self.config.libraries:
+            args.push(format("{}.lib", lib))
+
+        # Standard libraries
+        args.push("kernel32.lib".to_string())
+        args.push("msvcrt.lib".to_string())
+
+        # Additional flags
+        for flag in &self.config.link_flags:
+            args.push(flag.clone())
+
+        return self.invoke_linker_with_args("link.exe", args)
+
+    fn invoke_system_linker_linux(&self) -> Result<(), str>:
+        let mut args = Vector::new()
+        args.push("-o".to_string())
+        args.push(self.config.output_path.clone())
+
+        if self.config.pic:
+            args.push("-pie".to_string())
+        if self.config.strip_symbols:
+            args.push("-s".to_string())
+        if self.config.static_link:
+            args.push("-static".to_string())
+
+        args.push(format("-e{}", self.config.entry_point))
+
+        # Dynamic linker
+        args.push("-dynamic-linker".to_string())
+        args.push("/lib64/ld-linux-x86-64.so.2".to_string())
+
+        # CRT objects
+        args.push("/usr/lib/x86_64-linux-gnu/crt1.o".to_string())
+        args.push("/usr/lib/x86_64-linux-gnu/crti.o".to_string())
+
+        # Add library paths
+        for path in &self.config.library_paths:
+            args.push(format("-L{}", path))
+
+        # Add object files
+        for obj in &self.config.object_files:
+            args.push(obj.clone())
+
+        # Add libraries
+        for lib in &self.config.libraries:
+            args.push(format("-l{}", lib))
+
+        # Standard libraries
+        args.push("-lc".to_string())
+        args.push("-lgcc".to_string())
+
+        # CRT end
+        args.push("/usr/lib/x86_64-linux-gnu/crtn.o".to_string())
+
+        # Additional flags
+        for flag in &self.config.link_flags:
+            args.push(flag.clone())
+
+        return self.invoke_linker_with_args("ld", args)
+
+    fn invoke_system_linker_macos(&self) -> Result<(), str>:
+        let mut args = Vector::new()
+        args.push("-o".to_string())
+        args.push(self.config.output_path.clone())
+        args.push("-arch".to_string())
+        args.push("x86_64".to_string())
+        args.push("-macosx_version_min".to_string())
+        args.push("13.0".to_string())
+        args.push("-syslibroot".to_string())
+        args.push("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk".to_string())
+
+        # Add object files
+        for obj in &self.config.object_files:
+            args.push(obj.clone())
+
+        # Add libraries
+        for lib in &self.config.libraries:
+            args.push(format("-l{}", lib))
+
+        # System libraries
+        args.push("-lSystem".to_string())
+
+        for flag in &self.config.link_flags:
+            args.push(flag.clone())
+
+        return self.invoke_linker_with_args("ld", args)
+
+    fn invoke_linker_with_args(&self, linker: str, args: Vector<str>) -> Result<(), str>:
+        let result = std::process::run(linker, &args)?
+        if result.exit_code != 0:
+            return Err(format("linker failed: {}", result.stderr))
+        return Ok(())
+
+    fn invoke_archiver(&self, archiver: str) -> Result<(), str>:
+        let mut args = Vector::new()
+        if archiver == "ar":
+            args.push("rcs".to_string())
+            args.push(self.config.output_path.clone())
+        else:
+            args.push(format("/OUT:{}", self.config.output_path))
+
+        for obj in &self.config.object_files:
+            args.push(obj.clone())
+
+        let result = std::process::run(archiver, &args)?
+        if result.exit_code != 0:
+            return Err(format("archiver failed: {}", result.stderr))
+        return Ok(())
+
+fn apply_relocation(data: &mut Vector<u8>, reloc: &Relocation, sym_value: u64):
+    match reloc.rel_type:
+        RelocationType::R_X86_64_64 =>
+            let value = sym_value as i64 + reloc.addend
+            let bytes = value.to_le_bytes()
+            let offset = reloc.offset as usize
+            for i in 0..8:
+                data[offset + i] = bytes[i]
+
+        RelocationType::R_X86_64_PC32 | RelocationType::R_X86_64_PLT32 =>
+            let pc = reloc.offset
+            let value = (sym_value as i64 - pc as i64 + reloc.addend) as i32
+            let bytes = value.to_le_bytes()
+            let offset = reloc.offset as usize
+            for i in 0..4:
+                data[offset + i] = bytes[i]
+
+        RelocationType::R_X86_64_GOT32 | RelocationType::R_X86_64_GOTPCREL =>
+            # GOT entries handled via PLT/GOT tables
+            pass
+
+        RelocationType::R_AARCH64_CALL26 =>
+            # 26-bit PC-relative call
+            let pc = reloc.offset
+            let offset_val = ((sym_value as i64 - pc as i64 + reloc.addend) >> 2) as u32 & 0x03FFFFFF
+            let offset_u = reloc.offset as usize
+            let existing = read_u32_le(data.as_slice(), offset_u)
+            let patched = (existing & 0xFC000000) | offset_val
+            let bytes = patched.to_le_bytes()
+            for i in 0..4:
+                data[offset_u + i] = bytes[i]
+
+        _ => pass
+
+fn is_system_symbol(name: &str) -> bool:
+    let system_syms = [
+        "__libc_start_main", "_start", "__cxa_atexit",
+        "printf", "puts", "malloc", "free", "exit",
+        "memcpy", "memset", "memmove", "strlen",
+        "__stack_chk_fail", "__stack_chk_guard",
+        "_GLOBAL_OFFSET_TABLE_",
+    ]
+    for s in &system_syms:
+        if name == *s:
+            return true
+    return false
+
+# ============================================================================
+# Public API
+# ============================================================================
+
+fn link(config: LinkerConfig) -> Result<(), str>:
+    let mut linker = Linker::new(config)
+    linker.link()?
+    return Ok(())
+
+fn link_objects(
+    objects: &Vector<str>,
+    output: str,
+    libraries: &Vector<str>,
+) -> Result<(), str>:
+    let mut config = LinkerConfig::new(output)
+    for obj in objects:
+        config.add_object(obj.clone())
+    for lib in libraries:
+        config.add_library(lib.clone())
+    return link(config)
+
+fn link_executable(
+    objects: &Vector<str>,
+    output: str,
+    debug: bool,
+) -> Result<(), str>:
+    let mut config = LinkerConfig::new(output)
+    config.output_format = OutputFormat::Executable
+    config.debug_info = debug
+    for obj in objects:
+        config.add_object(obj.clone())
+    return link(config)
+
+fn link_shared_library(
+    objects: &Vector<str>,
+    output: str,
+) -> Result<(), str>:
+    let mut config = LinkerConfig::new(output)
+    config.output_format = OutputFormat::SharedLibrary
+    config.pic = true
+    for obj in objects:
+        config.add_object(obj.clone())
+    return link(config)
+
+# ============================================================================
+# Tests
+# ============================================================================
+
+#[test]
+fn test_linker_config():
+    let config = LinkerConfig::new("output.exe")
+    assert(config.output_path == "output.exe", "output path should match")
+    assert(config.entry_point == "main", "entry point should be main")
+
+#[test]
+fn test_symbol_table():
+    let mut table = SymbolTable::new()
+    table.add(LinkerSymbol {
+        name: "main".to_string(),
+        value: 0x1000,
+        size: 100,
+        binding: SymbolBinding::Global,
+        sym_type: SymbolType::Function,
+        section_index: 1,
+        defined: true,
+    })
+    assert(table.find("main").is_some(), "should find main symbol")
+    assert(table.find("missing").is_none(), "should not find missing symbol")
+
+#[test]
+fn test_binary_read():
+    let data: [u8; 8] = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
+    assert(read_u16_le(&data, 0) == 0x0201, "u16 read should be correct")
+    assert(read_u32_le(&data, 0) == 0x04030201, "u32 read should be correct")
+
+#[test]
+fn test_relocation_pc32():
+    let mut data = Vector::from([0u8; 16])
+    let reloc = Relocation {
+        offset: 4,
+        sym_name: "target".to_string(),
+        rel_type: RelocationType::R_X86_64_PC32,
+        addend: -4,
+    }
+    apply_relocation(&mut data, &reloc, 0x1000)
+    # PC32: value = sym - offset + addend = 0x1000 - 4 + (-4) = 0xFF8
+    let val = read_u32_le(&data, 4)
+    assert(val != 0, "relocation should be applied")

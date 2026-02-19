@@ -1,0 +1,949 @@
+module compiler::parser::ast
+
+# ============================================================================
+# Abstract Syntax Tree for the Omni Programming Language
+# 40+ node types covering all language constructs
+# ============================================================================
+
+import compiler::lexer::token::{Span, TokenKind}
+
+# --- Unique ID for AST Nodes ---
+
+type NodeId = u64
+
+struct IdGenerator:
+    next: u64
+
+    fn new() -> own Self:
+        return IdGenerator { next: 1 }
+
+    fn gen(&mut self) -> NodeId:
+        let id = self.next
+        self.next += 1
+        return id
+
+# ============================================================================
+# Top-Level Program
+# ============================================================================
+
+struct Program:
+    module_path: Option<ModulePath>
+    imports: Vector<Import>
+    items: Vector<Item>
+    span: Span
+
+# --- Module Path ---
+
+struct ModulePath:
+    segments: Vector<str>
+    span: Span
+
+    fn to_string(&self) -> str:
+        return self.segments.join("::")
+
+# --- Import ---
+
+struct Import:
+    path: ModulePath
+    kind: ImportKind
+    span: Span
+
+enum ImportKind:
+    Simple                               # import foo::bar
+    Alias(str)                           # import foo::bar as baz
+    Selective(Vector<ImportItem>)         # import foo::{A, B}
+    Glob                                 # import foo::*
+
+struct ImportItem:
+    name: str
+    alias: Option<str>
+    span: Span
+
+# ============================================================================
+# Items (Top-Level Declarations)
+# ============================================================================
+
+enum Item:
+    Function(FunctionDef)
+    Struct(StructDef)
+    Enum(EnumDef)
+    Trait(TraitDef)
+    Impl(ImplBlock)
+    TypeAlias(TypeAliasDef)
+    Const(ConstDef)
+    Static(StaticDef)
+    Module(ModuleDef)
+    Macro(MacroDef)
+    ExternBlock(ExternBlock)
+    Use(UseDef)
+
+# --- Visibility ---
+
+enum Visibility:
+    Private
+    Public
+
+# --- Attributes ---
+
+struct Attribute:
+    name: str
+    args: Vector<AttrArg>
+    span: Span
+
+struct AttrArg:
+    name: str
+    value: Option<AttrValue>
+    span: Span
+
+enum AttrValue:
+    String(str)
+    Int(u64)
+    Float(f64)
+    Bool(bool)
+    Ident(str)
+    List(Vector<AttrValue>)
+
+# ============================================================================
+# Function Definition
+# ============================================================================
+
+struct FunctionDef:
+    id: NodeId
+    name: str
+    visibility: Visibility
+    is_async: bool
+    generic_params: Vector<GenericParam>
+    params: Vector<Param>
+    return_type: Option<TypeExpr>
+    where_clause: Option<WhereClause>
+    body: Block
+    attrs: Vector<Attribute>
+    span: Span
+
+struct Param:
+    name: str
+    ty: TypeExpr
+    is_self: bool
+    self_kind: Option<SelfKind>
+    default_value: Option<Expr>
+    span: Span
+
+enum SelfKind:
+    Value                    # self
+    Ref                      # &self
+    RefMut                   # &mut self
+
+# ============================================================================
+# Struct Definition
+# ============================================================================
+
+struct StructDef:
+    id: NodeId
+    name: str
+    visibility: Visibility
+    generic_params: Vector<GenericParam>
+    implements: Vector<TypeExpr>
+    fields: Vector<FieldDef>
+    methods: Vector<FunctionDef>
+    where_clause: Option<WhereClause>
+    attrs: Vector<Attribute>
+    span: Span
+
+struct FieldDef:
+    name: str
+    ty: TypeExpr
+    visibility: Visibility
+    default_value: Option<Expr>
+    attrs: Vector<Attribute>
+    span: Span
+
+# ============================================================================
+# Enum Definition
+# ============================================================================
+
+struct EnumDef:
+    id: NodeId
+    name: str
+    visibility: Visibility
+    generic_params: Vector<GenericParam>
+    variants: Vector<EnumVariant>
+    methods: Vector<FunctionDef>
+    attrs: Vector<Attribute>
+    span: Span
+
+struct EnumVariant:
+    name: str
+    kind: VariantKind
+    attrs: Vector<Attribute>
+    span: Span
+
+enum VariantKind:
+    Unit                                     # Variant
+    Tuple(Vector<TypeExpr>)                  # Variant(T1, T2)
+    Struct(Vector<FieldDef>)                 # Variant { field: Type }
+
+# ============================================================================
+# Trait Definition
+# ============================================================================
+
+struct TraitDef:
+    id: NodeId
+    name: str
+    visibility: Visibility
+    generic_params: Vector<GenericParam>
+    super_traits: Vector<TypeExpr>
+    methods: Vector<TraitMethod>
+    assoc_types: Vector<AssocTypeDef>
+    assoc_consts: Vector<ConstDef>
+    where_clause: Option<WhereClause>
+    attrs: Vector<Attribute>
+    span: Span
+
+struct TraitMethod:
+    sig: FunctionDef
+    has_default: bool
+    span: Span
+
+struct AssocTypeDef:
+    name: str
+    bounds: Vector<TypeExpr>
+    default: Option<TypeExpr>
+    span: Span
+
+# ============================================================================
+# Impl Block
+# ============================================================================
+
+struct ImplBlock:
+    id: NodeId
+    generic_params: Vector<GenericParam>
+    trait_type: Option<TypeExpr>        # None for inherent impl
+    target_type: TypeExpr
+    methods: Vector<FunctionDef>
+    assoc_types: Vector<AssocTypeImpl>
+    where_clause: Option<WhereClause>
+    attrs: Vector<Attribute>
+    span: Span
+
+struct AssocTypeImpl:
+    name: str
+    ty: TypeExpr
+    span: Span
+
+# ============================================================================
+# Other Definitions
+# ============================================================================
+
+struct TypeAliasDef:
+    id: NodeId
+    name: str
+    visibility: Visibility
+    generic_params: Vector<GenericParam>
+    ty: TypeExpr
+    span: Span
+
+struct ConstDef:
+    id: NodeId
+    name: str
+    visibility: Visibility
+    ty: Option<TypeExpr>
+    value: Expr
+    attrs: Vector<Attribute>
+    span: Span
+
+struct StaticDef:
+    id: NodeId
+    name: str
+    visibility: Visibility
+    is_thread_local: bool
+    ty: TypeExpr
+    value: Expr
+    attrs: Vector<Attribute>
+    span: Span
+
+struct ModuleDef:
+    id: NodeId
+    name: str
+    visibility: Visibility
+    items: Vector<Item>
+    attrs: Vector<Attribute>
+    span: Span
+
+struct MacroDef:
+    id: NodeId
+    name: str
+    params: Vector<MacroParam>
+    body: Block
+    attrs: Vector<Attribute>
+    span: Span
+
+struct MacroParam:
+    name: str
+    is_variadic: bool
+    span: Span
+
+struct ExternBlock:
+    id: NodeId
+    abi: str                            # "C", "system", etc.
+    link_name: Option<str>
+    functions: Vector<ExternFn>
+    attrs: Vector<Attribute>
+    span: Span
+
+struct ExternFn:
+    name: str
+    params: Vector<Param>
+    return_type: Option<TypeExpr>
+    is_variadic: bool
+    span: Span
+
+struct UseDef:
+    path: ModulePath
+    alias: Option<str>
+    span: Span
+
+# ============================================================================
+# Generics
+# ============================================================================
+
+struct GenericParam:
+    name: str
+    kind: GenericParamKind
+    span: Span
+
+enum GenericParamKind:
+    Type(Vector<TypeExpr>)               # T: Trait1 + Trait2
+    Lifetime(str)                        # 'a
+    Const(TypeExpr)                      # const N: usize
+
+struct WhereClause:
+    predicates: Vector<WherePredicate>
+    span: Span
+
+struct WherePredicate:
+    ty: TypeExpr
+    bounds: Vector<TypeExpr>
+    lifetimes: Vector<str>
+    span: Span
+
+# ============================================================================
+# Type Expressions
+# ============================================================================
+
+enum TypeExpr:
+    # Primitive types
+    Named(NamedType)                     # i32, MyStruct, Vec<T>
+    Array(Box<TypeExpr>, Box<Expr>)      # [T; N]
+    Slice(Box<TypeExpr>)                 # [T]
+    Tuple(Vector<TypeExpr>)              # (T, U, V)
+    Function(FnTypeExpr)                 # fn(A, B) -> C
+    Reference(RefTypeExpr)               # &T, &mut T
+    Owned(Box<TypeExpr>)                 # own T
+    Shared(Box<TypeExpr>)                # shared T
+    RawPointer(Box<TypeExpr>)            # unsafe *T
+    Option(Box<TypeExpr>)                # Option<T>
+    Result(Box<TypeExpr>, Box<TypeExpr>) # Result<T, E>
+    TraitObject(TraitObjectType)         # dyn Trait + Trait2
+    ImplTrait(Vector<TypeExpr>)          # impl Trait
+    SelfType                             # Self
+    Inferred                             # _ (type to be inferred)
+    Never                                # ! (never type)
+    Path(TypePath)                       # module::Type
+    Lifetime(str)                        # 'a, 'static
+
+struct NamedType:
+    name: str
+    type_args: Vector<TypeExpr>
+    span: Span
+
+struct FnTypeExpr:
+    params: Vector<TypeExpr>
+    return_type: Option<Box<TypeExpr>>
+    is_unsafe: bool
+    span: Span
+
+struct RefTypeExpr:
+    is_mutable: bool
+    lifetime: Option<str>
+    inner: Box<TypeExpr>
+    span: Span
+
+struct TraitObjectType:
+    bounds: Vector<TypeExpr>
+    lifetime: Option<str>
+    span: Span
+
+struct TypePath:
+    segments: Vector<str>
+    type_args: Vector<TypeExpr>
+    span: Span
+
+# ============================================================================
+# Expressions
+# ============================================================================
+
+enum Expr:
+    # Literals
+    IntLiteral(u64, Span)
+    FloatLiteral(f64, Span)
+    StringLiteral(str, Span)
+    CharLiteral(char, Span)
+    BoolLiteral(bool, Span)
+    NullLiteral(Span)
+
+    # Identifiers
+    Identifier(str, Span)
+    SelfExpr(Span)
+
+    # Compound literals
+    ArrayLiteral(Vector<Expr>, Span)
+    ArrayRepeat(Box<Expr>, Box<Expr>, Span)     # [expr; count]
+    TupleLiteral(Vector<Expr>, Span)
+    StructLiteral(StructLiteralExpr)
+    MapLiteral(Vector<(Expr, Expr)>, Span)
+
+    # Operations
+    Binary(BinaryExpr)
+    Unary(UnaryExpr)
+    Assign(AssignExpr)
+
+    # Access
+    FieldAccess(Box<Expr>, str, Span)
+    MethodCall(MethodCallExpr)
+    Index(Box<Expr>, Box<Expr>, Span)
+    TupleIndex(Box<Expr>, u32, Span)
+
+    # Function/method calls
+    Call(CallExpr)
+    Path(PathExpr)
+
+    # Control flow (expression position)
+    If(IfExpr)
+    Match(MatchExpr)
+    Block(Block)
+
+    # Closures
+    Closure(ClosureExpr)
+
+    # Async
+    Await(Box<Expr>, Span)
+    Spawn(Box<Expr>, Span)
+
+    # Error handling
+    Try(Box<Expr>, Span)                         # expr?
+
+    # Type operations
+    Cast(Box<Expr>, TypeExpr, Span)              # expr as Type
+    TypeCheck(Box<Expr>, TypeExpr, Span)          # expr is Type
+
+    # Range
+    Range(RangeExpr)
+
+    # Return/break/continue as expressions
+    Return(Option<Box<Expr>>, Span)
+    Break(Option<Box<Expr>>, Span)
+    Continue(Span)
+    Yield(Option<Box<Expr>>, Span)
+
+    # Constructors
+    Some(Box<Expr>, Span)
+    None(Span)
+    Ok(Box<Expr>, Span)
+    Err(Box<Expr>, Span)
+
+    # Format string
+    Format(str, Vector<Expr>, Span)
+
+    # Macro invocation
+    MacroCall(str, Vector<Expr>, Span)
+
+    # Placeholder for error recovery
+    Error(str, Span)
+
+    fn span(&self) -> Span:
+        match self:
+            IntLiteral(_, s) | FloatLiteral(_, s) | StringLiteral(_, s) |
+            CharLiteral(_, s) | BoolLiteral(_, s) | NullLiteral(s) |
+            Identifier(_, s) | SelfExpr(s) | ArrayLiteral(_, s) |
+            ArrayRepeat(_, _, s) | TupleLiteral(_, s) | MapLiteral(_, s) |
+            Await(_, s) | Spawn(_, s) | Try(_, s) | Cast(_, _, s) |
+            TypeCheck(_, _, s) | Return(_, s) | Break(_, s) | Continue(s) |
+            Yield(_, s) | Some(_, s) | None(s) | Ok(_, s) | Err(_, s) |
+            Format(_, _, s) | MacroCall(_, _, s) | Error(_, s) => s.clone()
+            Binary(e) => e.span.clone()
+            Unary(e) => e.span.clone()
+            Assign(e) => e.span.clone()
+            FieldAccess(_, _, s) | Index(_, _, s) | TupleIndex(_, _, s) => s.clone()
+            MethodCall(e) => e.span.clone()
+            Call(e) => e.span.clone()
+            Path(e) => e.span.clone()
+            If(e) => e.span.clone()
+            Match(e) => e.span.clone()
+            Block(b) => b.span.clone()
+            Closure(e) => e.span.clone()
+            Range(e) => e.span.clone()
+            StructLiteral(e) => e.span.clone()
+
+# --- Expression Sub-Types ---
+
+struct BinaryExpr:
+    left: Box<Expr>
+    op: BinaryOp
+    right: Box<Expr>
+    span: Span
+
+enum BinaryOp:
+    Add             # +
+    Sub             # -
+    Mul             # *
+    Div             # /
+    Mod             # %
+    Eq              # ==
+    NotEq           # !=
+    Less            # <
+    Greater         # >
+    LessEq          # <=
+    GreaterEq       # >=
+    And             # && / and
+    Or              # || / or
+    BitAnd          # &
+    BitOr           # |
+    BitXor          # ^
+    ShiftLeft       # <<
+    ShiftRight      # >>
+    Range           # ..
+    RangeInclusive  # ..=
+    Pipe            # |>
+    In              # in
+
+    fn from_token(kind: &TokenKind) -> Option<BinaryOp>:
+        match kind:
+            TokenKind::Plus          => Some(BinaryOp::Add)
+            TokenKind::Minus         => Some(BinaryOp::Sub)
+            TokenKind::Star          => Some(BinaryOp::Mul)
+            TokenKind::Slash         => Some(BinaryOp::Div)
+            TokenKind::Percent       => Some(BinaryOp::Mod)
+            TokenKind::EqEq          => Some(BinaryOp::Eq)
+            TokenKind::NotEq         => Some(BinaryOp::NotEq)
+            TokenKind::Less          => Some(BinaryOp::Less)
+            TokenKind::Greater       => Some(BinaryOp::Greater)
+            TokenKind::LessEq        => Some(BinaryOp::LessEq)
+            TokenKind::GreaterEq     => Some(BinaryOp::GreaterEq)
+            TokenKind::AmpAmp        => Some(BinaryOp::And)
+            TokenKind::PipePipe      => Some(BinaryOp::Or)
+            TokenKind::KwAnd         => Some(BinaryOp::And)
+            TokenKind::KwOr          => Some(BinaryOp::Or)
+            TokenKind::Amp           => Some(BinaryOp::BitAnd)
+            TokenKind::Pipe          => Some(BinaryOp::BitOr)
+            TokenKind::Caret         => Some(BinaryOp::BitXor)
+            TokenKind::ShiftLeft     => Some(BinaryOp::ShiftLeft)
+            TokenKind::ShiftRight    => Some(BinaryOp::ShiftRight)
+            TokenKind::DotDot        => Some(BinaryOp::Range)
+            TokenKind::DotDotEq      => Some(BinaryOp::RangeInclusive)
+            TokenKind::PipeGreater   => Some(BinaryOp::Pipe)
+            TokenKind::KwIn          => Some(BinaryOp::In)
+            _                        => None
+
+struct UnaryExpr:
+    op: UnaryOp
+    operand: Box<Expr>
+    span: Span
+
+enum UnaryOp:
+    Neg             # -
+    Not             # ! / not
+    BitNot          # ~
+    Ref             # &
+    RefMut          # &mut
+    Deref           # *
+
+struct AssignExpr:
+    target: Box<Expr>
+    op: AssignOp
+    value: Box<Expr>
+    span: Span
+
+enum AssignOp:
+    Assign          # =
+    AddAssign       # +=
+    SubAssign       # -=
+    MulAssign       # *=
+    DivAssign       # /=
+    ModAssign       # %=
+    BitAndAssign    # &=
+    BitOrAssign     # |=
+    BitXorAssign    # ^=
+    ShiftLeftAssign  # <<=
+    ShiftRightAssign # >>=
+
+    fn from_token(kind: &TokenKind) -> Option<AssignOp>:
+        match kind:
+            TokenKind::Eq            => Some(AssignOp::Assign)
+            TokenKind::PlusEq        => Some(AssignOp::AddAssign)
+            TokenKind::MinusEq       => Some(AssignOp::SubAssign)
+            TokenKind::StarEq        => Some(AssignOp::MulAssign)
+            TokenKind::SlashEq       => Some(AssignOp::DivAssign)
+            TokenKind::PercentEq     => Some(AssignOp::ModAssign)
+            TokenKind::AmpEq         => Some(AssignOp::BitAndAssign)
+            TokenKind::PipeEq        => Some(AssignOp::BitOrAssign)
+            TokenKind::CaretEq       => Some(AssignOp::BitXorAssign)
+            TokenKind::ShiftLeftEq   => Some(AssignOp::ShiftLeftAssign)
+            TokenKind::ShiftRightEq  => Some(AssignOp::ShiftRightAssign)
+            _                        => None
+
+struct MethodCallExpr:
+    receiver: Box<Expr>
+    method: str
+    type_args: Vector<TypeExpr>
+    args: Vector<Expr>
+    span: Span
+
+struct CallExpr:
+    callee: Box<Expr>
+    type_args: Vector<TypeExpr>
+    args: Vector<Expr>
+    span: Span
+
+struct PathExpr:
+    segments: Vector<str>
+    type_args: Vector<TypeExpr>
+    span: Span
+
+struct StructLiteralExpr:
+    name: str
+    type_args: Vector<TypeExpr>
+    fields: Vector<FieldInit>
+    spread: Option<Box<Expr>>
+    span: Span
+
+struct FieldInit:
+    name: str
+    value: Expr
+    span: Span
+
+struct ClosureExpr:
+    params: Vector<ClosureParam>
+    return_type: Option<TypeExpr>
+    body: Box<Expr>
+    is_move: bool
+    is_async: bool
+    span: Span
+
+struct ClosureParam:
+    name: str
+    ty: Option<TypeExpr>
+    span: Span
+
+struct RangeExpr:
+    start: Option<Box<Expr>>
+    end: Option<Box<Expr>>
+    is_inclusive: bool
+    span: Span
+
+# ============================================================================
+# Control Flow Expressions
+# ============================================================================
+
+struct IfExpr:
+    condition: Box<Expr>
+    then_block: Block
+    elif_clauses: Vector<ElifClause>
+    else_block: Option<Block>
+    span: Span
+
+struct ElifClause:
+    condition: Expr
+    body: Block
+    span: Span
+
+struct MatchExpr:
+    subject: Box<Expr>
+    arms: Vector<MatchArm>
+    span: Span
+
+struct MatchArm:
+    pattern: Pattern
+    guard: Option<Expr>
+    body: Expr
+    span: Span
+
+# ============================================================================
+# Patterns
+# ============================================================================
+
+enum Pattern:
+    Wildcard(Span)                                   # _
+    Identifier(str, bool, Span)                      # x, mut x
+    Literal(LiteralPattern)                          # 42, "hello", true
+    Tuple(Vector<Pattern>, Span)                     # (a, b, c)
+    Struct(StructPattern)                            # Point { x, y }
+    Enum(EnumPattern)                                # Some(x), Color::Red
+    Slice(Vector<Pattern>, Span)                     # [a, b, ..]
+    Range(RangePattern)                              # 1..=9
+    Or(Vector<Pattern>, Span)                        # A | B | C
+    Ref(Box<Pattern>, bool, Span)                    # &x, &mut x
+    Rest(Span)                                       # ..
+    Guard(Box<Pattern>, Box<Expr>, Span)             # pattern if condition
+
+struct LiteralPattern:
+    kind: LiteralPatternKind
+    span: Span
+
+enum LiteralPatternKind:
+    Int(u64)
+    NegInt(u64)
+    Float(f64)
+    String(str)
+    Char(char)
+    Bool(bool)
+    Null
+
+struct StructPattern:
+    name: str
+    fields: Vector<FieldPattern>
+    has_rest: bool
+    span: Span
+
+struct FieldPattern:
+    name: str
+    pattern: Option<Pattern>
+    span: Span
+
+struct EnumPattern:
+    path: Vector<str>
+    fields: Vector<Pattern>
+    span: Span
+
+struct RangePattern:
+    start: Option<Box<Pattern>>
+    end: Option<Box<Pattern>>
+    is_inclusive: bool
+    span: Span
+
+# ============================================================================
+# Statements
+# ============================================================================
+
+enum Stmt:
+    Let(LetStmt)
+    Expr(Expr)
+    Assign(AssignExpr)
+    Return(Option<Expr>, Span)
+    Break(Option<Expr>, Span)
+    Continue(Span)
+    Yield(Option<Expr>, Span)
+    Pass(Span)
+    If(IfStmt)
+    For(ForStmt)
+    While(WhileStmt)
+    Loop(LoopStmt)
+    Match(MatchStmt)
+    Select(SelectStmt)
+    Defer(Box<Stmt>, Span)
+    Unsafe(Block, Span)
+    Item(Item)
+
+    fn span(&self) -> Span:
+        match self:
+            Let(s) => s.span.clone()
+            Expr(e) => e.span()
+            Assign(a) => a.span.clone()
+            Return(_, s) | Break(_, s) | Continue(s) | Yield(_, s) | Pass(s) => s.clone()
+            If(s) => s.span.clone()
+            For(s) => s.span.clone()
+            While(s) => s.span.clone()
+            Loop(s) => s.span.clone()
+            Match(s) => s.span.clone()
+            Select(s) => s.span.clone()
+            Defer(_, s) | Unsafe(_, s) => s.clone()
+            Item(i) => Span::dummy()
+
+struct LetStmt:
+    name: str
+    is_mutable: bool
+    ty: Option<TypeExpr>
+    value: Option<Expr>
+    pattern: Option<Pattern>
+    span: Span
+
+struct IfStmt:
+    condition: Expr
+    then_block: Block
+    elif_clauses: Vector<ElifClause>
+    else_block: Option<Block>
+    span: Span
+
+struct ForStmt:
+    pattern: Pattern
+    iterable: Expr
+    body: Block
+    else_block: Option<Block>
+    span: Span
+
+struct WhileStmt:
+    condition: Expr
+    body: Block
+    span: Span
+
+struct LoopStmt:
+    body: Block
+    span: Span
+
+struct MatchStmt:
+    subject: Expr
+    arms: Vector<MatchArm>
+    span: Span
+
+struct SelectStmt:
+    cases: Vector<SelectCase>
+    span: Span
+
+struct SelectCase:
+    pattern: Option<Pattern>
+    channel_expr: Expr
+    body: Block
+    span: Span
+
+# ============================================================================
+# Block
+# ============================================================================
+
+struct Block:
+    stmts: Vector<Stmt>
+    span: Span
+
+    fn new(stmts: Vector<Stmt>, span: Span) -> own Self:
+        return Block { stmts: stmts, span: span }
+
+    fn is_empty(&self) -> bool:
+        return self.stmts.is_empty()
+
+# ============================================================================
+# AST Visitor Trait
+# ============================================================================
+
+trait AstVisitor:
+    type Result
+
+    fn visit_program(&mut self, program: &Program) -> Self::Result
+    fn visit_item(&mut self, item: &Item) -> Self::Result
+    fn visit_function(&mut self, func: &FunctionDef) -> Self::Result
+    fn visit_struct(&mut self, s: &StructDef) -> Self::Result
+    fn visit_enum(&mut self, e: &EnumDef) -> Self::Result
+    fn visit_trait(&mut self, t: &TraitDef) -> Self::Result
+    fn visit_impl(&mut self, i: &ImplBlock) -> Self::Result
+    fn visit_stmt(&mut self, stmt: &Stmt) -> Self::Result
+    fn visit_expr(&mut self, expr: &Expr) -> Self::Result
+    fn visit_pattern(&mut self, pattern: &Pattern) -> Self::Result
+    fn visit_type(&mut self, ty: &TypeExpr) -> Self::Result
+    fn visit_block(&mut self, block: &Block) -> Self::Result
+
+# ============================================================================
+# AST Pretty Printer (for debugging)
+# ============================================================================
+
+struct AstPrinter:
+    indent: u32
+    output: String
+
+    fn new() -> own Self:
+        return AstPrinter { indent: 0, output: String::new() }
+
+    fn print_program(&mut self, program: &Program) -> str:
+        self.write_line("Program:")
+        self.indent += 1
+        match &program.module_path:
+            Some(p) => self.write_line(format("module: {}", p.to_string()))
+            None => pass
+        for imp in &program.imports:
+            self.write_line(format("import: {}", imp.path.to_string()))
+        for item in &program.items:
+            self.print_item(item)
+        self.indent -= 1
+        return self.output.clone()
+
+    fn print_item(&mut self, item: &Item):
+        match item:
+            Item::Function(f) =>
+                self.write_line(format("fn {}({})", f.name, f.params.len()))
+                self.indent += 1
+                self.print_block(&f.body)
+                self.indent -= 1
+            Item::Struct(s) =>
+                self.write_line(format("struct {} ({} fields, {} methods)", s.name, s.fields.len(), s.methods.len()))
+            Item::Enum(e) =>
+                self.write_line(format("enum {} ({} variants)", e.name, e.variants.len()))
+            Item::Trait(t) =>
+                self.write_line(format("trait {} ({} methods)", t.name, t.methods.len()))
+            Item::Impl(i) =>
+                let trait_str = match &i.trait_type:
+                    Some(_) => "trait impl"
+                    None => "inherent impl"
+                self.write_line(format("{} ({} methods)", trait_str, i.methods.len()))
+            Item::TypeAlias(t) =>
+                self.write_line(format("type {} = ...", t.name))
+            Item::Const(c) =>
+                self.write_line(format("const {}", c.name))
+            Item::Static(s) =>
+                self.write_line(format("static {}", s.name))
+            Item::Module(m) =>
+                self.write_line(format("module {} ({} items)", m.name, m.items.len()))
+            Item::Macro(m) =>
+                self.write_line(format("macro {}", m.name))
+            Item::ExternBlock(e) =>
+                self.write_line(format("extern \"{}\" ({} functions)", e.abi, e.functions.len()))
+            Item::Use(u) =>
+                self.write_line(format("use {}", u.path.to_string()))
+
+    fn print_block(&mut self, block: &Block):
+        for stmt in &block.stmts:
+            self.print_stmt(stmt)
+
+    fn print_stmt(&mut self, stmt: &Stmt):
+        match stmt:
+            Stmt::Let(l) =>
+                let mut_str = if l.is_mutable: "mut " else: ""
+                self.write_line(format("let {}{}", mut_str, l.name))
+            Stmt::Expr(e) =>
+                self.write_line("expr_stmt")
+                self.indent += 1
+                self.print_expr(e)
+                self.indent -= 1
+            Stmt::Return(_, _) =>
+                self.write_line("return")
+            Stmt::If(i) =>
+                self.write_line("if")
+            Stmt::For(f) =>
+                self.write_line("for")
+            Stmt::While(w) =>
+                self.write_line("while")
+            Stmt::Loop(l) =>
+                self.write_line("loop")
+            Stmt::Match(m) =>
+                self.write_line(format("match ({} arms)", m.arms.len()))
+            _ =>
+                self.write_line("stmt")
+
+    fn print_expr(&mut self, expr: &Expr):
+        match expr:
+            Expr::IntLiteral(v, _) => self.write_line(format("int({})", v))
+            Expr::FloatLiteral(v, _) => self.write_line(format("float({})", v))
+            Expr::StringLiteral(v, _) => self.write_line(format("string(\"{}\")", v))
+            Expr::BoolLiteral(v, _) => self.write_line(format("bool({})", v))
+            Expr::Identifier(name, _) => self.write_line(format("ident({})", name))
+            Expr::Binary(b) =>
+                self.write_line(format("binary({:?})", b.op))
+                self.indent += 1
+                self.print_expr(&b.left)
+                self.print_expr(&b.right)
+                self.indent -= 1
+            Expr::Call(c) =>
+                self.write_line(format("call({} args)", c.args.len()))
+            _ =>
+                self.write_line("expr")
+
+    fn write_line(&mut self, text: str):
+        for i in 0..self.indent:
+            self.output.push_str("  ")
+        self.output.push_str(text)
+        self.output.push('\n')

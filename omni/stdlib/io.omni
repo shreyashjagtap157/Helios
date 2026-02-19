@@ -1,0 +1,1125 @@
+module std::io
+
+# ============================================================================
+# Omni Standard Library — Input/Output
+# ============================================================================
+# File I/O, buffered readers/writers, stdin/stdout/stderr, path utilities.
+
+import std::core::{
+    Option, Some, None, Result, Ok, Err,
+    Clone, Drop, Display, Debug, Iterator,
+    String, Ordering,
+}
+import std::collections::{Vector}
+import std::mem::{alloc, dealloc, is_null, null_mut, size_of}
+
+# ============================================================================
+# Platform FFI
+# ============================================================================
+
+#[cfg(unix)]
+extern "C":
+    fn open(path: *const u8, flags: i32, mode: u32) -> i32
+    fn close(fd: i32) -> i32
+    fn read(fd: i32, buf: *mut u8, count: usize) -> isize
+    fn write(fd: i32, buf: *const u8, count: usize) -> isize
+    fn lseek(fd: i32, offset: i64, whence: i32) -> i64
+    fn fstat(fd: i32, buf: *mut u8) -> i32
+    fn ftruncate(fd: i32, length: i64) -> i32
+    fn fsync(fd: i32) -> i32
+    fn unlink(path: *const u8) -> i32
+    fn rename(old: *const u8, new_path: *const u8) -> i32
+    fn mkdir(path: *const u8, mode: u32) -> i32
+    fn rmdir(path: *const u8) -> i32
+    fn getcwd(buf: *mut u8, size: usize) -> *mut u8
+    fn chdir(path: *const u8) -> i32
+    fn opendir(name: *const u8) -> *mut u8
+    fn readdir(dirp: *mut u8) -> *mut u8
+    fn closedir(dirp: *mut u8) -> i32
+    fn access(path: *const u8, mode: i32) -> i32
+    fn stat(path: *const u8, buf: *mut u8) -> i32
+    fn isatty(fd: i32) -> i32
+
+    const O_RDONLY: i32 = 0
+    const O_WRONLY: i32 = 1
+    const O_RDWR: i32 = 2
+    const O_CREAT: i32 = 64
+    const O_TRUNC: i32 = 512
+    const O_APPEND: i32 = 1024
+    const SEEK_SET: i32 = 0
+    const SEEK_CUR: i32 = 1
+    const SEEK_END: i32 = 2
+
+#[cfg(windows)]
+extern "C" from "kernel32":
+    fn CreateFileA(name: *const u8, access: u32, share: u32, security: *const u8,
+                   disposition: u32, flags: u32, template: *const u8) -> isize
+    fn ReadFile(handle: isize, buffer: *mut u8, bytes_to_read: u32,
+                bytes_read: *mut u32, overlapped: *const u8) -> i32
+    fn WriteFile(handle: isize, buffer: *const u8, bytes_to_write: u32,
+                 bytes_written: *mut u32, overlapped: *const u8) -> i32
+    fn CloseHandle(handle: isize) -> i32
+    fn SetFilePointerEx(handle: isize, distance: i64, new_pos: *mut i64, method: u32) -> i32
+    fn FlushFileBuffers(handle: isize) -> i32
+    fn GetFileSize(handle: isize, high: *mut u32) -> u32
+    fn DeleteFileA(name: *const u8) -> i32
+    fn MoveFileA(existing: *const u8, new_name: *const u8) -> i32
+    fn CreateDirectoryA(path: *const u8, security: *const u8) -> i32
+    fn RemoveDirectoryA(path: *const u8) -> i32
+    fn GetCurrentDirectoryA(size: u32, buffer: *mut u8) -> u32
+    fn SetCurrentDirectoryA(path: *const u8) -> i32
+    fn GetStdHandle(std_handle: u32) -> isize
+    fn GetLastError() -> u32
+    fn GetFileAttributesA(name: *const u8) -> u32
+    fn FindFirstFileA(name: *const u8, data: *mut u8) -> isize
+    fn FindNextFileA(handle: isize, data: *mut u8) -> i32
+    fn FindClose(handle: isize) -> i32
+
+    const GENERIC_READ: u32 = 0x80000000
+    const GENERIC_WRITE: u32 = 0x40000000
+    const FILE_SHARE_READ: u32 = 1
+    const CREATE_ALWAYS: u32 = 2
+    const OPEN_EXISTING: u32 = 3
+    const OPEN_ALWAYS: u32 = 4
+    const FILE_ATTRIBUTE_NORMAL: u32 = 128
+    const INVALID_HANDLE_VALUE: isize = -1
+    const STD_INPUT_HANDLE: u32 = 0xFFFFFFF6
+    const STD_OUTPUT_HANDLE: u32 = 0xFFFFFFF5
+    const STD_ERROR_HANDLE: u32 = 0xFFFFFFF4
+    const INVALID_FILE_ATTRIBUTES: u32 = 0xFFFFFFFF
+
+# ============================================================================
+# I/O Error
+# ============================================================================
+
+enum IoErrorKind:
+    NotFound
+    PermissionDenied
+    AlreadyExists
+    WouldBlock
+    InvalidInput
+    InvalidData
+    UnexpectedEof
+    Interrupted
+    BrokenPipe
+    Other
+
+struct IoError:
+    kind: IoErrorKind
+    message: String
+
+    fn new(kind: IoErrorKind, msg: &str) -> own IoError:
+        return IoError { kind, message: String::from(msg) }
+
+    fn from_os_error(code: i32) -> own IoError:
+        let kind = match code:
+            2 => IoErrorKind::NotFound        # ENOENT / ERROR_FILE_NOT_FOUND
+            13 => IoErrorKind::PermissionDenied # EACCES
+            17 => IoErrorKind::AlreadyExists    # EEXIST
+            _ => IoErrorKind::Other
+        return IoError {
+            kind,
+            message: String::from(format("OS error {}", code)),
+        }
+
+    fn kind(&self) -> IoErrorKind:
+        return self.kind
+
+impl Display for IoError:
+    fn fmt_display(&self, f: &mut Formatter) -> Result<(), FmtError>:
+        f.write_str(&self.message)
+
+type IoResult<T> = Result<T, IoError>
+
+# ============================================================================
+# Read/Write Traits
+# ============================================================================
+
+trait Read:
+    fn read(&mut self, buf: &mut [u8]) -> IoResult<usize>
+
+    fn read_exact(&mut self, buf: &mut [u8]) -> IoResult<()>:
+        let mut total = 0
+        while total < buf.len():
+            let n = self.read(&mut buf[total..])?
+            if n == 0:
+                return Err(IoError::new(IoErrorKind::UnexpectedEof, "unexpected end of file"))
+            total += n
+        return Ok(())
+
+    fn read_to_end(&mut self, buf: &mut Vector<u8>) -> IoResult<usize>:
+        let mut total = 0
+        let mut tmp = [0u8; 4096]
+        loop:
+            let n = self.read(&mut tmp)?
+            if n == 0:
+                break
+            buf.extend_from_slice(&tmp[..n])
+            total += n
+        return Ok(total)
+
+    fn read_to_string(&mut self, buf: &mut String) -> IoResult<usize>:
+        let mut bytes = Vector::new()
+        let n = self.read_to_end(&mut bytes)?
+        match String::from_utf8(bytes):
+            Ok(s) =>
+                buf.push_string(&s)
+                return Ok(n)
+            Err(e) =>
+                return Err(IoError::new(IoErrorKind::InvalidData, "stream is not valid UTF-8"))
+
+trait Write:
+    fn write(&mut self, buf: &[u8]) -> IoResult<usize>
+    fn flush(&mut self) -> IoResult<()>
+
+    fn write_all(&mut self, buf: &[u8]) -> IoResult<()>:
+        let mut total = 0
+        while total < buf.len():
+            let n = self.write(&buf[total..])?
+            if n == 0:
+                return Err(IoError::new(IoErrorKind::Other, "write returned 0"))
+            total += n
+        return Ok(())
+
+    fn write_str(&mut self, s: &str) -> IoResult<()>:
+        return self.write_all(s.as_bytes())
+
+    fn write_fmt(&mut self, s: &str) -> IoResult<()>:
+        return self.write_str(s)
+
+trait Seek:
+    fn seek(&mut self, pos: SeekFrom) -> IoResult<u64>
+
+    fn stream_position(&mut self) -> IoResult<u64>:
+        return self.seek(SeekFrom::Current(0))
+
+    fn rewind(&mut self) -> IoResult<()>:
+        self.seek(SeekFrom::Start(0))?
+        return Ok(())
+
+enum SeekFrom:
+    Start(u64)
+    End(i64)
+    Current(i64)
+
+# ============================================================================
+# File
+# ============================================================================
+
+struct File:
+    #[cfg(unix)]
+    fd: i32
+
+    #[cfg(windows)]
+    handle: isize
+
+    fn open(path: &str) -> IoResult<own File>:
+        return File::open_with_options(path, OpenOptions::read())
+
+    fn create(path: &str) -> IoResult<own File>:
+        return File::open_with_options(path, OpenOptions::write_create_truncate())
+
+    fn open_with_options(path: &str, opts: &OpenOptions) -> IoResult<own File>:
+        let path_bytes = to_c_string(path)
+
+        #[cfg(unix)]
+        {
+            let mut flags = 0i32
+            if opts.read and opts.write:
+                flags = O_RDWR
+            elif opts.read:
+                flags = O_RDONLY
+            elif opts.write:
+                flags = O_WRONLY
+
+            if opts.create:
+                flags |= O_CREAT
+            if opts.truncate:
+                flags |= O_TRUNC
+            if opts.append:
+                flags |= O_APPEND
+
+            let fd = open(path_bytes.as_ptr(), flags, 0o644)
+            if fd < 0:
+                return Err(IoError::new(IoErrorKind::NotFound, format("cannot open: {}", path)))
+            return Ok(File { fd })
+        }
+
+        #[cfg(windows)]
+        {
+            let mut access = 0u32
+            if opts.read:
+                access |= GENERIC_READ
+            if opts.write:
+                access |= GENERIC_WRITE
+
+            let disposition = if opts.create and opts.truncate:
+                CREATE_ALWAYS
+            elif opts.create:
+                OPEN_ALWAYS
+            else:
+                OPEN_EXISTING
+
+            let handle = CreateFileA(
+                path_bytes.as_ptr(),
+                access,
+                FILE_SHARE_READ,
+                null_mut() as *const u8,
+                disposition,
+                FILE_ATTRIBUTE_NORMAL,
+                null_mut() as *const u8,
+            )
+            if handle == INVALID_HANDLE_VALUE:
+                let err = GetLastError()
+                return Err(IoError::from_os_error(err as i32))
+            return Ok(File { handle })
+        }
+
+    fn metadata(&self) -> IoResult<Metadata>:
+        #[cfg(unix)]
+        {
+            let mut stat_buf = [0u8; 144]  # sizeof(struct stat) on Linux
+            if fstat(self.fd, stat_buf.as_mut_ptr()) < 0:
+                return Err(IoError::new(IoErrorKind::Other, "fstat failed"))
+            # Parse stat buffer (Linux x86_64 layout)
+            let size = unsafe {
+                let ptr = stat_buf.as_ptr().offset(48) as *const i64
+                *ptr
+            }
+            return Ok(Metadata { size: size as u64, is_file: true, is_dir: false })
+        }
+
+        #[cfg(windows)]
+        {
+            let mut high = 0u32
+            let low = GetFileSize(self.handle, &mut high)
+            let size = ((high as u64) << 32) | (low as u64)
+            return Ok(Metadata { size, is_file: true, is_dir: false })
+        }
+
+    fn set_len(&self, size: u64) -> IoResult<()>:
+        #[cfg(unix)]
+        {
+            if ftruncate(self.fd, size as i64) < 0:
+                return Err(IoError::new(IoErrorKind::Other, "ftruncate failed"))
+            return Ok(())
+        }
+        #[cfg(windows)]
+        {
+            self.seek(SeekFrom::Start(size))?
+            # SetEndOfFile equivalent
+            return Ok(())
+        }
+
+    fn sync_all(&self) -> IoResult<()>:
+        #[cfg(unix)]
+        {
+            if fsync(self.fd) < 0:
+                return Err(IoError::new(IoErrorKind::Other, "fsync failed"))
+        }
+        #[cfg(windows)]
+        {
+            if FlushFileBuffers(self.handle) == 0:
+                return Err(IoError::new(IoErrorKind::Other, "FlushFileBuffers failed"))
+        }
+        return Ok(())
+
+impl Read for File:
+    fn read(&mut self, buf: &mut [u8]) -> IoResult<usize>:
+        #[cfg(unix)]
+        {
+            let n = read(self.fd, buf.as_mut_ptr(), buf.len())
+            if n < 0:
+                return Err(IoError::new(IoErrorKind::Other, "read failed"))
+            return Ok(n as usize)
+        }
+        #[cfg(windows)]
+        {
+            let mut bytes_read = 0u32
+            let ok = ReadFile(self.handle, buf.as_mut_ptr(), buf.len() as u32,
+                            &mut bytes_read, null_mut() as *const u8)
+            if ok == 0:
+                return Err(IoError::new(IoErrorKind::Other, "ReadFile failed"))
+            return Ok(bytes_read as usize)
+        }
+
+impl Write for File:
+    fn write(&mut self, buf: &[u8]) -> IoResult<usize>:
+        #[cfg(unix)]
+        {
+            let n = write(self.fd, buf.as_ptr(), buf.len())
+            if n < 0:
+                return Err(IoError::new(IoErrorKind::Other, "write failed"))
+            return Ok(n as usize)
+        }
+        #[cfg(windows)]
+        {
+            let mut bytes_written = 0u32
+            let ok = WriteFile(self.handle, buf.as_ptr(), buf.len() as u32,
+                             &mut bytes_written, null_mut() as *const u8)
+            if ok == 0:
+                return Err(IoError::new(IoErrorKind::Other, "WriteFile failed"))
+            return Ok(bytes_written as usize)
+        }
+
+    fn flush(&mut self) -> IoResult<()>:
+        return self.sync_all()
+
+impl Seek for File:
+    fn seek(&mut self, pos: SeekFrom) -> IoResult<u64>:
+        #[cfg(unix)]
+        {
+            let (offset, whence) = match pos:
+                SeekFrom::Start(n) => (n as i64, SEEK_SET)
+                SeekFrom::End(n) => (n, SEEK_END)
+                SeekFrom::Current(n) => (n, SEEK_CUR)
+            let result = lseek(self.fd, offset, whence)
+            if result < 0:
+                return Err(IoError::new(IoErrorKind::Other, "lseek failed"))
+            return Ok(result as u64)
+        }
+        #[cfg(windows)]
+        {
+            let (distance, method) = match pos:
+                SeekFrom::Start(n) => (n as i64, 0u32)   # FILE_BEGIN
+                SeekFrom::End(n) => (n, 2u32)             # FILE_END
+                SeekFrom::Current(n) => (n, 1u32)         # FILE_CURRENT
+            let mut new_pos = 0i64
+            if SetFilePointerEx(self.handle, distance, &mut new_pos, method) == 0:
+                return Err(IoError::new(IoErrorKind::Other, "SetFilePointerEx failed"))
+            return Ok(new_pos as u64)
+        }
+
+impl Drop for File:
+    fn drop(&mut self):
+        #[cfg(unix)]
+        close(self.fd)
+        #[cfg(windows)]
+        CloseHandle(self.handle)
+
+struct OpenOptions:
+    read: bool
+    write: bool
+    create: bool
+    truncate: bool
+    append: bool
+
+    fn new() -> own OpenOptions:
+        return OpenOptions {
+            read: false, write: false, create: false, truncate: false, append: false,
+        }
+
+    fn read() -> own OpenOptions:
+        return OpenOptions { read: true, write: false, create: false, truncate: false, append: false }
+
+    fn write_create_truncate() -> own OpenOptions:
+        return OpenOptions { read: false, write: true, create: true, truncate: true, append: false }
+
+    fn append() -> own OpenOptions:
+        return OpenOptions { read: false, write: true, create: true, truncate: false, append: true }
+
+    fn read_write() -> own OpenOptions:
+        return OpenOptions { read: true, write: true, create: false, truncate: false, append: false }
+
+struct Metadata:
+    size: u64
+    is_file: bool
+    is_dir: bool
+
+    fn len(&self) -> u64:
+        return self.size
+
+    fn is_file(&self) -> bool:
+        return self.is_file
+
+    fn is_dir(&self) -> bool:
+        return self.is_dir
+
+# ============================================================================
+# Buffered I/O
+# ============================================================================
+
+const DEFAULT_BUF_SIZE: usize = 8192
+
+struct BufReader<R: Read>:
+    inner: R
+    buf: Vector<u8>
+    pos: usize
+    filled: usize
+
+    fn new(inner: R) -> own BufReader<R>:
+        return BufReader::with_capacity(DEFAULT_BUF_SIZE, inner)
+
+    fn with_capacity(cap: usize, inner: R) -> own BufReader<R>:
+        let mut buf = Vector::with_capacity(cap)
+        buf.resize(cap, 0u8)
+        return BufReader { inner, buf, pos: 0, filled: 0 }
+
+    fn fill_buf(&mut self) -> IoResult<&[u8]>:
+        if self.pos >= self.filled:
+            self.pos = 0
+            self.filled = self.inner.read(self.buf.as_mut_slice())?
+        return Ok(&self.buf.as_slice()[self.pos..self.filled])
+
+    fn consume(&mut self, amt: usize):
+        self.pos = (self.pos + amt).min(self.filled)
+
+    fn read_line(&mut self, line: &mut String) -> IoResult<usize>:
+        let mut total = 0
+        loop:
+            let available = self.fill_buf()?
+            if available.is_empty():
+                break
+            # Find newline in buffer
+            let mut found = false
+            for i in 0..available.len():
+                if available[i] == b'\n':
+                    let bytes = &available[..i + 1]
+                    line.push_str(unsafe { str::from_utf8_unchecked(bytes) })
+                    total += i + 1
+                    self.consume(i + 1)
+                    found = true
+                    break
+            if not found:
+                let bytes = available
+                line.push_str(unsafe { str::from_utf8_unchecked(bytes) })
+                total += bytes.len()
+                let amt = bytes.len()
+                self.consume(amt)
+        return Ok(total)
+
+    fn lines(&mut self) -> Lines<R>:
+        return Lines { reader: self }
+
+    fn into_inner(self) -> R:
+        return self.inner
+
+impl<R: Read> Read for BufReader<R>:
+    fn read(&mut self, buf: &mut [u8]) -> IoResult<usize>:
+        let available = self.fill_buf()?
+        let n = available.len().min(buf.len())
+        buf[..n].copy_from_slice(&available[..n])
+        self.consume(n)
+        return Ok(n)
+
+struct Lines<R: Read>:
+    reader: &mut BufReader<R>
+
+impl<R: Read> Iterator for Lines<R>:
+    type Item = IoResult<String>
+    fn next(&mut self) -> Option<IoResult<String>>:
+        let mut line = String::new()
+        match self.reader.read_line(&mut line):
+            Ok(0) => None
+            Ok(_) =>
+                # Strip trailing newline
+                if line.ends_with("\n"):
+                    line.truncate(line.len() - 1)
+                if line.ends_with("\r"):
+                    line.truncate(line.len() - 1)
+                Some(Ok(line))
+            Err(e) => Some(Err(e))
+
+struct BufWriter<W: Write>:
+    inner: W
+    buf: Vector<u8>
+    capacity: usize
+
+    fn new(inner: W) -> own BufWriter<W>:
+        return BufWriter::with_capacity(DEFAULT_BUF_SIZE, inner)
+
+    fn with_capacity(cap: usize, inner: W) -> own BufWriter<W>:
+        return BufWriter {
+            inner,
+            buf: Vector::with_capacity(cap),
+            capacity: cap,
+        }
+
+    fn flush_buf(&mut self) -> IoResult<()>:
+        if not self.buf.is_empty():
+            self.inner.write_all(self.buf.as_slice())?
+            self.buf.clear()
+        return Ok(())
+
+    fn into_inner(self) -> W:
+        return self.inner
+
+impl<W: Write> Write for BufWriter<W>:
+    fn write(&mut self, buf: &[u8]) -> IoResult<usize>:
+        if self.buf.len() + buf.len() > self.capacity:
+            self.flush_buf()?
+        if buf.len() >= self.capacity:
+            return self.inner.write(buf)
+        self.buf.extend_from_slice(buf)
+        return Ok(buf.len())
+
+    fn flush(&mut self) -> IoResult<()>:
+        self.flush_buf()?
+        return self.inner.flush()
+
+impl<W: Write> Drop for BufWriter<W>:
+    fn drop(&mut self):
+        self.flush_buf().unwrap_or(())
+
+# ============================================================================
+# Standard Streams
+# ============================================================================
+
+struct Stdin:
+    #[cfg(unix)]
+    fd: i32
+
+    #[cfg(windows)]
+    handle: isize
+
+impl Read for Stdin:
+    fn read(&mut self, buf: &mut [u8]) -> IoResult<usize>:
+        #[cfg(unix)]
+        {
+            let n = read(self.fd, buf.as_mut_ptr(), buf.len())
+            if n < 0:
+                return Err(IoError::new(IoErrorKind::Other, "stdin read failed"))
+            return Ok(n as usize)
+        }
+        #[cfg(windows)]
+        {
+            let mut bytes_read = 0u32
+            ReadFile(self.handle, buf.as_mut_ptr(), buf.len() as u32,
+                    &mut bytes_read, null_mut() as *const u8)
+            return Ok(bytes_read as usize)
+        }
+
+struct Stdout:
+    #[cfg(unix)]
+    fd: i32
+
+    #[cfg(windows)]
+    handle: isize
+
+impl Write for Stdout:
+    fn write(&mut self, buf: &[u8]) -> IoResult<usize>:
+        #[cfg(unix)]
+        {
+            let n = write(self.fd, buf.as_ptr(), buf.len())
+            if n < 0:
+                return Err(IoError::new(IoErrorKind::Other, "stdout write failed"))
+            return Ok(n as usize)
+        }
+        #[cfg(windows)]
+        {
+            let mut bytes_written = 0u32
+            WriteFile(self.handle, buf.as_ptr(), buf.len() as u32,
+                     &mut bytes_written, null_mut() as *const u8)
+            return Ok(bytes_written as usize)
+        }
+
+    fn flush(&mut self) -> IoResult<()>:
+        return Ok(())
+
+struct Stderr:
+    #[cfg(unix)]
+    fd: i32
+
+    #[cfg(windows)]
+    handle: isize
+
+impl Write for Stderr:
+    fn write(&mut self, buf: &[u8]) -> IoResult<usize>:
+        #[cfg(unix)]
+        {
+            let n = write(self.fd, buf.as_ptr(), buf.len())
+            if n < 0:
+                return Err(IoError::new(IoErrorKind::Other, "stderr write failed"))
+            return Ok(n as usize)
+        }
+        #[cfg(windows)]
+        {
+            let mut bytes_written = 0u32
+            WriteFile(self.handle, buf.as_ptr(), buf.len() as u32,
+                     &mut bytes_written, null_mut() as *const u8)
+            return Ok(bytes_written as usize)
+        }
+
+    fn flush(&mut self) -> IoResult<()>:
+        return Ok(())
+
+fn stdin() -> Stdin:
+    #[cfg(unix)]
+    return Stdin { fd: 0 }
+    #[cfg(windows)]
+    return Stdin { handle: GetStdHandle(STD_INPUT_HANDLE) }
+
+fn stdout() -> Stdout:
+    #[cfg(unix)]
+    return Stdout { fd: 1 }
+    #[cfg(windows)]
+    return Stdout { handle: GetStdHandle(STD_OUTPUT_HANDLE) }
+
+fn stderr() -> Stderr:
+    #[cfg(unix)]
+    return Stderr { fd: 2 }
+    #[cfg(windows)]
+    return Stderr { handle: GetStdHandle(STD_ERROR_HANDLE) }
+
+# ============================================================================
+# Convenience Functions
+# ============================================================================
+
+fn read_to_string(path: &str) -> IoResult<String>:
+    let mut file = File::open(path)?
+    let mut content = String::new()
+    file.read_to_string(&mut content)?
+    return Ok(content)
+
+fn write_string(path: &str, content: &str) -> IoResult<()>:
+    let mut file = File::create(path)?
+    file.write_all(content.as_bytes())?
+    return Ok(())
+
+fn write_bytes(path: &str, data: &[u8]) -> IoResult<()>:
+    let mut file = File::create(path)?
+    file.write_all(data)?
+    return Ok(())
+
+fn read_bytes(path: &str) -> IoResult<Vector<u8>>:
+    let mut file = File::open(path)?
+    let mut buf = Vector::new()
+    file.read_to_end(&mut buf)?
+    return Ok(buf)
+
+fn append_string(path: &str, content: &str) -> IoResult<()>:
+    let mut file = File::open_with_options(path, &OpenOptions::append())?
+    file.write_all(content.as_bytes())?
+    return Ok(())
+
+fn read_lines(path: &str) -> IoResult<Vector<String>>:
+    let content = read_to_string(path)?
+    let lines = content.split('\n')
+    return Ok(lines)
+
+fn copy_file(from: &str, to: &str) -> IoResult<u64>:
+    let mut src = File::open(from)?
+    let mut dst = File::create(to)?
+    let mut buf = [0u8; 8192]
+    let mut total = 0u64
+    loop:
+        let n = src.read(&mut buf)?
+        if n == 0:
+            break
+        dst.write_all(&buf[..n])?
+        total += n as u64
+    return Ok(total)
+
+# ============================================================================
+# Path Utilities
+# ============================================================================
+
+struct Path:
+    inner: String
+
+    fn new(s: &str) -> own Path:
+        return Path { inner: String::from(s) }
+
+    fn as_str(&self) -> &str:
+        return self.inner.as_str()
+
+    fn parent(&self) -> Option<Path>:
+        let s = self.inner.as_str()
+        let sep_pos = s.rfind('/').or(s.rfind('\\'))
+        match sep_pos:
+            Some(0) => Some(Path::new("/"))
+            Some(pos) => Some(Path::new(&s[..pos]))
+            None => None
+
+    fn file_name(&self) -> Option<&str>:
+        let s = self.inner.as_str()
+        let sep_pos = s.rfind('/').or(s.rfind('\\'))
+        match sep_pos:
+            Some(pos) =>
+                let name = &s[pos + 1..]
+                if name.is_empty() { None } else { Some(name) }
+            None =>
+                if s.is_empty() { None } else { Some(s) }
+
+    fn stem(&self) -> Option<&str>:
+        let name = self.file_name()?
+        match name.rfind('.'):
+            Some(0) => Some(name)
+            Some(pos) => Some(&name[..pos])
+            None => Some(name)
+
+    fn extension(&self) -> Option<&str>:
+        let name = self.file_name()?
+        match name.rfind('.'):
+            Some(0) => None
+            Some(pos) => Some(&name[pos + 1..])
+            None => None
+
+    fn join(&self, other: &str) -> own Path:
+        let mut s = self.inner.clone()
+        if not s.is_empty() and not s.ends_with("/") and not s.ends_with("\\"):
+            #[cfg(windows)]
+            s.push('\\')
+            #[cfg(unix)]
+            s.push('/')
+        s.push_str(other)
+        return Path { inner: s }
+
+    fn with_extension(&self, ext: &str) -> own Path:
+        let stem_end = match self.inner.rfind('.'):
+            Some(pos) if pos > 0 => pos
+            _ => self.inner.len()
+        let mut s = self.inner.substring(0, stem_end)
+        if not ext.is_empty():
+            s.push('.')
+            s.push_str(ext)
+        return Path { inner: s }
+
+    fn is_absolute(&self) -> bool:
+        let s = self.inner.as_str()
+        if s.starts_with("/"):
+            return true
+        # Windows: C:\, D:\ etc.
+        if s.len() >= 3 and s.as_bytes()[1] == b':' and (s.as_bytes()[2] == b'\\' or s.as_bytes()[2] == b'/'):
+            return true
+        return false
+
+    fn is_relative(&self) -> bool:
+        return not self.is_absolute()
+
+    fn exists(&self) -> bool:
+        return path_exists(self.inner.as_str())
+
+    fn components(&self) -> Vector<&str>:
+        let s = self.inner.as_str()
+        let mut parts = Vector::new()
+        let mut start = 0
+        for i in 0..s.len():
+            let b = s.as_bytes()[i]
+            if b == b'/' or b == b'\\':
+                if i > start:
+                    parts.push(&s[start..i])
+                start = i + 1
+        if start < s.len():
+            parts.push(&s[start..])
+        return parts
+
+impl Display for Path:
+    fn fmt_display(&self, f: &mut Formatter) -> Result<(), FmtError>:
+        f.write_str(self.inner.as_str())
+
+impl Clone for Path:
+    fn clone(&self) -> own Path:
+        return Path { inner: self.inner.clone() }
+
+# ============================================================================
+# Filesystem Operations
+# ============================================================================
+
+fn path_exists(path: &str) -> bool:
+    let c_path = to_c_string(path)
+    #[cfg(unix)]
+    return access(c_path.as_ptr(), 0) == 0
+    #[cfg(windows)]
+    return GetFileAttributesA(c_path.as_ptr()) != INVALID_FILE_ATTRIBUTES
+
+fn is_file(path: &str) -> bool:
+    let c_path = to_c_string(path)
+    #[cfg(windows)]
+    {
+        let attrs = GetFileAttributesA(c_path.as_ptr())
+        return attrs != INVALID_FILE_ATTRIBUTES and (attrs & 0x10) == 0
+    }
+    #[cfg(unix)]
+    {
+        let mut stat_buf = [0u8; 144]
+        if stat(c_path.as_ptr(), stat_buf.as_mut_ptr()) < 0:
+            return false
+        let mode = unsafe { *(stat_buf.as_ptr().offset(24) as *const u32) }
+        return (mode & 0o170000) == 0o100000
+    }
+
+fn is_dir(path: &str) -> bool:
+    let c_path = to_c_string(path)
+    #[cfg(windows)]
+    {
+        let attrs = GetFileAttributesA(c_path.as_ptr())
+        return attrs != INVALID_FILE_ATTRIBUTES and (attrs & 0x10) != 0
+    }
+    #[cfg(unix)]
+    {
+        let mut stat_buf = [0u8; 144]
+        if stat(c_path.as_ptr(), stat_buf.as_mut_ptr()) < 0:
+            return false
+        let mode = unsafe { *(stat_buf.as_ptr().offset(24) as *const u32) }
+        return (mode & 0o170000) == 0o040000
+    }
+
+fn create_dir(path: &str) -> IoResult<()>:
+    let c_path = to_c_string(path)
+    #[cfg(unix)]
+    {
+        if mkdir(c_path.as_ptr(), 0o755) < 0:
+            return Err(IoError::new(IoErrorKind::Other, format("cannot create dir: {}", path)))
+    }
+    #[cfg(windows)]
+    {
+        if CreateDirectoryA(c_path.as_ptr(), null_mut() as *const u8) == 0:
+            return Err(IoError::new(IoErrorKind::Other, format("cannot create dir: {}", path)))
+    }
+    return Ok(())
+
+fn create_dir_all(path: &str) -> IoResult<()>:
+    if path_exists(path):
+        return Ok(())
+    let p = Path::new(path)
+    if let Some(parent) = p.parent():
+        create_dir_all(parent.as_str())?
+    return create_dir(path)
+
+fn remove_file(path: &str) -> IoResult<()>:
+    let c_path = to_c_string(path)
+    #[cfg(unix)]
+    {
+        if unlink(c_path.as_ptr()) < 0:
+            return Err(IoError::new(IoErrorKind::NotFound, format("cannot remove: {}", path)))
+    }
+    #[cfg(windows)]
+    {
+        if DeleteFileA(c_path.as_ptr()) == 0:
+            return Err(IoError::new(IoErrorKind::NotFound, format("cannot remove: {}", path)))
+    }
+    return Ok(())
+
+fn remove_dir(path: &str) -> IoResult<()>:
+    let c_path = to_c_string(path)
+    #[cfg(unix)]
+    {
+        if rmdir(c_path.as_ptr()) < 0:
+            return Err(IoError::new(IoErrorKind::Other, format("cannot remove dir: {}", path)))
+    }
+    #[cfg(windows)]
+    {
+        if RemoveDirectoryA(c_path.as_ptr()) == 0:
+            return Err(IoError::new(IoErrorKind::Other, format("cannot remove dir: {}", path)))
+    }
+    return Ok(())
+
+fn rename_path(from: &str, to: &str) -> IoResult<()>:
+    let c_from = to_c_string(from)
+    let c_to = to_c_string(to)
+    #[cfg(unix)]
+    {
+        if rename(c_from.as_ptr(), c_to.as_ptr()) < 0:
+            return Err(IoError::new(IoErrorKind::Other, "rename failed"))
+    }
+    #[cfg(windows)]
+    {
+        if MoveFileA(c_from.as_ptr(), c_to.as_ptr()) == 0:
+            return Err(IoError::new(IoErrorKind::Other, "rename failed"))
+    }
+    return Ok(())
+
+fn current_dir() -> IoResult<String>:
+    let mut buf = [0u8; 4096]
+    #[cfg(unix)]
+    {
+        let result = getcwd(buf.as_mut_ptr(), buf.len())
+        if is_null(result):
+            return Err(IoError::new(IoErrorKind::Other, "getcwd failed"))
+        let len = c_string_len(buf.as_ptr())
+        return Ok(String::from(unsafe { str::from_utf8_unchecked(&buf[..len]) }))
+    }
+    #[cfg(windows)]
+    {
+        let len = GetCurrentDirectoryA(buf.len() as u32, buf.as_mut_ptr())
+        if len == 0:
+            return Err(IoError::new(IoErrorKind::Other, "GetCurrentDirectory failed"))
+        return Ok(String::from(unsafe { str::from_utf8_unchecked(&buf[..len as usize]) }))
+    }
+
+fn set_current_dir(path: &str) -> IoResult<()>:
+    let c_path = to_c_string(path)
+    #[cfg(unix)]
+    {
+        if chdir(c_path.as_ptr()) < 0:
+            return Err(IoError::new(IoErrorKind::NotFound, "chdir failed"))
+    }
+    #[cfg(windows)]
+    {
+        if SetCurrentDirectoryA(c_path.as_ptr()) == 0:
+            return Err(IoError::new(IoErrorKind::NotFound, "SetCurrentDirectory failed"))
+    }
+    return Ok(())
+
+# ============================================================================
+# Cursor — In-Memory I/O
+# ============================================================================
+
+struct Cursor<T>:
+    inner: T
+    pos: usize
+
+    fn new(inner: T) -> own Cursor<T>:
+        return Cursor { inner, pos: 0 }
+
+    fn into_inner(self) -> T:
+        return self.inner
+
+    fn position(&self) -> u64:
+        return self.pos as u64
+
+    fn set_position(&mut self, pos: u64):
+        self.pos = pos as usize
+
+    fn get_ref(&self) -> &T:
+        return &self.inner
+
+    fn get_mut(&mut self) -> &mut T:
+        return &mut self.inner
+
+impl Read for Cursor<Vector<u8>>:
+    fn read(&mut self, buf: &mut [u8]) -> IoResult<usize>:
+        let available = &self.inner.as_slice()[self.pos..]
+        let n = available.len().min(buf.len())
+        buf[..n].copy_from_slice(&available[..n])
+        self.pos += n
+        return Ok(n)
+
+impl Write for Cursor<Vector<u8>>:
+    fn write(&mut self, buf: &[u8]) -> IoResult<usize>:
+        let end = self.pos + buf.len()
+        if end > self.inner.len():
+            self.inner.resize(end, 0u8)
+        self.inner.as_mut_slice()[self.pos..end].copy_from_slice(buf)
+        self.pos = end
+        return Ok(buf.len())
+
+    fn flush(&mut self) -> IoResult<()>:
+        return Ok(())
+
+impl Seek for Cursor<Vector<u8>>:
+    fn seek(&mut self, pos: SeekFrom) -> IoResult<u64>:
+        let new_pos = match pos:
+            SeekFrom::Start(n) => n as i64
+            SeekFrom::End(n) => self.inner.len() as i64 + n
+            SeekFrom::Current(n) => self.pos as i64 + n
+        if new_pos < 0:
+            return Err(IoError::new(IoErrorKind::InvalidInput, "seek to negative position"))
+        self.pos = new_pos as usize
+        return Ok(self.pos as u64)
+
+# ============================================================================
+# Print Functions
+# ============================================================================
+
+fn print(s: &str):
+    let mut out = stdout()
+    out.write_all(s.as_bytes()).unwrap_or(())
+
+fn println(s: &str):
+    let mut out = stdout()
+    out.write_all(s.as_bytes()).unwrap_or(())
+    out.write_all(b"\n").unwrap_or(())
+
+fn eprint(s: &str):
+    let mut err = stderr()
+    err.write_all(s.as_bytes()).unwrap_or(())
+
+fn eprintln(s: &str):
+    let mut err = stderr()
+    err.write_all(s.as_bytes()).unwrap_or(())
+    err.write_all(b"\n").unwrap_or(())
+
+# ============================================================================
+# Helpers
+# ============================================================================
+
+fn to_c_string(s: &str) -> Vector<u8>:
+    let mut buf = Vector::with_capacity(s.len() + 1)
+    buf.extend_from_slice(s.as_bytes())
+    buf.push(0)
+    return buf
+
+fn c_string_len(ptr: *const u8) -> usize:
+    let mut len = 0
+    unsafe:
+        while *ptr.offset(len as isize) != 0:
+            len += 1
+    return len
+
+# ============================================================================
+# Tests
+# ============================================================================
+
+#[test]
+fn test_cursor_read_write():
+    let mut cursor = Cursor::new(Vector::new())
+    cursor.write_all(b"hello world").unwrap()
+    cursor.set_position(0)
+    let mut buf = [0u8; 5]
+    let n = cursor.read(&mut buf).unwrap()
+    assert(n == 5, "read 5 bytes")
+    assert(&buf == b"hello", "read hello")
+
+#[test]
+fn test_cursor_seek():
+    let mut cursor = Cursor::new(Vector::from([1u8, 2, 3, 4, 5]))
+    cursor.seek(SeekFrom::Start(3)).unwrap()
+    assert(cursor.position() == 3, "position 3")
+    cursor.seek(SeekFrom::Current(-1)).unwrap()
+    assert(cursor.position() == 2, "position 2")
+
+#[test]
+fn test_path_parent():
+    let p = Path::new("/home/user/file.txt")
+    let parent = p.parent().unwrap()
+    assert(parent.as_str() == "/home/user", "parent path")
+
+#[test]
+fn test_path_file_name():
+    let p = Path::new("/home/user/file.txt")
+    assert(p.file_name() == Some("file.txt"), "file name")
+
+#[test]
+fn test_path_stem_extension():
+    let p = Path::new("hello.omni")
+    assert(p.stem() == Some("hello"), "stem")
+    assert(p.extension() == Some("omni"), "extension")
+
+#[test]
+fn test_path_join():
+    let p = Path::new("/home/user")
+    let joined = p.join("file.txt")
+    #[cfg(unix)]
+    assert(joined.as_str() == "/home/user/file.txt", "joined path")
+
+#[test]
+fn test_path_with_extension():
+    let p = Path::new("hello.omni")
+    let p2 = p.with_extension("o")
+    assert(p2.as_str() == "hello.o", "with extension")
+
+#[test]
+fn test_path_components():
+    let p = Path::new("src/compiler/main.omni")
+    let parts = p.components()
+    assert(parts.len() == 3, "3 components")
+    assert(parts[0] == "src", "first component")
+    assert(parts[2] == "main.omni", "last component")
+
+#[test]
+fn test_open_options():
+    let opts = OpenOptions::read()
+    assert(opts.read, "read flag")
+    assert(not opts.write, "no write flag")
+
+    let opts2 = OpenOptions::write_create_truncate()
+    assert(opts2.write, "write flag")
+    assert(opts2.create, "create flag")
+    assert(opts2.truncate, "truncate flag")
+
+#[test]
+fn test_io_error():
+    let err = IoError::new(IoErrorKind::NotFound, "file not found")
+    assert(err.kind() == IoErrorKind::NotFound, "error kind")

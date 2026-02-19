@@ -168,7 +168,47 @@ pub enum Type {
     // Self types for methods
     SelfOwned,
     SelfRef { mutable: bool },
+    
+    // Phase 4+: Advanced features
+    TraitObject { principal: String, supertraits: Vec<String>, lifetime: Option<String> }, // dyn Trait + 'a
+    AssocType(String, String), // Trait::Type (trait, type_name)
+    ConstGeneric(String), // const T: usize style
+    WhereConstrained { base: Box<Type>, bounds: Vec<String> }, // T where T: Trait
+    HigherRanked { bound: String }, // for<'a> syntax
 }
+
+impl PartialEq for Type {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Type::U8, Type::U8) | (Type::U16, Type::U16) | (Type::U32, Type::U32)
+            | (Type::U64, Type::U64) | (Type::Usize, Type::Usize)
+            | (Type::I8, Type::I8) | (Type::I16, Type::I16) | (Type::I32, Type::I32)
+            | (Type::I64, Type::I64) | (Type::Isize, Type::Isize)
+            | (Type::F32, Type::F32) | (Type::F64, Type::F64)
+            | (Type::Bool, Type::Bool) | (Type::Str, Type::Str)
+            | (Type::SelfOwned, Type::SelfOwned) => true,
+            (Type::Named(n1), Type::Named(n2)) => n1 == n2,
+            (Type::Generic(n1, a1), Type::Generic(n2, a2)) => n1 == n2 && a1 == a2,
+            (Type::Function(p1, r1), Type::Function(p2, r2)) => p1 == p2 && r1 == r2,
+            (Type::Array(t1, _), Type::Array(t2, _)) => t1 == t2,
+            (Type::Slice(t1), Type::Slice(t2)) => t1 == t2,
+            (Type::WithOwnership(t1, o1), Type::WithOwnership(t2, o2)) => t1 == t2 && o1 == o2,
+            (Type::SelfRef { mutable: m1 }, Type::SelfRef { mutable: m2 }) => m1 == m2,
+            (Type::AssocType(t1, n1), Type::AssocType(t2, n2)) => t1 == t2 && n1 == n2,
+            (Type::ConstGeneric(n1), Type::ConstGeneric(n2)) => n1 == n2,
+            (Type::TraitObject { principal: p1, supertraits: s1, lifetime: l1 },
+             Type::TraitObject { principal: p2, supertraits: s2, lifetime: l2 }) => {
+                p1 == p2 && s1 == s2 && l1 == l2
+            }
+            (Type::WhereConstrained { base: b1, bounds: bo1 }, 
+             Type::WhereConstrained { base: b2, bounds: bo2 }) => b1 == b2 && bo1 == bo2,
+            (Type::HigherRanked { bound: b1 }, Type::HigherRanked { bound: b2 }) => b1 == b2,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Type {}
 
 /// Ownership semantics
 #[derive(Debug, Clone, Copy, PartialEq)]

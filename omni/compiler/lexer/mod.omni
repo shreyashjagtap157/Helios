@@ -1,0 +1,1056 @@
+module compiler::lexer
+
+# ============================================================================
+# Omni Language Lexer — Complete Tokenizer
+# Handles: indentation tracking, all literals, keywords, operators, comments
+# Produces a stream of Tokens from UTF-8 source text
+# ============================================================================
+
+import compiler::lexer::token::{
+    Token, TokenKind, Span, LexerError, LexResult,
+    lookup_keyword, is_ident_start, is_ident_continue,
+    is_digit, is_hex_digit, is_binary_digit, is_octal_digit,
+    is_whitespace, hex_char_value
+}
+
+# --- Lexer State ---
+
+struct Lexer:
+    source: str
+    chars: Vector<char>
+    pos: u32                    # byte position in source
+    index: u32                  # char index in chars vector
+    line: u32
+    column: u32
+    file_id: u32
+    tokens: Vector<Token>
+    indent_stack: Vector<u32>   # stack of indentation levels
+    at_line_start: bool
+    paren_depth: u32            # tracks () [] {} nesting — suppress indent inside
+    errors: Vector<LexerError>
+    pending_dedents: u32        # dedents to emit before next real token
+
+    # --- Constructor ---
+
+    fn new(source: str, file_id: u32) -> own Self:
+        let mut chars = Vector::new()
+        for c in source.chars():
+            chars.push(c)
+        return Lexer {
+            source: source,
+            chars: chars,
+            pos: 0,
+            index: 0,
+            line: 1,
+            column: 1,
+            file_id: file_id,
+            tokens: Vector::new(),
+            indent_stack: Vector::from([0u32]),
+            at_line_start: true,
+            paren_depth: 0,
+            errors: Vector::new(),
+            pending_dedents: 0,
+        }
+
+    # --- Character Access ---
+
+    fn peek(&self) -> char:
+        if self.index < self.chars.len() as u32:
+            return self.chars[self.index as usize]
+        return '\0'
+
+    fn peek_ahead(&self, offset: u32) -> char:
+        let idx = self.index + offset
+        if idx < self.chars.len() as u32:
+            return self.chars[idx as usize]
+        return '\0'
+
+    fn advance(&mut self) -> char:
+        if self.index >= self.chars.len() as u32:
+            return '\0'
+        let c = self.chars[self.index as usize]
+        self.index += 1
+        self.pos += c.len_utf8() as u32
+        if c == '\n':
+            self.line += 1
+            self.column = 1
+        else:
+            self.column += 1
+        return c
+
+    fn is_at_end(&self) -> bool:
+        return self.index >= self.chars.len() as u32
+
+    fn remaining(&self) -> u32:
+        return (self.chars.len() as u32) - self.index
+
+    # --- Span Construction ---
+
+    fn make_span(&self, start_pos: u32, start_line: u32, start_col: u32) -> own Span:
+        return Span::new(self.file_id, start_pos, self.pos, start_line, start_col)
+
+    fn current_span(&self) -> own Span:
+        return Span::new(self.file_id, self.pos, self.pos + 1, self.line, self.column)
+
+    # --- Main Tokenization Entry Point ---
+
+    fn tokenize(&mut self) -> LexResult:
+        while not self.is_at_end():
+            # Emit pending dedents
+            while self.pending_dedents > 0:
+                self.emit(TokenKind::Dedent, Span::new(self.file_id, self.pos, self.pos, self.line, self.column))
+                self.pending_dedents -= 1
+
+            # Handle start of line: measure indentation
+            if self.at_line_start and self.paren_depth == 0:
+                self.handle_indentation()
+                if not self.errors.is_empty():
+                    return Err(self.errors[0].clone())
+
+            let c = self.peek()
+
+            # Skip whitespace (not newlines — those are significant)
+            if c == ' ' or c == '\t':
+                self.skip_whitespace()
+                continue
+
+            # Newline
+            if c == '\n':
+                self.handle_newline()
+                continue
+
+            # Carriage return (normalize \r\n)
+            if c == '\r':
+                self.advance()
+                if self.peek() == '\n':
+                    self.advance()
+                self.emit_newline()
+                continue
+
+            # Comments
+            if c == '#':
+                if self.peek_ahead(1) == '*':
+                    self.scan_block_comment()?
+                else:
+                    self.scan_line_comment()
+                continue
+
+            # String literals
+            if c == '"':
+                self.scan_string()?
+                continue
+
+            # Character literals
+            if c == '\'':
+                self.scan_char()?
+                continue
+
+            # Number literals
+            if is_digit(c):
+                self.scan_number()?
+                continue
+
+            # Identifiers and keywords
+            if is_ident_start(c):
+                self.scan_identifier()
+                continue
+
+            # Operators and punctuation
+            self.scan_operator()?
+
+        # At end of file, emit remaining dedents
+        while self.indent_stack.len() > 1:
+            self.indent_stack.pop()
+            self.emit(TokenKind::Dedent, Span::new(self.file_id, self.pos, self.pos, self.line, self.column))
+
+        self.emit(TokenKind::Eof, Span::new(self.file_id, self.pos, self.pos, self.line, self.column))
+
+        if not self.errors.is_empty():
+            return Err(self.errors[0].clone())
+
+        return Ok(self.tokens.clone())
+
+    # --- Indentation Handling ---
+
+    fn handle_indentation(&mut self):
+        # Measure leading whitespace on this line
+        let start_col = self.column
+        let mut indent_level: u32 = 0
+        let mut has_tabs = false
+        let mut has_spaces = false
+
+        while not self.is_at_end():
+            let c = self.peek()
+            if c == ' ':
+                indent_level += 1
+                has_spaces = true
+                self.advance()
+            elif c == '\t':
+                indent_level += 4  # tabs = 4 spaces
+                has_tabs = true
+                self.advance()
+            else:
+                break
+
+        # Check for mixed indentation
+        if has_tabs and has_spaces:
+            self.errors.push(LexerError::MixedIndentation(self.line, start_col))
+            return
+
+        # Skip blank lines and comment-only lines
+        if self.is_at_end() or self.peek() == '\n' or self.peek() == '\r' or self.peek() == '#':
+            self.at_line_start = false
+            return
+
+        self.at_line_start = false
+
+        let current_indent = self.indent_stack.last().unwrap_or(0)
+
+        if indent_level > current_indent:
+            # Increased indentation — emit INDENT
+            self.indent_stack.push(indent_level)
+            self.emit(TokenKind::Indent, Span::new(self.file_id, self.pos, self.pos, self.line, 1))
+        elif indent_level < current_indent:
+            # Decreased indentation — emit DEDENT(s) until we match
+            while self.indent_stack.len() > 1:
+                let top = self.indent_stack.last().unwrap_or(0)
+                if indent_level >= top:
+                    break
+                self.indent_stack.pop()
+                self.emit(TokenKind::Dedent, Span::new(self.file_id, self.pos, self.pos, self.line, 1))
+
+            # Verify we landed on a valid indent level
+            let top = self.indent_stack.last().unwrap_or(0)
+            if indent_level != top:
+                self.errors.push(LexerError::IndentationError(
+                    format("dedent does not match any outer indentation level (got {}, expected {})", indent_level, top),
+                    self.line,
+                    start_col
+                ))
+        # else: same indentation, do nothing
+
+    fn handle_newline(&mut self):
+        self.advance()  # consume '\n'
+        self.emit_newline()
+
+    fn emit_newline(&mut self):
+        # Only emit newline tokens outside of brackets/parens
+        if self.paren_depth == 0:
+            self.emit(TokenKind::Newline, Span::new(self.file_id, self.pos - 1, self.pos, self.line - 1, self.column))
+        self.at_line_start = true
+
+    # --- Whitespace ---
+
+    fn skip_whitespace(&mut self):
+        while not self.is_at_end():
+            let c = self.peek()
+            if c == ' ' or c == '\t':
+                self.advance()
+            else:
+                break
+
+    # --- Comments ---
+
+    fn scan_line_comment(&mut self):
+        # Skip everything until newline
+        while not self.is_at_end() and self.peek() != '\n':
+            self.advance()
+
+    fn scan_block_comment(&mut self) -> Result<(), LexerError>:
+        let start_line = self.line
+        let start_col = self.column
+        self.advance()  # skip '#'
+        self.advance()  # skip '*'
+        let mut depth: u32 = 1
+
+        while not self.is_at_end() and depth > 0:
+            let c = self.peek()
+            if c == '#' and self.peek_ahead(1) == '*':
+                self.advance()
+                self.advance()
+                depth += 1
+            elif c == '*' and self.peek_ahead(1) == '#':
+                self.advance()
+                self.advance()
+                depth -= 1
+            else:
+                self.advance()
+
+        if depth > 0:
+            return Err(LexerError::UnterminatedBlockComment(start_line, start_col))
+        return Ok(())
+
+    # --- String Literals ---
+
+    fn scan_string(&mut self) -> Result<(), LexerError>:
+        let start_pos = self.pos
+        let start_line = self.line
+        let start_col = self.column
+
+        self.advance()  # skip opening '"'
+
+        # Check for triple-quoted string
+        if self.peek() == '"' and self.peek_ahead(1) == '"':
+            self.advance()  # skip second '"'
+            self.advance()  # skip third '"'
+            return self.scan_triple_string(start_pos, start_line, start_col)
+
+        let mut value = String::new()
+
+        while not self.is_at_end():
+            let c = self.peek()
+            if c == '"':
+                self.advance()  # skip closing '"'
+                let span = self.make_span(start_pos, start_line, start_col)
+                self.emit(TokenKind::StringLiteral(value), span)
+                return Ok(())
+            elif c == '\\':
+                let escaped = self.scan_escape_sequence()?
+                value.push(escaped)
+            elif c == '\n':
+                return Err(LexerError::UnterminatedString(start_line, start_col))
+            else:
+                value.push(self.advance())
+
+        return Err(LexerError::UnterminatedString(start_line, start_col))
+
+    fn scan_triple_string(&mut self, start_pos: u32, start_line: u32, start_col: u32) -> Result<(), LexerError>:
+        let mut value = String::new()
+
+        while not self.is_at_end():
+            let c = self.peek()
+            if c == '"' and self.peek_ahead(1) == '"' and self.peek_ahead(2) == '"':
+                self.advance()  # skip first '"'
+                self.advance()  # skip second '"'
+                self.advance()  # skip third '"'
+                let span = self.make_span(start_pos, start_line, start_col)
+                self.emit(TokenKind::StringLiteral(value), span)
+                return Ok(())
+            elif c == '\\':
+                let escaped = self.scan_escape_sequence()?
+                value.push(escaped)
+            else:
+                value.push(self.advance())
+
+        return Err(LexerError::UnterminatedString(start_line, start_col))
+
+    fn scan_escape_sequence(&mut self) -> Result<char, LexerError>:
+        let start_line = self.line
+        let start_col = self.column
+        self.advance()  # skip '\'
+
+        if self.is_at_end():
+            return Err(LexerError::InvalidEscapeSequence("\\<eof>", start_line, start_col))
+
+        let c = self.advance()
+        match c:
+            'n'  => return Ok('\n')
+            't'  => return Ok('\t')
+            'r'  => return Ok('\r')
+            '\\' => return Ok('\\')
+            '"'  => return Ok('"')
+            '\'' => return Ok('\'')
+            '0'  => return Ok('\0')
+            'x'  =>
+                # Hex escape: \xHH
+                let mut val: u32 = 0
+                for i in 0..2:
+                    if self.is_at_end() or not is_hex_digit(self.peek()):
+                        return Err(LexerError::InvalidEscapeSequence(
+                            format("\\x requires 2 hex digits"), start_line, start_col))
+                    val = val * 16 + hex_char_value(self.advance()) as u32
+                match char::from_u32(val):
+                    Some(ch) => return Ok(ch)
+                    None => return Err(LexerError::InvalidEscapeSequence(
+                        format("\\x{:02X} is not a valid character", val), start_line, start_col))
+            'u'  =>
+                # Unicode escape: \u{HHHHHH}
+                if self.peek() != '{':
+                    return Err(LexerError::InvalidUnicodeEscape(
+                        "expected '{' after \\u", start_line, start_col))
+                self.advance()  # skip '{'
+                let mut val: u32 = 0
+                let mut count: u32 = 0
+                while not self.is_at_end() and self.peek() != '}':
+                    if not is_hex_digit(self.peek()):
+                        return Err(LexerError::InvalidUnicodeEscape(
+                            format("invalid hex digit in \\u{{}}"), start_line, start_col))
+                    val = val * 16 + hex_char_value(self.advance()) as u32
+                    count += 1
+                    if count > 6:
+                        return Err(LexerError::InvalidUnicodeEscape(
+                            "too many digits in \\u{}", start_line, start_col))
+                if self.is_at_end() or self.peek() != '}':
+                    return Err(LexerError::InvalidUnicodeEscape(
+                        "expected '}' to close \\u{}", start_line, start_col))
+                self.advance()  # skip '}'
+                match char::from_u32(val):
+                    Some(ch) => return Ok(ch)
+                    None => return Err(LexerError::InvalidUnicodeEscape(
+                        format("\\u{{{:X}}} is not a valid Unicode scalar", val), start_line, start_col))
+            _ =>
+                return Err(LexerError::InvalidEscapeSequence(
+                    format("\\{}", c), start_line, start_col))
+
+    # --- Character Literals ---
+
+    fn scan_char(&mut self) -> Result<(), LexerError>:
+        let start_pos = self.pos
+        let start_line = self.line
+        let start_col = self.column
+        self.advance()  # skip opening '\''
+
+        if self.is_at_end():
+            return Err(LexerError::InvalidCharLiteral("empty", start_line, start_col))
+
+        let ch: char
+        if self.peek() == '\\':
+            ch = self.scan_escape_sequence()?
+        else:
+            ch = self.advance()
+
+        if self.is_at_end() or self.peek() != '\'':
+            return Err(LexerError::InvalidCharLiteral(
+                "expected closing single quote", start_line, start_col))
+
+        self.advance()  # skip closing '\''
+        let span = self.make_span(start_pos, start_line, start_col)
+        self.emit(TokenKind::CharLiteral(ch), span)
+        return Ok(())
+
+    # --- Number Literals ---
+
+    fn scan_number(&mut self) -> Result<(), LexerError>:
+        let start_pos = self.pos
+        let start_line = self.line
+        let start_col = self.column
+
+        let first = self.peek()
+
+        # Check for base prefixes: 0x, 0b, 0o
+        if first == '0' and self.remaining() > 1:
+            let prefix = self.peek_ahead(1)
+            if prefix == 'x' or prefix == 'X':
+                return self.scan_hex_number(start_pos, start_line, start_col)
+            elif prefix == 'b' or prefix == 'B':
+                return self.scan_binary_number(start_pos, start_line, start_col)
+            elif prefix == 'o' or prefix == 'O':
+                return self.scan_octal_number(start_pos, start_line, start_col)
+
+        # Decimal integer or float
+        let mut int_part: u64 = 0
+        let mut digit_count: u32 = 0
+
+        while not self.is_at_end() and (is_digit(self.peek()) or self.peek() == '_'):
+            let c = self.advance()
+            if c != '_':
+                int_part = int_part * 10 + (c as u64 - '0' as u64)
+                digit_count += 1
+
+        # Check for float: decimal point followed by digit
+        let mut is_float = false
+        let mut float_val: f64 = int_part as f64
+
+        if not self.is_at_end() and self.peek() == '.' and self.peek_ahead(1) != '.':
+            # Make sure it's not a range operator (..)
+            if self.remaining() > 1 and is_digit(self.peek_ahead(1)):
+                is_float = true
+                self.advance()  # skip '.'
+                let mut frac: f64 = 0.0
+                let mut frac_div: f64 = 10.0
+                while not self.is_at_end() and (is_digit(self.peek()) or self.peek() == '_'):
+                    let c = self.advance()
+                    if c != '_':
+                        frac += (c as u64 - '0' as u64) as f64 / frac_div
+                        frac_div *= 10.0
+                float_val = int_part as f64 + frac
+
+        # Check for exponent
+        if not self.is_at_end() and (self.peek() == 'e' or self.peek() == 'E'):
+            is_float = true
+            self.advance()  # skip 'e'/'E'
+            let mut exp_sign: f64 = 1.0
+            if not self.is_at_end() and (self.peek() == '+' or self.peek() == '-'):
+                if self.advance() == '-':
+                    exp_sign = -1.0
+            let mut exp_val: f64 = 0.0
+            while not self.is_at_end() and (is_digit(self.peek()) or self.peek() == '_'):
+                let c = self.advance()
+                if c != '_':
+                    exp_val = exp_val * 10.0 + (c as u64 - '0' as u64) as f64
+            float_val = float_val * pow(10.0, exp_sign * exp_val)
+
+        # Check for type suffix (u8, i32, f64, etc.)
+        # For now skip suffix parsing — handle in semantic analysis
+
+        let span = self.make_span(start_pos, start_line, start_col)
+        if is_float:
+            self.emit(TokenKind::FloatLiteral(float_val), span)
+        else:
+            self.emit(TokenKind::IntLiteral(int_part), span)
+        return Ok(())
+
+    fn scan_hex_number(&mut self, start_pos: u32, start_line: u32, start_col: u32) -> Result<(), LexerError>:
+        self.advance()  # skip '0'
+        self.advance()  # skip 'x'/'X'
+
+        let mut value: u64 = 0
+        let mut digit_count: u32 = 0
+
+        while not self.is_at_end() and (is_hex_digit(self.peek()) or self.peek() == '_'):
+            let c = self.advance()
+            if c != '_':
+                value = value * 16 + hex_char_value(c)
+                digit_count += 1
+
+        if digit_count == 0:
+            return Err(LexerError::InvalidNumberLiteral(
+                "hex literal requires at least one digit after 0x", start_line, start_col))
+
+        let span = self.make_span(start_pos, start_line, start_col)
+        self.emit(TokenKind::IntLiteral(value), span)
+        return Ok(())
+
+    fn scan_binary_number(&mut self, start_pos: u32, start_line: u32, start_col: u32) -> Result<(), LexerError>:
+        self.advance()  # skip '0'
+        self.advance()  # skip 'b'/'B'
+
+        let mut value: u64 = 0
+        let mut digit_count: u32 = 0
+
+        while not self.is_at_end() and (is_binary_digit(self.peek()) or self.peek() == '_'):
+            let c = self.advance()
+            if c != '_':
+                value = value * 2 + (c as u64 - '0' as u64)
+                digit_count += 1
+
+        if digit_count == 0:
+            return Err(LexerError::InvalidNumberLiteral(
+                "binary literal requires at least one digit after 0b", start_line, start_col))
+
+        let span = self.make_span(start_pos, start_line, start_col)
+        self.emit(TokenKind::IntLiteral(value), span)
+        return Ok(())
+
+    fn scan_octal_number(&mut self, start_pos: u32, start_line: u32, start_col: u32) -> Result<(), LexerError>:
+        self.advance()  # skip '0'
+        self.advance()  # skip 'o'/'O'
+
+        let mut value: u64 = 0
+        let mut digit_count: u32 = 0
+
+        while not self.is_at_end() and (is_octal_digit(self.peek()) or self.peek() == '_'):
+            let c = self.advance()
+            if c != '_':
+                value = value * 8 + (c as u64 - '0' as u64)
+                digit_count += 1
+
+        if digit_count == 0:
+            return Err(LexerError::InvalidNumberLiteral(
+                "octal literal requires at least one digit after 0o", start_line, start_col))
+
+        let span = self.make_span(start_pos, start_line, start_col)
+        self.emit(TokenKind::IntLiteral(value), span)
+        return Ok(())
+
+    # --- Identifiers & Keywords ---
+
+    fn scan_identifier(&mut self):
+        let start_pos = self.pos
+        let start_line = self.line
+        let start_col = self.column
+
+        let mut name = String::new()
+        while not self.is_at_end() and is_ident_continue(self.peek()):
+            name.push(self.advance())
+
+        let span = self.make_span(start_pos, start_line, start_col)
+
+        # Check for boolean literals first
+        if name == "true":
+            self.emit(TokenKind::BoolLiteral(true), span)
+            return
+        if name == "false":
+            self.emit(TokenKind::BoolLiteral(false), span)
+            return
+
+        # Check if it's a keyword
+        match lookup_keyword(&name):
+            Some(kw) => self.emit(kw, span)
+            None     => self.emit(TokenKind::Identifier(name), span)
+
+    # --- Operators & Punctuation ---
+
+    fn scan_operator(&mut self) -> Result<(), LexerError>:
+        let start_pos = self.pos
+        let start_line = self.line
+        let start_col = self.column
+        let c = self.advance()
+
+        let kind = match c:
+            '+' =>
+                if self.peek() == '=':
+                    self.advance()
+                    TokenKind::PlusEq
+                else:
+                    TokenKind::Plus
+            '-' =>
+                if self.peek() == '>':
+                    self.advance()
+                    TokenKind::Arrow
+                elif self.peek() == '=':
+                    self.advance()
+                    TokenKind::MinusEq
+                else:
+                    TokenKind::Minus
+            '*' =>
+                if self.peek() == '=':
+                    self.advance()
+                    TokenKind::StarEq
+                else:
+                    TokenKind::Star
+            '/' =>
+                if self.peek() == '=':
+                    self.advance()
+                    TokenKind::SlashEq
+                else:
+                    TokenKind::Slash
+            '%' =>
+                if self.peek() == '=':
+                    self.advance()
+                    TokenKind::PercentEq
+                else:
+                    TokenKind::Percent
+            '=' =>
+                if self.peek() == '=':
+                    self.advance()
+                    TokenKind::EqEq
+                elif self.peek() == '>':
+                    self.advance()
+                    TokenKind::FatArrow
+                else:
+                    TokenKind::Eq
+            '!' =>
+                if self.peek() == '=':
+                    self.advance()
+                    TokenKind::NotEq
+                else:
+                    TokenKind::Bang
+            '<' =>
+                if self.peek() == '=':
+                    self.advance()
+                    TokenKind::LessEq
+                elif self.peek() == '<':
+                    self.advance()
+                    if self.peek() == '=':
+                        self.advance()
+                        TokenKind::ShiftLeftEq
+                    else:
+                        TokenKind::ShiftLeft
+                else:
+                    TokenKind::Less
+            '>' =>
+                if self.peek() == '=':
+                    self.advance()
+                    TokenKind::GreaterEq
+                elif self.peek() == '>':
+                    self.advance()
+                    if self.peek() == '=':
+                        self.advance()
+                        TokenKind::ShiftRightEq
+                    else:
+                        TokenKind::ShiftRight
+                else:
+                    TokenKind::Greater
+            '&' =>
+                if self.peek() == '&':
+                    self.advance()
+                    TokenKind::AmpAmp
+                elif self.peek() == '=':
+                    self.advance()
+                    TokenKind::AmpEq
+                else:
+                    TokenKind::Amp
+            '|' =>
+                if self.peek() == '|':
+                    self.advance()
+                    TokenKind::PipePipe
+                elif self.peek() == '>':
+                    self.advance()
+                    TokenKind::PipeGreater
+                elif self.peek() == '=':
+                    self.advance()
+                    TokenKind::PipeEq
+                else:
+                    TokenKind::Pipe
+            '^' =>
+                if self.peek() == '=':
+                    self.advance()
+                    TokenKind::CaretEq
+                else:
+                    TokenKind::Caret
+            '~' => TokenKind::Tilde
+            '?' => TokenKind::Question
+            '@' => TokenKind::At
+            '.' =>
+                if self.peek() == '.' and self.peek_ahead(1) == '.':
+                    self.advance()
+                    self.advance()
+                    TokenKind::Ellipsis
+                elif self.peek() == '.' and self.peek_ahead(1) == '=':
+                    self.advance()
+                    self.advance()
+                    TokenKind::DotDotEq
+                elif self.peek() == '.':
+                    self.advance()
+                    TokenKind::DotDot
+                else:
+                    TokenKind::Dot
+            ':' =>
+                if self.peek() == ':':
+                    self.advance()
+                    TokenKind::ColonColon
+                else:
+                    TokenKind::Colon
+            ';' => TokenKind::Semicolon
+            ',' => TokenKind::Comma
+            '(' =>
+                self.paren_depth += 1
+                TokenKind::LeftParen
+            ')' =>
+                if self.paren_depth > 0:
+                    self.paren_depth -= 1
+                TokenKind::RightParen
+            '[' =>
+                self.paren_depth += 1
+                TokenKind::LeftBracket
+            ']' =>
+                if self.paren_depth > 0:
+                    self.paren_depth -= 1
+                TokenKind::RightBracket
+            '{' =>
+                self.paren_depth += 1
+                TokenKind::LeftBrace
+            '}' =>
+                if self.paren_depth > 0:
+                    self.paren_depth -= 1
+                TokenKind::RightBrace
+            '_' =>
+                # Check if standalone underscore or start of identifier
+                if is_ident_continue(self.peek()):
+                    # It's actually part of an identifier, back up
+                    let mut name = String::from("_")
+                    while not self.is_at_end() and is_ident_continue(self.peek()):
+                        name.push(self.advance())
+                    let span = self.make_span(start_pos, start_line, start_col)
+                    self.emit(TokenKind::Identifier(name), span)
+                    return Ok(())
+                else:
+                    TokenKind::Underscore
+            _ =>
+                self.errors.push(LexerError::UnexpectedChar(c, start_line, start_col))
+                return Err(LexerError::UnexpectedChar(c, start_line, start_col))
+
+        let span = self.make_span(start_pos, start_line, start_col)
+        self.emit(kind, span)
+        return Ok(())
+
+    # --- Token Emission ---
+
+    fn emit(&mut self, kind: TokenKind, span: Span):
+        self.tokens.push(Token::new(kind, span))
+
+    # --- Error Recovery ---
+
+    fn skip_to_next_line(&mut self):
+        while not self.is_at_end() and self.peek() != '\n':
+            self.advance()
+
+    fn synchronize(&mut self):
+        # Skip until we find a sensible recovery point
+        while not self.is_at_end():
+            let c = self.peek()
+            if c == '\n':
+                return
+            if is_ident_start(c):
+                # Peek at the identifier to see if it's a keyword we can restart from
+                let mut word = String::new()
+                let saved_index = self.index
+                let saved_pos = self.pos
+                let saved_line = self.line
+                let saved_col = self.column
+                while not self.is_at_end() and is_ident_continue(self.peek()):
+                    word.push(self.advance())
+                match word.as_str():
+                    "fn" | "struct" | "enum" | "trait" | "impl" | "let" |
+                    "if" | "for" | "while" | "match" | "return" | "import" =>
+                        # Reset to start of keyword and return
+                        self.index = saved_index
+                        self.pos = saved_pos
+                        self.line = saved_line
+                        self.column = saved_col
+                        return
+                    _ =>
+                        continue
+            self.advance()
+
+# --- Public API ---
+
+fn tokenize(source: str) -> LexResult:
+    return tokenize_with_file_id(source, 0)
+
+fn tokenize_with_file_id(source: str, file_id: u32) -> LexResult:
+    let mut lexer = Lexer::new(source, file_id)
+    return lexer.tokenize()
+
+# --- Helper: Power function for float exponents ---
+
+fn pow(base: f64, exp: f64) -> f64:
+    if exp == 0.0:
+        return 1.0
+    if exp < 0.0:
+        return 1.0 / pow(base, -exp)
+    let mut result = 1.0
+    let mut e = exp as u64
+    let mut b = base
+    while e > 0:
+        if e % 2 == 1:
+            result *= b
+        b *= b
+        e /= 2
+    return result
+
+# ============================================================================
+# Tests
+# ============================================================================
+
+fn test_tokenize_empty():
+    let tokens = tokenize("").unwrap()
+    assert_eq(tokens.len(), 1)  # just EOF
+    match tokens[0].kind:
+        TokenKind::Eof => pass
+        _ => panic("expected EOF")
+
+fn test_tokenize_integers():
+    let tokens = tokenize("42 0xFF 0b1010 0o77 1_000_000").unwrap()
+    assert_eq(tokens[0].kind, TokenKind::IntLiteral(42))
+    assert_eq(tokens[1].kind, TokenKind::IntLiteral(255))
+    assert_eq(tokens[2].kind, TokenKind::IntLiteral(10))
+    assert_eq(tokens[3].kind, TokenKind::IntLiteral(63))
+    assert_eq(tokens[4].kind, TokenKind::IntLiteral(1000000))
+
+fn test_tokenize_floats():
+    let tokens = tokenize("3.14 1e-6 2.5E+10").unwrap()
+    match tokens[0].kind:
+        TokenKind::FloatLiteral(v) => assert_near(v, 3.14, 1e-10)
+        _ => panic("expected float")
+    match tokens[1].kind:
+        TokenKind::FloatLiteral(v) => assert_near(v, 1e-6, 1e-15)
+        _ => panic("expected float")
+
+fn test_tokenize_strings():
+    let tokens = tokenize("\"hello world\" \"with\\nnewline\"").unwrap()
+    assert_eq(tokens[0].kind, TokenKind::StringLiteral("hello world"))
+    assert_eq(tokens[1].kind, TokenKind::StringLiteral("with\nnewline"))
+
+fn test_tokenize_triple_string():
+    let source = "\"\"\"multi\nline\nstring\"\"\""
+    let tokens = tokenize(source).unwrap()
+    assert_eq(tokens[0].kind, TokenKind::StringLiteral("multi\nline\nstring"))
+
+fn test_tokenize_chars():
+    let tokens = tokenize("'a' '\\n' '\\x41'").unwrap()
+    assert_eq(tokens[0].kind, TokenKind::CharLiteral('a'))
+    assert_eq(tokens[1].kind, TokenKind::CharLiteral('\n'))
+    assert_eq(tokens[2].kind, TokenKind::CharLiteral('A'))
+
+fn test_tokenize_keywords():
+    let tokens = tokenize("fn let mut if else for while return struct trait impl").unwrap()
+    assert_eq(tokens[0].kind, TokenKind::KwFn)
+    assert_eq(tokens[1].kind, TokenKind::KwLet)
+    assert_eq(tokens[2].kind, TokenKind::KwMut)
+    assert_eq(tokens[3].kind, TokenKind::KwIf)
+    assert_eq(tokens[4].kind, TokenKind::KwElse)
+    assert_eq(tokens[5].kind, TokenKind::KwFor)
+    assert_eq(tokens[6].kind, TokenKind::KwWhile)
+    assert_eq(tokens[7].kind, TokenKind::KwReturn)
+    assert_eq(tokens[8].kind, TokenKind::KwStruct)
+    assert_eq(tokens[9].kind, TokenKind::KwTrait)
+    assert_eq(tokens[10].kind, TokenKind::KwImpl)
+
+fn test_tokenize_operators():
+    let tokens = tokenize("+ - * / == != <= >= -> => :: .. ..= |> ? && || += -= <<= >>=").unwrap()
+    assert_eq(tokens[0].kind, TokenKind::Plus)
+    assert_eq(tokens[1].kind, TokenKind::Minus)
+    assert_eq(tokens[2].kind, TokenKind::Star)
+    assert_eq(tokens[3].kind, TokenKind::Slash)
+    assert_eq(tokens[4].kind, TokenKind::EqEq)
+    assert_eq(tokens[5].kind, TokenKind::NotEq)
+    assert_eq(tokens[6].kind, TokenKind::LessEq)
+    assert_eq(tokens[7].kind, TokenKind::GreaterEq)
+    assert_eq(tokens[8].kind, TokenKind::Arrow)
+    assert_eq(tokens[9].kind, TokenKind::FatArrow)
+    assert_eq(tokens[10].kind, TokenKind::ColonColon)
+    assert_eq(tokens[11].kind, TokenKind::DotDot)
+    assert_eq(tokens[12].kind, TokenKind::DotDotEq)
+    assert_eq(tokens[13].kind, TokenKind::PipeGreater)
+    assert_eq(tokens[14].kind, TokenKind::Question)
+
+fn test_tokenize_indentation():
+    let source = "fn foo():\n    let x = 1\n    let y = 2\n"
+    let tokens = tokenize(source).unwrap()
+    # Should have: fn, foo, (, ), :, NEWLINE, INDENT, let, x, =, 1, NEWLINE, let, y, =, 2, NEWLINE, DEDENT, EOF
+    let mut found_indent = false
+    let mut found_dedent = false
+    for tok in tokens:
+        match tok.kind:
+            TokenKind::Indent => found_indent = true
+            TokenKind::Dedent => found_dedent = true
+            _ => pass
+    assert_eq(found_indent, true)
+    assert_eq(found_dedent, true)
+
+fn test_tokenize_nested_indentation():
+    let source = "if a:\n    if b:\n        x = 1\n    y = 2\nz = 3\n"
+    let tokens = tokenize(source).unwrap()
+    let mut indent_count: u32 = 0
+    let mut dedent_count: u32 = 0
+    for tok in tokens:
+        match tok.kind:
+            TokenKind::Indent => indent_count += 1
+            TokenKind::Dedent => dedent_count += 1
+            _ => pass
+    assert_eq(indent_count, 2)
+    assert_eq(dedent_count, 2)
+
+fn test_tokenize_parens_suppress_indent():
+    let source = "foo(\n    1,\n    2\n)\n"
+    let tokens = tokenize(source).unwrap()
+    # Inside parens, no INDENT/DEDENT should be emitted
+    for tok in tokens:
+        match tok.kind:
+            TokenKind::Indent => panic("should not emit INDENT inside parens")
+            TokenKind::Dedent => panic("should not emit DEDENT inside parens")
+            _ => pass
+
+fn test_tokenize_line_comment():
+    let tokens = tokenize("42 # comment\n43").unwrap()
+    assert_eq(tokens[0].kind, TokenKind::IntLiteral(42))
+    # The 43 should be present after comment is stripped
+    let mut found_43 = false
+    for tok in tokens:
+        match tok.kind:
+            TokenKind::IntLiteral(43) => found_43 = true
+            _ => pass
+    assert_eq(found_43, true)
+
+fn test_tokenize_block_comment():
+    let tokens = tokenize("1 #* block\ncomment *# 2").unwrap()
+    assert_eq(tokens[0].kind, TokenKind::IntLiteral(1))
+    let mut found_2 = false
+    for tok in tokens:
+        match tok.kind:
+            TokenKind::IntLiteral(2) => found_2 = true
+            _ => pass
+    assert_eq(found_2, true)
+
+fn test_tokenize_function_def():
+    let source = "fn add(a: i32, b: i32) -> i32:\n    return a + b\n"
+    let tokens = tokenize(source).unwrap()
+    assert_eq(tokens[0].kind, TokenKind::KwFn)
+    assert_eq(tokens[1].kind, TokenKind::Identifier("add"))
+    assert_eq(tokens[2].kind, TokenKind::LeftParen)
+
+fn test_tokenize_struct_def():
+    let source = "struct Point:\n    x: f64\n    y: f64\n"
+    let tokens = tokenize(source).unwrap()
+    assert_eq(tokens[0].kind, TokenKind::KwStruct)
+    assert_eq(tokens[1].kind, TokenKind::Identifier("Point"))
+    assert_eq(tokens[2].kind, TokenKind::Colon)
+
+fn test_tokenize_error_unexpected_char():
+    let result = tokenize("let x = $")
+    match result:
+        Err(LexerError::UnexpectedChar('$', _, _)) => pass
+        _ => panic("expected UnexpectedChar error")
+
+fn test_tokenize_error_unterminated_string():
+    let result = tokenize("\"hello")
+    match result:
+        Err(LexerError::UnterminatedString(_, _)) => pass
+        _ => panic("expected UnterminatedString error")
+
+fn test_tokenize_unicode_escape():
+    let tokens = tokenize("\"\\u{1F600}\"").unwrap()
+    match tokens[0].kind:
+        TokenKind::StringLiteral(s) =>
+            assert_eq(s.len(), 4)  # UTF-8 length of U+1F600
+        _ => panic("expected string literal")
+
+fn test_tokenize_identifiers():
+    let tokens = tokenize("foo _bar baz_42 __private").unwrap()
+    assert_eq(tokens[0].kind, TokenKind::Identifier("foo"))
+    assert_eq(tokens[1].kind, TokenKind::Identifier("_bar"))
+    assert_eq(tokens[2].kind, TokenKind::Identifier("baz_42"))
+    assert_eq(tokens[3].kind, TokenKind::Identifier("__private"))
+
+fn test_tokenize_all_assignment_ops():
+    let tokens = tokenize("+= -= *= /= %= &= |= ^= <<= >>=").unwrap()
+    assert_eq(tokens[0].kind, TokenKind::PlusEq)
+    assert_eq(tokens[1].kind, TokenKind::MinusEq)
+    assert_eq(tokens[2].kind, TokenKind::StarEq)
+    assert_eq(tokens[3].kind, TokenKind::SlashEq)
+    assert_eq(tokens[4].kind, TokenKind::PercentEq)
+    assert_eq(tokens[5].kind, TokenKind::AmpEq)
+    assert_eq(tokens[6].kind, TokenKind::PipeEq)
+    assert_eq(tokens[7].kind, TokenKind::CaretEq)
+    assert_eq(tokens[8].kind, TokenKind::ShiftLeftEq)
+    assert_eq(tokens[9].kind, TokenKind::ShiftRightEq)
+
+fn test_tokenize_match_expression():
+    let source = "match x:\n    0 => print(\"zero\")\n    _ => print(\"other\")\n"
+    let tokens = tokenize(source).unwrap()
+    assert_eq(tokens[0].kind, TokenKind::KwMatch)
+    # Verify fat arrow is present
+    let mut found_fat_arrow = false
+    for tok in tokens:
+        match tok.kind:
+            TokenKind::FatArrow => found_fat_arrow = true
+            _ => pass
+    assert_eq(found_fat_arrow, true)
+
+fn test_tokenize_ellipsis():
+    let tokens = tokenize("fn foo(args...)").unwrap()
+    let mut found_ellipsis = false
+    for tok in tokens:
+        match tok.kind:
+            TokenKind::Ellipsis => found_ellipsis = true
+            _ => pass
+    assert_eq(found_ellipsis, true)
+
+fn test_tokenize_complex_program():
+    let source = """
+module test
+
+import std::collections::Vector
+
+struct Stack<T>:
+    items: Vector<T>
+
+    fn push(&mut self, item: T):
+        self.items.push(item)
+
+    fn pop(&mut self) -> Option<T>:
+        return self.items.pop()
+
+fn main():
+    let mut s = Stack::new()
+    s.push(42)
+    match s.pop():
+        Some(v) => print(v)
+        None => print("empty")
+"""
+    let tokens = tokenize(source).unwrap()
+    # Should tokenize without error
+    let last = tokens.last().unwrap()
+    assert_eq(last.kind, TokenKind::Eof)

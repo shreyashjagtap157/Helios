@@ -1,0 +1,1324 @@
+module compiler::semantic
+
+# ============================================================================
+# Omni Semantic Analyzer — Symbol Resolution, Type Checking, Validation
+# ============================================================================
+
+import compiler::lexer::token::{Span, TokenKind}
+import compiler::parser::ast::{
+    Program, Item, FunctionDef, StructDef, EnumDef, TraitDef, ImplBlock,
+    TypeAliasDef, ConstDef, StaticDef, ModuleDef, ExternBlock, ExternFn,
+    TypeExpr, NamedType, FnTypeExpr, RefTypeExpr, TraitObjectType, TypePath,
+    Expr, BinaryExpr, BinaryOp, UnaryExpr, UnaryOp, AssignExpr, AssignOp,
+    CallExpr, MethodCallExpr, FieldInit,
+    Pattern, LiteralPattern, StructPattern, EnumPattern,
+    Stmt, LetStmt, IfStmt, ForStmt, WhileStmt, MatchStmt, Block,
+    Param, SelfKind, GenericParam, GenericParamKind,
+    Visibility, NodeId, Attribute,
+}
+import compiler::semantic::types::{
+    Type, TypeId, TypeTable, FunctionSig, StructType, EnumType, TraitType,
+    TypeVar, Constraint, Substitution,
+}
+
+# --- Diagnostic Severity ---
+
+enum Severity:
+    Error
+    Warning
+    Info
+
+# --- Semantic Error ---
+
+struct SemanticError:
+    message: str
+    span: Span
+    severity: Severity
+    notes: Vector<str>
+
+    fn new(msg: str, span: Span) -> own Self:
+        return SemanticError {
+            message: msg, span: span,
+            severity: Severity::Error,
+            notes: Vector::new(),
+        }
+
+    fn warning(msg: str, span: Span) -> own Self:
+        return SemanticError {
+            message: msg, span: span,
+            severity: Severity::Warning,
+            notes: Vector::new(),
+        }
+
+    fn with_note(mut self, note: str) -> own Self:
+        self.notes.push(note)
+        return self
+
+type SemanticResult<T> = Result<T, SemanticError>
+
+# --- Symbol Kind ---
+
+enum SymbolKind:
+    Variable(TypeId, bool)       # type, is_mutable
+    Function(FunctionSig)
+    Struct(TypeId)
+    Enum(TypeId)
+    Trait(TypeId)
+    TypeAlias(TypeId)
+    Const(TypeId)
+    Static(TypeId, bool)         # type, is_thread_local
+    Module(ScopeId)
+    GenericParam(TypeId)
+    Field(TypeId, u32)           # type, index
+    EnumVariant(TypeId, u32)     # parent_type, variant_index
+    ClosureCapture(TypeId, bool) # type, is_mutable
+    Lifetime(str)
+    Label(str)
+    Extern(FunctionSig)
+
+# --- Symbol ---
+
+struct Symbol:
+    name: str
+    kind: SymbolKind
+    visibility: Visibility
+    span: Span
+    node_id: NodeId
+    is_used: bool
+
+    fn new(name: str, kind: SymbolKind, vis: Visibility, span: Span, id: NodeId) -> own Self:
+        return Symbol {
+            name: name, kind: kind, visibility: vis,
+            span: span, node_id: id, is_used: false,
+        }
+
+    fn type_id(&self) -> Option<TypeId>:
+        match &self.kind:
+            SymbolKind::Variable(tid, _) => Some(*tid)
+            SymbolKind::Function(sig) => Some(sig.return_type)
+            SymbolKind::Struct(tid) => Some(*tid)
+            SymbolKind::Enum(tid) => Some(*tid)
+            SymbolKind::Trait(tid) => Some(*tid)
+            SymbolKind::TypeAlias(tid) => Some(*tid)
+            SymbolKind::Const(tid) => Some(*tid)
+            SymbolKind::Static(tid, _) => Some(*tid)
+            SymbolKind::GenericParam(tid) => Some(*tid)
+            SymbolKind::Field(tid, _) => Some(*tid)
+            SymbolKind::EnumVariant(tid, _) => Some(*tid)
+            SymbolKind::ClosureCapture(tid, _) => Some(*tid)
+            _ => None
+
+# --- Scope ---
+
+type ScopeId = u32
+
+enum ScopeKind:
+    Module
+    Function
+    Block
+    Loop
+    Closure
+    Impl
+    Trait
+
+struct Scope:
+    id: ScopeId
+    parent: Option<ScopeId>
+    kind: ScopeKind
+    symbols: HashMap<str, Symbol>
+    children: Vector<ScopeId>
+    return_type: Option<TypeId>
+    self_type: Option<TypeId>
+    impl_trait: Option<TypeId>
+
+    fn new(id: ScopeId, parent: Option<ScopeId>, kind: ScopeKind) -> own Self:
+        return Scope {
+            id: id, parent: parent, kind: kind,
+            symbols: HashMap::new(),
+            children: Vector::new(),
+            return_type: None, self_type: None,
+            impl_trait: None,
+        }
+
+# --- Symbol Table ---
+
+struct SymbolTable:
+    scopes: Vector<Scope>
+    current_scope: ScopeId
+    next_scope_id: ScopeId
+
+    fn new() -> own Self:
+        let global = Scope::new(0, None, ScopeKind::Module)
+        return SymbolTable {
+            scopes: Vector::from([global]),
+            current_scope: 0,
+            next_scope_id: 1,
+        }
+
+    fn push_scope(&mut self, kind: ScopeKind) -> ScopeId:
+        let id = self.next_scope_id
+        self.next_scope_id += 1
+        let new_scope = Scope::new(id, Some(self.current_scope), kind)
+        self.scopes.push(new_scope)
+        self.scopes[self.current_scope as usize].children.push(id)
+        self.current_scope = id
+        return id
+
+    fn pop_scope(&mut self):
+        match self.scopes[self.current_scope as usize].parent:
+            Some(parent) => self.current_scope = parent
+            None => pass  # Already at global scope
+
+    fn define(&mut self, sym: Symbol) -> SemanticResult<()>:
+        let scope = &mut self.scopes[self.current_scope as usize]
+        if scope.symbols.contains_key(&sym.name):
+            let existing = &scope.symbols[&sym.name]
+            return Err(SemanticError::new(
+                format("'{}' is already defined in this scope (first defined at {}:{})",
+                    sym.name, existing.span.line, existing.span.column),
+                sym.span,
+            ))
+        scope.symbols.insert(sym.name.clone(), sym)
+        return Ok(())
+
+    fn lookup(&self, name: &str) -> Option<&Symbol>:
+        let mut scope_id = self.current_scope
+        loop:
+            let scope = &self.scopes[scope_id as usize]
+            if let Some(sym) = scope.symbols.get(name):
+                return Some(sym)
+            match scope.parent:
+                Some(parent) => scope_id = parent
+                None => return None
+
+    fn lookup_in_scope(&self, name: &str, scope_id: ScopeId) -> Option<&Symbol>:
+        let scope = &self.scopes[scope_id as usize]
+        return scope.symbols.get(name)
+
+    fn current(&self) -> &Scope:
+        return &self.scopes[self.current_scope as usize]
+
+    fn current_mut(&mut self) -> &mut Scope:
+        return &mut self.scopes[self.current_scope as usize]
+
+    fn mark_used(&mut self, name: &str):
+        let mut scope_id = self.current_scope
+        loop:
+            let scope = &mut self.scopes[scope_id as usize]
+            if let Some(sym) = scope.symbols.get_mut(name):
+                sym.is_used = true
+                return
+            match scope.parent:
+                Some(parent) => scope_id = parent
+                None => return
+
+    fn in_loop(&self) -> bool:
+        let mut scope_id = self.current_scope
+        loop:
+            let scope = &self.scopes[scope_id as usize]
+            match scope.kind:
+                ScopeKind::Loop => return true
+                ScopeKind::Function | ScopeKind::Closure => return false
+                _ => pass
+            match scope.parent:
+                Some(parent) => scope_id = parent
+                None => return false
+
+    fn return_type(&self) -> Option<TypeId>:
+        let mut scope_id = self.current_scope
+        loop:
+            let scope = &self.scopes[scope_id as usize]
+            if scope.return_type.is_some():
+                return scope.return_type
+            match scope.parent:
+                Some(parent) => scope_id = parent
+                None => return None
+
+    fn self_type(&self) -> Option<TypeId>:
+        let mut scope_id = self.current_scope
+        loop:
+            let scope = &self.scopes[scope_id as usize]
+            if scope.self_type.is_some():
+                return scope.self_type
+            match scope.parent:
+                Some(parent) => scope_id = parent
+                None => return None
+
+# --- Semantic Analyzer ---
+
+struct Analyzer:
+    symbols: SymbolTable
+    types: TypeTable
+    errors: Vector<SemanticError>
+    warnings: Vector<SemanticError>
+    next_type_var: u32
+
+    fn new() -> own Self:
+        let mut types = TypeTable::new()
+        return Analyzer {
+            symbols: SymbolTable::new(),
+            types: types,
+            errors: Vector::new(),
+            warnings: Vector::new(),
+            next_type_var: 0,
+        }
+
+    fn fresh_type_var(&mut self) -> TypeId:
+        let id = self.next_type_var
+        self.next_type_var += 1
+        return self.types.add_var(id)
+
+    fn error(&mut self, msg: str, span: Span):
+        self.errors.push(SemanticError::new(msg, span))
+
+    fn warning(&mut self, msg: str, span: Span):
+        self.warnings.push(SemanticError::warning(msg, span))
+
+    fn has_errors(&self) -> bool:
+        return not self.errors.is_empty()
+
+    # ====================================================================
+    # Phase 1: Symbol Collection
+    # ====================================================================
+
+    fn collect_symbols(&mut self, program: &Program) -> SemanticResult<()>:
+        # First pass: register all top-level names
+        for item in &program.items:
+            self.collect_item_symbol(item)?
+        return Ok(())
+
+    fn collect_item_symbol(&mut self, item: &Item) -> SemanticResult<()>:
+        match item:
+            Item::Function(f) =>
+                let sig = self.function_sig_from_def(f)?
+                let sym = Symbol::new(
+                    f.name.clone(), SymbolKind::Function(sig),
+                    f.visibility.clone(), f.span.clone(), f.id,
+                )
+                self.symbols.define(sym)?
+            Item::Struct(s) =>
+                let tid = self.register_struct_type(s)?
+                let sym = Symbol::new(
+                    s.name.clone(), SymbolKind::Struct(tid),
+                    s.visibility.clone(), s.span.clone(), s.id,
+                )
+                self.symbols.define(sym)?
+            Item::Enum(e) =>
+                let tid = self.register_enum_type(e)?
+                let sym = Symbol::new(
+                    e.name.clone(), SymbolKind::Enum(tid),
+                    e.visibility.clone(), e.span.clone(), e.id,
+                )
+                self.symbols.define(sym)?
+            Item::Trait(t) =>
+                let tid = self.register_trait_type(t)?
+                let sym = Symbol::new(
+                    t.name.clone(), SymbolKind::Trait(tid),
+                    t.visibility.clone(), t.span.clone(), t.id,
+                )
+                self.symbols.define(sym)?
+            Item::TypeAlias(ta) =>
+                let tid = self.resolve_type_expr(&ta.ty)?
+                let sym = Symbol::new(
+                    ta.name.clone(), SymbolKind::TypeAlias(tid),
+                    ta.visibility.clone(), ta.span.clone(), ta.id,
+                )
+                self.symbols.define(sym)?
+            Item::Const(c) =>
+                let tid = match &c.ty:
+                    Some(te) => self.resolve_type_expr(te)?
+                    None => self.fresh_type_var()
+                let sym = Symbol::new(
+                    c.name.clone(), SymbolKind::Const(tid),
+                    c.visibility.clone(), c.span.clone(), c.id,
+                )
+                self.symbols.define(sym)?
+            Item::Static(s) =>
+                let tid = self.resolve_type_expr(&s.ty)?
+                let sym = Symbol::new(
+                    s.name.clone(), SymbolKind::Static(tid, s.is_thread_local),
+                    s.visibility.clone(), s.span.clone(), s.id,
+                )
+                self.symbols.define(sym)?
+            Item::Module(m) =>
+                let scope_id = self.symbols.push_scope(ScopeKind::Module)
+                for inner_item in &m.items:
+                    self.collect_item_symbol(inner_item)?
+                self.symbols.pop_scope()
+                let sym = Symbol::new(
+                    m.name.clone(), SymbolKind::Module(scope_id),
+                    m.visibility.clone(), m.span.clone(), m.id,
+                )
+                self.symbols.define(sym)?
+            Item::ExternBlock(eb) =>
+                for ef in &eb.functions:
+                    let sig = self.extern_fn_sig(ef)?
+                    let sym = Symbol::new(
+                        ef.name.clone(), SymbolKind::Extern(sig),
+                        Visibility::Public, ef.span.clone(), NodeId(0),
+                    )
+                    self.symbols.define(sym)?
+            Item::Impl(_) => pass  # Handled in Phase 2
+            Item::Macro(_) => pass
+            Item::Use(_) => pass
+
+    fn function_sig_from_def(&mut self, f: &FunctionDef) -> SemanticResult<FunctionSig>:
+        let mut param_types = Vector::new()
+        for p in &f.params:
+            let tid = self.resolve_type_expr(&p.ty)?
+            param_types.push(tid)
+        let return_type = match &f.return_type:
+            Some(rt) => self.resolve_type_expr(rt)?
+            None => self.types.unit()
+        return Ok(FunctionSig {
+            name: f.name.clone(),
+            param_types: param_types,
+            return_type: return_type,
+            is_async: f.is_async,
+            generic_params: f.generic_params.len() as u32,
+        })
+
+    fn extern_fn_sig(&mut self, ef: &ExternFn) -> SemanticResult<FunctionSig>:
+        let mut param_types = Vector::new()
+        for p in &ef.params:
+            let tid = self.resolve_type_expr(&p.ty)?
+            param_types.push(tid)
+        let return_type = match &ef.return_type:
+            Some(rt) => self.resolve_type_expr(rt)?
+            None => self.types.unit()
+        return Ok(FunctionSig {
+            name: ef.name.clone(),
+            param_types: param_types,
+            return_type: return_type,
+            is_async: false,
+            generic_params: 0,
+        })
+
+    fn register_struct_type(&mut self, s: &StructDef) -> SemanticResult<TypeId>:
+        let mut field_types = Vector::new()
+        let mut field_names = Vector::new()
+        for f in &s.fields:
+            let tid = self.resolve_type_expr(&f.ty)?
+            field_types.push(tid)
+            field_names.push(f.name.clone())
+        return Ok(self.types.add_struct(StructType {
+            name: s.name.clone(),
+            field_names: field_names,
+            field_types: field_types,
+            generic_params: s.generic_params.len() as u32,
+        }))
+
+    fn register_enum_type(&mut self, e: &EnumDef) -> SemanticResult<TypeId>:
+        return Ok(self.types.add_enum(EnumType {
+            name: e.name.clone(),
+            variant_count: e.variants.len() as u32,
+            generic_params: e.generic_params.len() as u32,
+        }))
+
+    fn register_trait_type(&mut self, t: &TraitDef) -> SemanticResult<TypeId>:
+        return Ok(self.types.add_trait(TraitType {
+            name: t.name.clone(),
+            method_count: t.methods.len() as u32,
+            generic_params: t.generic_params.len() as u32,
+        }))
+
+    # ====================================================================
+    # Phase 2: Type Resolution & Checking
+    # ====================================================================
+
+    fn analyze(&mut self, program: &Program) -> SemanticResult<()>:
+        # Phase 1: Collect all symbols
+        self.collect_symbols(program)?
+
+        # Phase 2: Resolve impl blocks
+        for item in &program.items:
+            match item:
+                Item::Impl(impl_block) =>
+                    self.check_impl_block(impl_block)?
+                _ => pass
+
+        # Phase 3: Check function bodies
+        for item in &program.items:
+            self.check_item(item)?
+
+        # Phase 4: Check unused symbols
+        self.check_unused_symbols()
+
+        return Ok(())
+
+    fn check_item(&mut self, item: &Item) -> SemanticResult<()>:
+        match item:
+            Item::Function(f) => self.check_function(f)?
+            Item::Struct(s) => self.check_struct(s)?
+            Item::Enum(e) => self.check_enum(e)?
+            Item::Impl(i) => self.check_impl_methods(i)?
+            Item::Const(c) => self.check_const(c)?
+            Item::Static(s) => self.check_static(s)?
+            _ => pass
+        return Ok(())
+
+    fn check_function(&mut self, f: &FunctionDef) -> SemanticResult<()>:
+        self.symbols.push_scope(ScopeKind::Function)
+
+        # Register generic parameters
+        for gp in &f.generic_params:
+            let tid = self.fresh_type_var()
+            let sym = Symbol::new(
+                gp.name.clone(), SymbolKind::GenericParam(tid),
+                Visibility::Private, gp.span.clone(), NodeId(0),
+            )
+            self.symbols.define(sym)?
+
+        # Register parameters
+        for p in &f.params:
+            let tid = self.resolve_type_expr(&p.ty)?
+            let is_mut = p.is_self and match &p.self_kind:
+                Some(SelfKind::RefMut) => true
+                _ => false
+            let sym = Symbol::new(
+                p.name.clone(), SymbolKind::Variable(tid, is_mut or false),
+                Visibility::Private, p.span.clone(), NodeId(0),
+            )
+            self.symbols.define(sym)?
+
+        # Set return type for this scope
+        let return_tid = match &f.return_type:
+            Some(rt) => self.resolve_type_expr(rt)?
+            None => self.types.unit()
+        self.symbols.current_mut().return_type = Some(return_tid)
+
+        # Check body
+        self.check_block(&f.body)?
+
+        self.symbols.pop_scope()
+        return Ok(())
+
+    fn check_struct(&mut self, s: &StructDef) -> SemanticResult<()>:
+        # Check for recursive types without indirection
+        for f in &s.fields:
+            match &f.ty:
+                TypeExpr::Named(nt) =>
+                    if nt.name == s.name and nt.type_args.is_empty():
+                        self.error(
+                            format("struct '{}' has infinite size (field '{}' refers to itself without indirection)",
+                                s.name, f.name),
+                            f.span.clone(),
+                        )
+                _ => pass
+        return Ok(())
+
+    fn check_enum(&mut self, e: &EnumDef) -> SemanticResult<()>:
+        # Validate variant names are unique
+        let mut seen = HashMap::new()
+        for v in &e.variants:
+            if seen.contains_key(&v.name):
+                self.error(
+                    format("duplicate enum variant '{}'", v.name),
+                    v.span.clone(),
+                )
+            seen.insert(v.name.clone(), true)
+        return Ok(())
+
+    fn check_impl_block(&mut self, impl_block: &ImplBlock) -> SemanticResult<()>:
+        let target_tid = self.resolve_type_expr(&impl_block.target_type)?
+        let trait_tid = match &impl_block.trait_type:
+            Some(tt) => Some(self.resolve_type_expr(tt)?)
+            None => None
+
+        # Register impl block with type table
+        self.types.register_impl(target_tid, trait_tid, impl_block)?
+        return Ok(())
+
+    fn check_impl_methods(&mut self, impl_block: &ImplBlock) -> SemanticResult<()>:
+        let target_tid = self.resolve_type_expr(&impl_block.target_type)?
+        let trait_tid = match &impl_block.trait_type:
+            Some(tt) => Some(self.resolve_type_expr(tt)?)
+            None => None
+
+        self.symbols.push_scope(ScopeKind::Impl)
+        self.symbols.current_mut().self_type = Some(target_tid)
+        self.symbols.current_mut().impl_trait = trait_tid
+
+        for method in &impl_block.methods:
+            self.check_function(method)?
+
+        # Verify all trait methods are implemented
+        if let Some(tid) = trait_tid:
+            self.verify_trait_impl(tid, impl_block)?
+
+        self.symbols.pop_scope()
+        return Ok(())
+
+    fn verify_trait_impl(&mut self, trait_tid: TypeId, impl_block: &ImplBlock) -> SemanticResult<()>:
+        let trait_info = self.types.get_trait(trait_tid)
+        if trait_info.is_none():
+            return Ok(())
+        # Check all required methods are present
+        # (Detailed verification delegated to trait resolution pass)
+        return Ok(())
+
+    fn check_const(&mut self, c: &ConstDef) -> SemanticResult<()>:
+        let value_tid = self.check_expr(&c.value)?
+        if let Some(ref ty) = c.ty:
+            let expected_tid = self.resolve_type_expr(ty)?
+            self.unify(expected_tid, value_tid, c.span.clone())?
+        return Ok(())
+
+    fn check_static(&mut self, s: &StaticDef) -> SemanticResult<()>:
+        let expected_tid = self.resolve_type_expr(&s.ty)?
+        let value_tid = self.check_expr(&s.value)?
+        self.unify(expected_tid, value_tid, s.span.clone())?
+        return Ok(())
+
+    # ====================================================================
+    # Statement Checking
+    # ====================================================================
+
+    fn check_block(&mut self, block: &Block) -> SemanticResult<Option<TypeId>>:
+        self.symbols.push_scope(ScopeKind::Block)
+        let mut last_type = None
+        for stmt in &block.stmts:
+            last_type = self.check_stmt(stmt)?
+        self.symbols.pop_scope()
+        return Ok(last_type)
+
+    fn check_stmt(&mut self, stmt: &Stmt) -> SemanticResult<Option<TypeId>>:
+        match stmt:
+            Stmt::Let(let_stmt) =>
+                self.check_let(let_stmt)?
+                return Ok(None)
+            Stmt::Expr(expr) =>
+                let tid = self.check_expr(expr)?
+                return Ok(Some(tid))
+            Stmt::Assign(assign) =>
+                self.check_assignment(assign)?
+                return Ok(None)
+            Stmt::Return(value, span) =>
+                let ret_type = self.symbols.return_type()
+                match value:
+                    Some(expr) =>
+                        let tid = self.check_expr(expr)?
+                        if let Some(expected) = ret_type:
+                            self.unify(expected, tid, span.clone())?
+                    None =>
+                        if let Some(expected) = ret_type:
+                            let unit = self.types.unit()
+                            self.unify(expected, unit, span.clone())?
+                return Ok(None)
+            Stmt::Break(value, span) =>
+                if not self.symbols.in_loop():
+                    self.error("'break' outside of loop", span.clone())
+                if let Some(expr) = value:
+                    self.check_expr(expr)?
+                return Ok(None)
+            Stmt::Continue(span) =>
+                if not self.symbols.in_loop():
+                    self.error("'continue' outside of loop", span.clone())
+                return Ok(None)
+            Stmt::Yield(value, span) =>
+                if let Some(expr) = value:
+                    self.check_expr(expr)?
+                return Ok(None)
+            Stmt::Pass(_) =>
+                return Ok(None)
+            Stmt::If(if_stmt) =>
+                return self.check_if_stmt(if_stmt)
+            Stmt::For(for_stmt) =>
+                self.check_for_stmt(for_stmt)?
+                return Ok(None)
+            Stmt::While(while_stmt) =>
+                self.check_while_stmt(while_stmt)?
+                return Ok(None)
+            Stmt::Loop(loop_stmt) =>
+                self.check_loop_stmt(loop_stmt)?
+                return Ok(None)
+            Stmt::Match(match_stmt) =>
+                return self.check_match_stmt(match_stmt)
+            Stmt::Defer(inner, _) =>
+                self.check_stmt(inner)?
+                return Ok(None)
+            Stmt::Unsafe(block, _) =>
+                self.check_block(block)?
+                return Ok(None)
+            Stmt::Item(item) =>
+                self.collect_item_symbol(item)?
+                self.check_item(item)?
+                return Ok(None)
+            _ =>
+                return Ok(None)
+
+    fn check_let(&mut self, let_stmt: &LetStmt) -> SemanticResult<()>:
+        let declared_tid = match &let_stmt.ty:
+            Some(te) => Some(self.resolve_type_expr(te)?)
+            None => None
+
+        let value_tid = match &let_stmt.value:
+            Some(expr) => Some(self.check_expr(expr)?)
+            None => None
+
+        let final_tid = match (declared_tid, value_tid):
+            (Some(d), Some(v)) =>
+                self.unify(d, v, let_stmt.span.clone())?
+                d
+            (Some(d), None) => d
+            (None, Some(v)) => v
+            (None, None) =>
+                self.error("let binding must have a type annotation or initializer", let_stmt.span.clone())
+                self.fresh_type_var()
+
+        let sym = Symbol::new(
+            let_stmt.name.clone(),
+            SymbolKind::Variable(final_tid, let_stmt.is_mutable),
+            Visibility::Private, let_stmt.span.clone(), NodeId(0),
+        )
+        self.symbols.define(sym)?
+        return Ok(())
+
+    fn check_assignment(&mut self, assign: &AssignExpr) -> SemanticResult<()>:
+        let target_tid = self.check_expr(&assign.target)?
+        let value_tid = self.check_expr(&assign.value)?
+
+        # Check target is mutable
+        self.check_place_mutability(&assign.target)?
+
+        # For compound assignment, verify operand types
+        match assign.op:
+            AssignOp::Assign =>
+                self.unify(target_tid, value_tid, assign.span.clone())?
+            _ =>
+                # Compound assign: target and value must be compatible with the operator
+                self.unify(target_tid, value_tid, assign.span.clone())?
+
+        return Ok(())
+
+    fn check_place_mutability(&mut self, expr: &Expr) -> SemanticResult<()>:
+        match expr:
+            Expr::Identifier(name, span) =>
+                match self.symbols.lookup(name):
+                    Some(sym) =>
+                        match &sym.kind:
+                            SymbolKind::Variable(_, is_mut) =>
+                                if not *is_mut:
+                                    self.error(
+                                        format("cannot assign to immutable variable '{}'", name),
+                                        span.clone(),
+                                    )
+                            _ =>
+                                self.error(
+                                    format("cannot assign to '{}'", name),
+                                    span.clone(),
+                                )
+                    None =>
+                        self.error(format("undefined variable '{}'", name), span.clone())
+            Expr::FieldAccess(_, _, _) => pass  # Checked deeper
+            Expr::Index(_, _, _) => pass  # Checked deeper
+            Expr::Unary(UnaryExpr { op: UnaryOp::Deref, .. }) => pass
+            _ =>
+                let span = expr.span()
+                self.error("invalid assignment target", span)
+        return Ok(())
+
+    fn check_if_stmt(&mut self, if_stmt: &IfStmt) -> SemanticResult<Option<TypeId>>:
+        let cond_tid = self.check_expr(&if_stmt.condition)?
+        let bool_tid = self.types.bool()
+        self.unify(bool_tid, cond_tid, if_stmt.span.clone())?
+
+        let then_tid = self.check_block(&if_stmt.then_block)?
+
+        for elif in &if_stmt.elif_clauses:
+            let elif_cond = self.check_expr(&elif.condition)?
+            self.unify(bool_tid, elif_cond, elif.span.clone())?
+            self.check_block(&elif.body)?
+
+        if let Some(ref else_block) = if_stmt.else_block:
+            self.check_block(else_block)?
+
+        return Ok(then_tid)
+
+    fn check_for_stmt(&mut self, for_stmt: &ForStmt) -> SemanticResult<()>:
+        let iter_tid = self.check_expr(&for_stmt.iterable)?
+
+        self.symbols.push_scope(ScopeKind::Loop)
+        # Bind iteration variable from pattern
+        self.bind_pattern(&for_stmt.pattern, self.fresh_type_var())?
+        self.check_block(&for_stmt.body)?
+        self.symbols.pop_scope()
+        return Ok(())
+
+    fn check_while_stmt(&mut self, while_stmt: &WhileStmt) -> SemanticResult<()>:
+        let cond_tid = self.check_expr(&while_stmt.condition)?
+        let bool_tid = self.types.bool()
+        self.unify(bool_tid, cond_tid, while_stmt.span.clone())?
+
+        self.symbols.push_scope(ScopeKind::Loop)
+        self.check_block(&while_stmt.body)?
+        self.symbols.pop_scope()
+        return Ok(())
+
+    fn check_loop_stmt(&mut self, loop_stmt: &LoopStmt) -> SemanticResult<()>:
+        self.symbols.push_scope(ScopeKind::Loop)
+        self.check_block(&loop_stmt.body)?
+        self.symbols.pop_scope()
+        return Ok(())
+
+    fn check_match_stmt(&mut self, match_stmt: &MatchStmt) -> SemanticResult<Option<TypeId>>:
+        let subject_tid = self.check_expr(&match_stmt.subject)?
+
+        let mut arm_type: Option<TypeId> = None
+        for arm in &match_stmt.arms:
+            self.symbols.push_scope(ScopeKind::Block)
+            self.bind_pattern(&arm.pattern, subject_tid)?
+
+            if let Some(ref guard) = arm.guard:
+                let guard_tid = self.check_expr(guard)?
+                let bool_tid = self.types.bool()
+                self.unify(bool_tid, guard_tid, guard.span())?
+
+            let body_tid = self.check_expr(&arm.body)?
+            if let Some(prev) = arm_type:
+                self.unify(prev, body_tid, arm.span.clone())?
+            else:
+                arm_type = Some(body_tid)
+
+            self.symbols.pop_scope()
+
+        return Ok(arm_type)
+
+    fn bind_pattern(&mut self, pattern: &Pattern, expected_tid: TypeId) -> SemanticResult<()>:
+        match pattern:
+            Pattern::Wildcard(_) => pass
+            Pattern::Identifier(name, is_mut, span) =>
+                let sym = Symbol::new(
+                    name.clone(), SymbolKind::Variable(expected_tid, *is_mut),
+                    Visibility::Private, span.clone(), NodeId(0),
+                )
+                self.symbols.define(sym)?
+            Pattern::Literal(_) => pass  # Type-checked against expected_tid
+            Pattern::Tuple(pats, _) =>
+                for (i, pat) in pats.iter().enumerate():
+                    let elem_tid = self.fresh_type_var()
+                    self.bind_pattern(pat, elem_tid)?
+            Pattern::Struct(sp) =>
+                for fp in &sp.fields:
+                    let field_tid = self.fresh_type_var()
+                    if let Some(ref inner_pat) = fp.pattern:
+                        self.bind_pattern(inner_pat, field_tid)?
+                    else:
+                        let sym = Symbol::new(
+                            fp.name.clone(), SymbolKind::Variable(field_tid, false),
+                            Visibility::Private, fp.span.clone(), NodeId(0),
+                        )
+                        self.symbols.define(sym)?
+            Pattern::Enum(ep) =>
+                for (i, pat) in ep.fields.iter().enumerate():
+                    let field_tid = self.fresh_type_var()
+                    self.bind_pattern(pat, field_tid)?
+            Pattern::Slice(pats, _) =>
+                for pat in pats:
+                    let elem_tid = self.fresh_type_var()
+                    self.bind_pattern(pat, elem_tid)?
+            Pattern::Or(pats, _) =>
+                for pat in pats:
+                    self.bind_pattern(pat, expected_tid)?
+            Pattern::Ref(inner, _, _) =>
+                self.bind_pattern(inner, expected_tid)?
+            Pattern::Rest(_) => pass
+            _ => pass
+        return Ok(())
+
+    # ====================================================================
+    # Expression Checking
+    # ====================================================================
+
+    fn check_expr(&mut self, expr: &Expr) -> SemanticResult<TypeId>:
+        match expr:
+            Expr::IntLiteral(_, span) =>
+                return Ok(self.types.i64())
+            Expr::FloatLiteral(_, span) =>
+                return Ok(self.types.f64())
+            Expr::StringLiteral(_, span) =>
+                return Ok(self.types.str())
+            Expr::CharLiteral(_, span) =>
+                return Ok(self.types.char())
+            Expr::BoolLiteral(_, span) =>
+                return Ok(self.types.bool())
+            Expr::NullLiteral(span) =>
+                return Ok(self.fresh_type_var())
+            Expr::None(span) =>
+                return Ok(self.fresh_type_var())
+
+            Expr::Identifier(name, span) =>
+                self.symbols.mark_used(name)
+                match self.symbols.lookup(name):
+                    Some(sym) =>
+                        match sym.type_id():
+                            Some(tid) => return Ok(tid)
+                            None => return Ok(self.fresh_type_var())
+                    None =>
+                        self.error(format("undefined name '{}'", name), span.clone())
+                        return Ok(self.fresh_type_var())
+
+            Expr::SelfExpr(span) =>
+                match self.symbols.self_type():
+                    Some(tid) => return Ok(tid)
+                    None =>
+                        self.error("'self' used outside of impl block", span.clone())
+                        return Ok(self.fresh_type_var())
+
+            Expr::Binary(bin) =>
+                let left_tid = self.check_expr(&bin.left)?
+                let right_tid = self.check_expr(&bin.right)?
+                return self.check_binary_op(&bin.op, left_tid, right_tid, &bin.span)
+
+            Expr::Unary(un) =>
+                let operand_tid = self.check_expr(&un.operand)?
+                return self.check_unary_op(&un.op, operand_tid, &un.span)
+
+            Expr::Call(call) =>
+                return self.check_call(call)
+
+            Expr::MethodCall(mc) =>
+                return self.check_method_call(mc)
+
+            Expr::FieldAccess(obj, field, span) =>
+                let obj_tid = self.check_expr(obj)?
+                return self.resolve_field(obj_tid, field, span)
+
+            Expr::Index(obj, idx, span) =>
+                let obj_tid = self.check_expr(obj)?
+                let idx_tid = self.check_expr(idx)?
+                return Ok(self.fresh_type_var())
+
+            Expr::ArrayLiteral(elems, span) =>
+                let elem_tid = self.fresh_type_var()
+                for elem in elems:
+                    let et = self.check_expr(elem)?
+                    self.unify(elem_tid, et, span.clone())?
+                return Ok(self.types.array(elem_tid))
+
+            Expr::TupleLiteral(elems, span) =>
+                let mut tids = Vector::new()
+                for elem in elems:
+                    tids.push(self.check_expr(elem)?)
+                return Ok(self.types.tuple(tids))
+
+            Expr::StructLiteral(sl) =>
+                return self.check_struct_literal(sl)
+
+            Expr::Closure(c) =>
+                return self.check_closure(c)
+
+            Expr::If(if_expr) =>
+                return self.check_if_expr(if_expr)
+
+            Expr::Match(m) =>
+                return self.check_match_expr(m)
+
+            Expr::Block(block) =>
+                let tid = self.check_block(block)?
+                return Ok(tid.unwrap_or(self.types.unit()))
+
+            Expr::Cast(inner, target_type, span) =>
+                self.check_expr(inner)?
+                return self.resolve_type_expr(target_type)
+
+            Expr::Try(inner, span) =>
+                let inner_tid = self.check_expr(inner)?
+                # Result<T, E> => T (propagates E)
+                return Ok(self.fresh_type_var())
+
+            Expr::Await(inner, span) =>
+                let inner_tid = self.check_expr(inner)?
+                return Ok(self.fresh_type_var())
+
+            Expr::Spawn(inner, span) =>
+                let inner_tid = self.check_expr(inner)?
+                return Ok(self.fresh_type_var())
+
+            Expr::Return(value, span) =>
+                if let Some(expr) = value:
+                    self.check_expr(expr)?
+                return Ok(self.types.never())
+
+            Expr::Range(range) =>
+                if let Some(ref start) = range.start:
+                    self.check_expr(start)?
+                if let Some(ref end) = range.end:
+                    self.check_expr(end)?
+                return Ok(self.fresh_type_var())
+
+            Expr::Path(path) =>
+                return self.resolve_path(path)
+
+            Expr::Some(inner, _) =>
+                let inner_tid = self.check_expr(inner)?
+                return Ok(self.types.option(inner_tid))
+
+            Expr::Ok(inner, _) =>
+                let inner_tid = self.check_expr(inner)?
+                let err_tid = self.fresh_type_var()
+                return Ok(self.types.result(inner_tid, err_tid))
+
+            Expr::Err(inner, _) =>
+                let err_tid = self.check_expr(inner)?
+                let ok_tid = self.fresh_type_var()
+                return Ok(self.types.result(ok_tid, err_tid))
+
+            _ =>
+                return Ok(self.fresh_type_var())
+
+    fn check_binary_op(&mut self, op: &BinaryOp, left: TypeId, right: TypeId, span: &Span) -> SemanticResult<TypeId>:
+        match op:
+            BinaryOp::Eq | BinaryOp::Neq | BinaryOp::Lt | BinaryOp::Gt |
+            BinaryOp::LtEq | BinaryOp::GtEq =>
+                self.unify(left, right, span.clone())?
+                return Ok(self.types.bool())
+            BinaryOp::And | BinaryOp::Or =>
+                let bool_t = self.types.bool()
+                self.unify(bool_t, left, span.clone())?
+                self.unify(bool_t, right, span.clone())?
+                return Ok(bool_t)
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div |
+            BinaryOp::Mod | BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor |
+            BinaryOp::ShiftLeft | BinaryOp::ShiftRight =>
+                self.unify(left, right, span.clone())?
+                return Ok(left)
+            BinaryOp::Pipe =>
+                # Pipe operator: x |> f  means f(x)
+                return Ok(self.fresh_type_var())
+            _ =>
+                self.unify(left, right, span.clone())?
+                return Ok(left)
+
+    fn check_unary_op(&mut self, op: &UnaryOp, operand: TypeId, span: &Span) -> SemanticResult<TypeId>:
+        match op:
+            UnaryOp::Neg => return Ok(operand)
+            UnaryOp::Not =>
+                let bool_t = self.types.bool()
+                self.unify(bool_t, operand, span.clone())?
+                return Ok(bool_t)
+            UnaryOp::BitNot => return Ok(operand)
+            UnaryOp::Ref => return Ok(self.types.reference(operand, false))
+            UnaryOp::RefMut => return Ok(self.types.reference(operand, true))
+            UnaryOp::Deref => return Ok(self.fresh_type_var())
+
+    fn check_call(&mut self, call: &CallExpr) -> SemanticResult<TypeId>:
+        let callee_tid = self.check_expr(&call.callee)?
+        let mut arg_tids = Vector::new()
+        for arg in &call.args:
+            arg_tids.push(self.check_expr(arg)?)
+
+        # Look up function signature
+        match &*call.callee:
+            Expr::Identifier(name, _) =>
+                match self.symbols.lookup(name):
+                    Some(sym) =>
+                        match &sym.kind:
+                            SymbolKind::Function(sig) | SymbolKind::Extern(sig) =>
+                                if arg_tids.len() != sig.param_types.len():
+                                    self.error(
+                                        format("function '{}' expects {} arguments, got {}",
+                                            name, sig.param_types.len(), arg_tids.len()),
+                                        call.span.clone(),
+                                    )
+                                else:
+                                    for (i, (expected, actual)) in
+                                        sig.param_types.iter().zip(arg_tids.iter()).enumerate():
+                                        self.unify(*expected, *actual, call.span.clone())?
+                                return Ok(sig.return_type)
+                            _ =>
+                                return Ok(self.fresh_type_var())
+                    None =>
+                        return Ok(self.fresh_type_var())
+            _ =>
+                return Ok(self.fresh_type_var())
+
+    fn check_method_call(&mut self, mc: &MethodCallExpr) -> SemanticResult<TypeId>:
+        let receiver_tid = self.check_expr(&mc.receiver)?
+        let mut arg_tids = Vector::new()
+        for arg in &mc.args:
+            arg_tids.push(self.check_expr(arg)?)
+        # Method resolution is deferred to monomorphization/trait resolution
+        return Ok(self.fresh_type_var())
+
+    fn resolve_field(&mut self, obj_tid: TypeId, field: &str, span: &Span) -> SemanticResult<TypeId>:
+        # Look up field in struct type
+        match self.types.get_struct_by_id(obj_tid):
+            Some(st) =>
+                for (i, name) in st.field_names.iter().enumerate():
+                    if name == field:
+                        return Ok(st.field_types[i])
+                self.error(
+                    format("no field '{}' on type", field),
+                    span.clone(),
+                )
+                return Ok(self.fresh_type_var())
+            None =>
+                return Ok(self.fresh_type_var())
+
+    fn check_struct_literal(&mut self, sl: &StructLiteralExpr) -> SemanticResult<TypeId>:
+        match self.symbols.lookup(&sl.name):
+            Some(sym) =>
+                match &sym.kind:
+                    SymbolKind::Struct(tid) =>
+                        let tid_copy = *tid
+                        for fi in &sl.fields:
+                            self.check_expr(&fi.value)?
+                        return Ok(tid_copy)
+                    _ =>
+                        self.error(
+                            format("'{}' is not a struct", sl.name),
+                            sl.span.clone(),
+                        )
+                        return Ok(self.fresh_type_var())
+            None =>
+                self.error(
+                    format("undefined struct '{}'", sl.name),
+                    sl.span.clone(),
+                )
+                return Ok(self.fresh_type_var())
+
+    fn check_closure(&mut self, c: &ClosureExpr) -> SemanticResult<TypeId>:
+        self.symbols.push_scope(ScopeKind::Closure)
+        let mut param_tids = Vector::new()
+        for p in &c.params:
+            let tid = match &p.ty:
+                Some(te) => self.resolve_type_expr(te)?
+                None => self.fresh_type_var()
+            param_tids.push(tid)
+            let sym = Symbol::new(
+                p.name.clone(), SymbolKind::Variable(tid, false),
+                Visibility::Private, p.span.clone(), NodeId(0),
+            )
+            self.symbols.define(sym)?
+        let body_tid = self.check_expr(&c.body)?
+        self.symbols.pop_scope()
+        return Ok(self.types.closure(param_tids, body_tid))
+
+    fn check_if_expr(&mut self, if_expr: &IfExpr) -> SemanticResult<TypeId>:
+        let cond_tid = self.check_expr(&if_expr.condition)?
+        let bool_tid = self.types.bool()
+        self.unify(bool_tid, cond_tid, if_expr.span.clone())?
+
+        let then_tid = self.check_block(&if_expr.then_block)?
+        let result_tid = then_tid.unwrap_or(self.types.unit())
+
+        for elif in &if_expr.elif_clauses:
+            let ec = self.check_expr(&elif.condition)?
+            self.unify(bool_tid, ec, elif.span.clone())?
+            let et = self.check_block(&elif.body)?
+            if let Some(t) = et:
+                self.unify(result_tid, t, elif.span.clone())?
+
+        if let Some(ref else_block) = if_expr.else_block:
+            let et = self.check_block(else_block)?
+            if let Some(t) = et:
+                self.unify(result_tid, t, else_block.span.clone())?
+
+        return Ok(result_tid)
+
+    fn check_match_expr(&mut self, m: &MatchExpr) -> SemanticResult<TypeId>:
+        let subject_tid = self.check_expr(&m.subject)?
+        let result_tid = self.fresh_type_var()
+
+        for arm in &m.arms:
+            self.symbols.push_scope(ScopeKind::Block)
+            self.bind_pattern(&arm.pattern, subject_tid)?
+            if let Some(ref guard) = arm.guard:
+                let gt = self.check_expr(guard)?
+                let bt = self.types.bool()
+                self.unify(bt, gt, arm.span.clone())?
+            let body_tid = self.check_expr(&arm.body)?
+            self.unify(result_tid, body_tid, arm.span.clone())?
+            self.symbols.pop_scope()
+
+        return Ok(result_tid)
+
+    fn resolve_path(&mut self, path: &PathExpr) -> SemanticResult<TypeId>:
+        # Resolve first segment
+        let first = &path.segments[0]
+        match self.symbols.lookup(first):
+            Some(sym) =>
+                # Multi-segment path resolution
+                return Ok(sym.type_id().unwrap_or(self.fresh_type_var()))
+            None =>
+                self.error(
+                    format("undefined name '{}'", first),
+                    path.span.clone(),
+                )
+                return Ok(self.fresh_type_var())
+
+    # ====================================================================
+    # Type Resolution
+    # ====================================================================
+
+    fn resolve_type_expr(&mut self, te: &TypeExpr) -> SemanticResult<TypeId>:
+        match te:
+            TypeExpr::Named(nt) =>
+                return self.resolve_named_type(nt)
+            TypeExpr::Array(inner, _size) =>
+                let inner_tid = self.resolve_type_expr(inner)?
+                return Ok(self.types.array(inner_tid))
+            TypeExpr::Slice(inner) =>
+                let inner_tid = self.resolve_type_expr(inner)?
+                return Ok(self.types.slice(inner_tid))
+            TypeExpr::Tuple(types) =>
+                let mut tids = Vector::new()
+                for t in types:
+                    tids.push(self.resolve_type_expr(t)?)
+                return Ok(self.types.tuple(tids))
+            TypeExpr::Function(ft) =>
+                let mut param_tids = Vector::new()
+                for p in &ft.params:
+                    param_tids.push(self.resolve_type_expr(p)?)
+                let ret_tid = match &ft.return_type:
+                    Some(rt) => self.resolve_type_expr(rt)?
+                    None => self.types.unit()
+                return Ok(self.types.function(param_tids, ret_tid))
+            TypeExpr::Reference(rt) =>
+                let inner_tid = self.resolve_type_expr(&rt.inner)?
+                return Ok(self.types.reference(inner_tid, rt.is_mutable))
+            TypeExpr::Owned(inner) =>
+                let inner_tid = self.resolve_type_expr(inner)?
+                return Ok(self.types.owned(inner_tid))
+            TypeExpr::Shared(inner) =>
+                let inner_tid = self.resolve_type_expr(inner)?
+                return Ok(self.types.shared(inner_tid))
+            TypeExpr::RawPointer(inner) =>
+                let inner_tid = self.resolve_type_expr(inner)?
+                return Ok(self.types.raw_ptr(inner_tid))
+            TypeExpr::Option(inner) =>
+                let inner_tid = self.resolve_type_expr(inner)?
+                return Ok(self.types.option(inner_tid))
+            TypeExpr::Result(ok, err) =>
+                let ok_tid = self.resolve_type_expr(ok)?
+                let err_tid = self.resolve_type_expr(err)?
+                return Ok(self.types.result(ok_tid, err_tid))
+            TypeExpr::TraitObject(to) =>
+                return Ok(self.fresh_type_var())
+            TypeExpr::SelfType =>
+                match self.symbols.self_type():
+                    Some(tid) => return Ok(tid)
+                    None =>
+                        return Ok(self.fresh_type_var())
+            TypeExpr::Inferred =>
+                return Ok(self.fresh_type_var())
+            TypeExpr::Never =>
+                return Ok(self.types.never())
+            TypeExpr::Path(tp) =>
+                return self.resolve_type_path(tp)
+            TypeExpr::Lifetime(_) =>
+                return Ok(self.fresh_type_var())
+            _ =>
+                return Ok(self.fresh_type_var())
+
+    fn resolve_named_type(&mut self, nt: &NamedType) -> SemanticResult<TypeId>:
+        # Built-in types
+        match nt.name.as_str():
+            "i8" => return Ok(self.types.i8())
+            "i16" => return Ok(self.types.i16())
+            "i32" => return Ok(self.types.i32())
+            "i64" => return Ok(self.types.i64())
+            "i128" => return Ok(self.types.i128())
+            "u8" => return Ok(self.types.u8())
+            "u16" => return Ok(self.types.u16())
+            "u32" => return Ok(self.types.u32())
+            "u64" => return Ok(self.types.u64())
+            "u128" => return Ok(self.types.u128())
+            "usize" => return Ok(self.types.usize())
+            "isize" => return Ok(self.types.isize())
+            "f32" => return Ok(self.types.f32())
+            "f64" => return Ok(self.types.f64())
+            "bool" => return Ok(self.types.bool())
+            "char" => return Ok(self.types.char())
+            "str" => return Ok(self.types.str())
+            "String" => return Ok(self.types.string())
+            _ => pass
+
+        # Look up user-defined type
+        match self.symbols.lookup(&nt.name):
+            Some(sym) =>
+                match sym.type_id():
+                    Some(tid) =>
+                        self.symbols.mark_used(&nt.name)
+                        return Ok(tid)
+                    None =>
+                        return Ok(self.fresh_type_var())
+            None =>
+                # Could be a forward reference; create a placeholder
+                return Ok(self.fresh_type_var())
+
+    fn resolve_type_path(&mut self, tp: &TypePath) -> SemanticResult<TypeId>:
+        # Resolve path like std::collections::HashMap
+        # For now, try to resolve the last segment
+        let last = &tp.segments[tp.segments.len() - 1]
+        match self.symbols.lookup(last):
+            Some(sym) =>
+                match sym.type_id():
+                    Some(tid) => return Ok(tid)
+                    None => return Ok(self.fresh_type_var())
+            None =>
+                return Ok(self.fresh_type_var())
+
+    # ====================================================================
+    # Type Unification
+    # ====================================================================
+
+    fn unify(&mut self, expected: TypeId, actual: TypeId, span: Span) -> SemanticResult<()>:
+        if expected == actual:
+            return Ok(())
+
+        # Check if either is a type variable
+        if self.types.is_var(expected) or self.types.is_var(actual):
+            self.types.unify_vars(expected, actual)
+            return Ok(())
+
+        # Check structural compatibility
+        let exp_type = self.types.get(expected)
+        let act_type = self.types.get(actual)
+
+        match (&exp_type, &act_type):
+            (Type::Never, _) | (_, Type::Never) =>
+                return Ok(())
+            _ =>
+                if not self.types.compatible(expected, actual):
+                    let exp_name = self.types.display(expected)
+                    let act_name = self.types.display(actual)
+                    self.error(
+                        format("type mismatch: expected '{}', found '{}'", exp_name, act_name),
+                        span,
+                    )
+        return Ok(())
+
+    # ====================================================================
+    # Warnings
+    # ====================================================================
+
+    fn check_unused_symbols(&mut self):
+        for scope in &self.scopes:
+            for (name, sym) in &scope.symbols:
+                if not sym.is_used and not name.starts_with("_"):
+                    match &sym.kind:
+                        SymbolKind::Variable(_, _) =>
+                            self.warning(
+                                format("unused variable '{}'", name),
+                                sym.span.clone(),
+                            )
+                        SymbolKind::Function(_) =>
+                            if sym.visibility == Visibility::Private:
+                                self.warning(
+                                    format("function '{}' is never used", name),
+                                    sym.span.clone(),
+                                )
+                        _ => pass
+
+# ============================================================================
+# Public API
+# ============================================================================
+
+fn analyze(program: &Program) -> Result<Analyzer, Vector<SemanticError>>:
+    let mut analyzer = Analyzer::new()
+    let _ = analyzer.analyze(program)
+    if analyzer.has_errors():
+        return Err(analyzer.errors)
+    return Ok(analyzer)

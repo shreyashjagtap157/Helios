@@ -1,0 +1,323 @@
+module compiler::semantic::mono
+
+# ============================================================================
+# Omni Monomorphization — Generic Instantiation & Specialization
+# ============================================================================
+
+import compiler::lexer::token::Span
+import compiler::parser::ast::{
+    FunctionDef, StructDef, EnumDef, ImplBlock, TypeExpr,
+    GenericParam, GenericParamKind, Item, Expr, Stmt, Block, Pattern,
+    NodeId, Visibility,
+}
+import compiler::semantic::{SemanticError, Analyzer}
+import compiler::semantic::types::{
+    TypeId, TypeTable, Type, Substitution, FunctionSig,
+    StructType, EnumType,
+}
+
+# --- Monomorphization Key ---
+
+struct MonoKey:
+    base_name: str
+    type_args: Vector<TypeId>
+
+    fn mangled_name(&self, type_table: &TypeTable) -> str:
+        if self.type_args.is_empty():
+            return self.base_name.clone()
+        let mut name = self.base_name.clone()
+        name.push_str("__")
+        for (i, tid) in self.type_args.iter().enumerate():
+            if i > 0:
+                name.push('_')
+            let type_name = type_table.display(*tid)
+            # Mangle type name: replace special chars
+            for ch in type_name.chars():
+                match ch:
+                    '<' => name.push_str("_lt_")
+                    '>' => name.push_str("_gt_")
+                    ',' => name.push_str("_cm_")
+                    ' ' => pass
+                    '&' => name.push_str("_ref_")
+                    '*' => name.push_str("_ptr_")
+                    '(' => name.push_str("_lp_")
+                    ')' => name.push_str("_rp_")
+                    _ => name.push(ch)
+        return name
+
+    fn eq(&self, other: &MonoKey) -> bool:
+        if self.base_name != other.base_name:
+            return false
+        if self.type_args.len() != other.type_args.len():
+            return false
+        for (a, b) in self.type_args.iter().zip(other.type_args.iter()):
+            if *a != *b:
+                return false
+        return true
+
+# --- Monomorphized Instance ---
+
+struct MonoInstance:
+    key: MonoKey
+    mangled_name: str
+    original_node_id: NodeId
+    substitution: Substitution
+    is_generated: bool
+
+# --- Instantiation Queue ---
+
+struct InstantiationQueue:
+    pending: Vector<MonoKey>
+    completed: HashMap<str, MonoInstance>
+
+    fn new() -> own Self:
+        return InstantiationQueue {
+            pending: Vector::new(),
+            completed: HashMap::new(),
+        }
+
+    fn enqueue(&mut self, key: MonoKey, type_table: &TypeTable) -> str:
+        let mangled = key.mangled_name(type_table)
+        if self.completed.contains_key(&mangled):
+            return mangled
+        # Check if already pending
+        for pk in &self.pending:
+            if pk.eq(&key):
+                return mangled
+        self.pending.push(key)
+        return mangled
+
+    fn dequeue(&mut self) -> Option<MonoKey>:
+        return self.pending.pop()
+
+    fn mark_completed(&mut self, instance: MonoInstance):
+        self.completed.insert(instance.mangled_name.clone(), instance)
+
+    fn is_completed(&self, mangled: &str) -> bool:
+        return self.completed.contains_key(mangled)
+
+# --- Monomorphizer ---
+
+struct Monomorphizer:
+    type_table: &mut TypeTable
+    queue: InstantiationQueue
+    instances: Vector<MonoInstance>
+    errors: Vector<SemanticError>
+    # Cache of generic function definitions
+    generic_functions: HashMap<str, FunctionDef>
+    generic_structs: HashMap<str, StructDef>
+    generic_enums: HashMap<str, EnumDef>
+
+    fn new(type_table: &mut TypeTable) -> own Self:
+        return Monomorphizer {
+            type_table: type_table,
+            queue: InstantiationQueue::new(),
+            instances: Vector::new(),
+            errors: Vector::new(),
+            generic_functions: HashMap::new(),
+            generic_structs: HashMap::new(),
+            generic_enums: HashMap::new(),
+        }
+
+    fn error(&mut self, msg: str, span: Span):
+        self.errors.push(SemanticError::new(msg, span))
+
+    # ====================================================================
+    # Registration
+    # ====================================================================
+
+    fn register_generic_function(&mut self, func: &FunctionDef):
+        if not func.generic_params.is_empty():
+            self.generic_functions.insert(func.name.clone(), func.clone())
+
+    fn register_generic_struct(&mut self, st: &StructDef):
+        if not st.generic_params.is_empty():
+            self.generic_structs.insert(st.name.clone(), st.clone())
+
+    fn register_generic_enum(&mut self, en: &EnumDef):
+        if not en.generic_params.is_empty():
+            self.generic_enums.insert(en.name.clone(), en.clone())
+
+    # ====================================================================
+    # Instantiation Request
+    # ====================================================================
+
+    fn request_function(&mut self, name: &str, type_args: Vector<TypeId>) -> str:
+        if type_args.is_empty():
+            return name.to_string()
+
+        let key = MonoKey {
+            base_name: name.to_string(),
+            type_args: type_args,
+        }
+        return self.queue.enqueue(key, self.type_table)
+
+    fn request_struct(&mut self, name: &str, type_args: Vector<TypeId>) -> str:
+        if type_args.is_empty():
+            return name.to_string()
+
+        let key = MonoKey {
+            base_name: name.to_string(),
+            type_args: type_args,
+        }
+        return self.queue.enqueue(key, self.type_table)
+
+    # ====================================================================
+    # Processing
+    # ====================================================================
+
+    fn process_all(&mut self) -> Vector<MonoInstance>:
+        while let Some(key) = self.queue.dequeue():
+            let mangled = key.mangled_name(self.type_table)
+            if self.queue.is_completed(&mangled):
+                continue
+
+            # Build substitution from generic params to concrete types
+            let substitution = self.build_substitution(&key)
+
+            let instance = MonoInstance {
+                key: key.clone(),
+                mangled_name: mangled.clone(),
+                original_node_id: NodeId(0),
+                substitution: substitution,
+                is_generated: true,
+            }
+
+            self.queue.mark_completed(instance.clone())
+            self.instances.push(instance)
+
+        return self.instances.clone()
+
+    fn build_substitution(&self, key: &MonoKey) -> Substitution:
+        let mut sub = Substitution::new()
+
+        # Look up the generic definition
+        if let Some(func) = self.generic_functions.get(&key.base_name):
+            for (i, gp) in func.generic_params.iter().enumerate():
+                if i < key.type_args.len():
+                    # Map generic param type to concrete type
+                    # The generic param's TypeId needs to be looked up
+                    sub.add(i as TypeId, key.type_args[i])
+        elif let Some(st) = self.generic_structs.get(&key.base_name):
+            for (i, gp) in st.generic_params.iter().enumerate():
+                if i < key.type_args.len():
+                    sub.add(i as TypeId, key.type_args[i])
+
+        return sub
+
+    # ====================================================================
+    # Type Substitution
+    # ====================================================================
+
+    fn substitute_type(&self, tid: TypeId, sub: &Substitution) -> TypeId:
+        let resolved = sub.apply(tid)
+        if resolved != tid:
+            return resolved
+
+        # Recursively substitute compound types
+        match self.type_table.get(tid):
+            Type::Array(elem, len) =>
+                let new_elem = self.substitute_type(*elem, sub)
+                if new_elem != *elem:
+                    return self.type_table.add(Type::Array(new_elem, *len))
+            Type::Slice(elem) =>
+                let new_elem = self.substitute_type(*elem, sub)
+                if new_elem != *elem:
+                    return self.type_table.add(Type::Slice(new_elem))
+            Type::Tuple(elems) =>
+                let mut new_elems = Vector::new()
+                let mut changed = false
+                for e in elems:
+                    let new_e = self.substitute_type(*e, sub)
+                    if new_e != *e:
+                        changed = true
+                    new_elems.push(new_e)
+                if changed:
+                    return self.type_table.add(Type::Tuple(new_elems))
+            Type::Reference(inner, is_mut) =>
+                let new_inner = self.substitute_type(*inner, sub)
+                if new_inner != *inner:
+                    return self.type_table.add(Type::Reference(new_inner, *is_mut))
+            Type::Owned(inner) =>
+                let new_inner = self.substitute_type(*inner, sub)
+                if new_inner != *inner:
+                    return self.type_table.add(Type::Owned(new_inner))
+            Type::Option(inner) =>
+                let new_inner = self.substitute_type(*inner, sub)
+                if new_inner != *inner:
+                    return self.type_table.add(Type::Option(new_inner))
+            Type::Result(ok, err) =>
+                let new_ok = self.substitute_type(*ok, sub)
+                let new_err = self.substitute_type(*err, sub)
+                if new_ok != *ok or new_err != *err:
+                    return self.type_table.add(Type::Result(new_ok, new_err))
+            Type::Applied(base, args) =>
+                let new_base = self.substitute_type(*base, sub)
+                let mut new_args = Vector::new()
+                for a in args:
+                    new_args.push(self.substitute_type(*a, sub))
+                return self.type_table.add(Type::Applied(new_base, new_args))
+            Type::Generic(name, bounds) =>
+                # This should be resolved by substitution
+                return sub.apply(tid)
+            _ => pass
+
+        return tid
+
+    fn substitute_function_sig(&self, sig: &FunctionSig, sub: &Substitution) -> FunctionSig:
+        let mut new_params = Vector::new()
+        for p in &sig.param_types:
+            new_params.push(self.substitute_type(*p, sub))
+        let new_ret = self.substitute_type(sig.return_type, sub)
+        return FunctionSig {
+            name: sig.name.clone(),
+            param_types: new_params,
+            return_type: new_ret,
+            is_async: sig.is_async,
+            generic_params: 0,  # Monomorphized: no more generics
+        }
+
+    # ====================================================================
+    # Dead Code Elimination
+    # ====================================================================
+
+    fn collect_reachable(&self, entry_points: &[str]) -> HashSet<str>:
+        let mut reachable = HashSet::new()
+        let mut worklist = Vector::new()
+
+        for entry in entry_points:
+            worklist.push(entry.to_string())
+            reachable.insert(entry.to_string())
+
+        while let Some(name) = worklist.pop():
+            # Find all functions called from this function
+            # This requires call graph analysis from the IR
+            # For now, mark all monomorphized instances as reachable
+            for instance in &self.instances:
+                if not reachable.contains(&instance.mangled_name):
+                    reachable.insert(instance.mangled_name.clone())
+                    worklist.push(instance.mangled_name.clone())
+
+        return reachable
+
+# ============================================================================
+# Public API
+# ============================================================================
+
+fn monomorphize(type_table: &mut TypeTable,
+                functions: &[FunctionDef],
+                structs: &[StructDef],
+                enums: &[EnumDef]) -> (Vector<MonoInstance>, Vector<SemanticError>):
+    let mut mono = Monomorphizer::new(type_table)
+
+    # Register all generic definitions
+    for f in functions:
+        mono.register_generic_function(f)
+    for s in structs:
+        mono.register_generic_struct(s)
+    for e in enums:
+        mono.register_generic_enum(e)
+
+    # Process instantiation queue
+    let instances = mono.process_all()
+    return (instances, mono.errors)

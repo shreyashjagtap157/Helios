@@ -1,0 +1,929 @@
+module tools::build
+
+# ============================================================================
+# Omni Build System
+# ============================================================================
+# Reads omni.toml project manifests, resolves dependencies, determines
+# build order, invokes the compiler, and manages incremental builds.
+
+import std::core::{Option, Some, None, Result, Ok, Err, String, Clone, PartialEq, Iterator}
+import std::collections::{Vector, HashMap, HashSet}
+import std::io::{File, Read, Write, Path, read_to_string, write_string, create_dir_all, path_exists, is_dir, is_file, current_dir}
+import std::ffi::{CString, c_int, c_char, c_void, args, env_get}
+
+# ============================================================================
+# Platform FFI
+# ============================================================================
+
+extern "C":
+    fn system(command: *const c_char) -> c_int
+    fn time(t: *mut i64) -> i64
+
+    #[cfg(unix)]
+    fn stat(path: *const c_char, buf: *mut u8) -> c_int
+
+    #[cfg(windows)]
+    fn GetFileAttributesExA(name: *const c_char, level: i32, info: *mut u8) -> c_int
+
+# ============================================================================
+# Project Manifest (omni.toml)
+# ============================================================================
+
+struct Manifest:
+    name: String
+    version: String
+    authors: Vector<String>
+    description: String
+    edition: String               # "2025", "2026"
+    entry_point: String           # default: "src/main.omni"
+    output_type: OutputType
+    target_dir: String            # default: "target"
+    dependencies: Vector<Dependency>
+    dev_dependencies: Vector<Dependency>
+    build_dependencies: Vector<Dependency>
+    features: HashMap<String, Vector<String>>
+    default_features: Vector<String>
+    metadata: HashMap<String, String>
+    profile_debug: ProfileConfig
+    profile_release: ProfileConfig
+
+    fn default() -> own Manifest:
+        return Manifest {
+            name: String::new(),
+            version: String::from("0.1.0"),
+            authors: Vector::new(),
+            description: String::new(),
+            edition: String::from("2026"),
+            entry_point: String::from("src/main.omni"),
+            output_type: OutputType::Executable,
+            target_dir: String::from("target"),
+            dependencies: Vector::new(),
+            dev_dependencies: Vector::new(),
+            build_dependencies: Vector::new(),
+            features: HashMap::new(),
+            default_features: Vector::new(),
+            metadata: HashMap::new(),
+            profile_debug: ProfileConfig::debug_default(),
+            profile_release: ProfileConfig::release_default(),
+        }
+
+enum OutputType:
+    Executable
+    Library
+    DynamicLibrary
+
+    fn to_str(&self) -> &str:
+        match self:
+            OutputType::Executable => "executable"
+            OutputType::Library => "library"
+            OutputType::DynamicLibrary => "dynamic-library"
+
+struct Dependency:
+    name: String
+    version: String
+    path: Option<String>         # local path dependency
+    git: Option<String>          # git URL
+    branch: Option<String>
+    features: Vector<String>
+    optional: bool
+
+struct ProfileConfig:
+    opt_level: u8                # 0-3
+    debug_info: bool
+    lto: bool
+    codegen_units: u32
+    overflow_checks: bool
+    panic_strategy: PanicStrategy
+
+    fn debug_default() -> own ProfileConfig:
+        return ProfileConfig {
+            opt_level: 0,
+            debug_info: true,
+            lto: false,
+            codegen_units: 16,
+            overflow_checks: true,
+            panic_strategy: PanicStrategy::Unwind,
+        }
+
+    fn release_default() -> own ProfileConfig:
+        return ProfileConfig {
+            opt_level: 3,
+            debug_info: false,
+            lto: true,
+            codegen_units: 1,
+            overflow_checks: false,
+            panic_strategy: PanicStrategy::Unwind,
+        }
+
+enum PanicStrategy:
+    Unwind
+    Abort
+
+# ============================================================================
+# TOML Parser (simplified — handles project manifests)
+# ============================================================================
+
+fn parse_manifest(source: &str) -> Result<Manifest, String>:
+    let mut manifest = Manifest::default()
+    let mut current_section = String::new()
+    let lines = source.split('\n')
+
+    for raw_line in lines:
+        let line = raw_line.trim()
+
+        # Skip empty lines and comments
+        if line.is_empty() or line.starts_with('#'):
+            continue
+
+        # Section header
+        if line.starts_with('['):
+            if not line.ends_with(']'):
+                return Err(format!("invalid section header: {}", line))
+            current_section = String::from(&line[1..line.len()-1])
+            continue
+
+        # Key = value
+        let eq_pos = match line.find('='):
+            Some(p) => p
+            None => continue
+
+        let key = line[0..eq_pos].trim()
+        let value_raw = line[eq_pos+1..].trim()
+        let value = strip_quotes(value_raw)
+
+        match current_section.as_str():
+            "package" | "" =>
+                match key:
+                    "name" => manifest.name = String::from(value)
+                    "version" => manifest.version = String::from(value)
+                    "description" => manifest.description = String::from(value)
+                    "edition" => manifest.edition = String::from(value)
+                    "entry_point" | "entry-point" => manifest.entry_point = String::from(value)
+                    "output_type" | "output-type" =>
+                        manifest.output_type = match value:
+                            "executable" | "exe" | "bin" => OutputType::Executable
+                            "library" | "lib" | "staticlib" => OutputType::Library
+                            "dynamic-library" | "dylib" | "cdylib" => OutputType::DynamicLibrary
+                            _ => return Err(format!("unknown output type: {}", value))
+                    _ => manifest.metadata.insert(String::from(key), String::from(value))
+
+            "dependencies" =>
+                let dep = parse_dependency(key, value_raw)?
+                manifest.dependencies.push(dep)
+
+            "dev-dependencies" =>
+                let dep = parse_dependency(key, value_raw)?
+                manifest.dev_dependencies.push(dep)
+
+            "build-dependencies" =>
+                let dep = parse_dependency(key, value_raw)?
+                manifest.build_dependencies.push(dep)
+
+            "profile.debug" =>
+                parse_profile_field(key, value, &mut manifest.profile_debug)?
+
+            "profile.release" =>
+                parse_profile_field(key, value, &mut manifest.profile_release)?
+
+            section if section.starts_with("features") =>
+                let feature_name = String::from(key)
+                let feature_deps = parse_string_array(value_raw)
+                manifest.features.insert(feature_name, feature_deps)
+
+            _ => pass
+
+    if manifest.name.is_empty():
+        return Err(String::from("manifest missing package name"))
+
+    return Ok(manifest)
+
+fn strip_quotes(s: &str) -> &str:
+    if s.len() >= 2:
+        if (s.starts_with('"') and s.ends_with('"')) or
+           (s.starts_with('\'') and s.ends_with('\'')):
+            return &s[1..s.len()-1]
+    return s
+
+fn parse_dependency(name: &str, value: &str) -> Result<Dependency, String>:
+    let trimmed = value.trim()
+    if trimmed.starts_with('"') or trimmed.starts_with('\''):
+        # Simple version: name = "version"
+        return Ok(Dependency {
+            name: String::from(name),
+            version: String::from(strip_quotes(trimmed)),
+            path: None,
+            git: None,
+            branch: None,
+            features: Vector::new(),
+            optional: false,
+        })
+
+    # Inline table: name = { version = "x", path = "y" }
+    let mut dep = Dependency {
+        name: String::from(name),
+        version: String::new(),
+        path: None,
+        git: None,
+        branch: None,
+        features: Vector::new(),
+        optional: false,
+    }
+
+    let inner = if trimmed.starts_with('{') and trimmed.ends_with('}'):
+        &trimmed[1..trimmed.len()-1]
+    else:
+        trimmed
+
+    let parts = inner.split(',')
+    for part in parts:
+        let p = part.trim()
+        if let Some(eq) = p.find('='):
+            let k = p[0..eq].trim()
+            let v = strip_quotes(p[eq+1..].trim())
+            match k:
+                "version" => dep.version = String::from(v)
+                "path" => dep.path = Some(String::from(v))
+                "git" => dep.git = Some(String::from(v))
+                "branch" => dep.branch = Some(String::from(v))
+                "optional" => dep.optional = v == "true"
+                _ => pass
+
+    return Ok(dep)
+
+fn parse_profile_field(key: &str, value: &str, profile: &mut ProfileConfig) -> Result<(), String>:
+    match key:
+        "opt_level" | "opt-level" =>
+            profile.opt_level = match value:
+                "0" => 0
+                "1" => 1
+                "2" => 2
+                "3" => 3
+                _ => return Err(format!("invalid opt level: {}", value))
+        "debug" | "debug_info" | "debug-info" =>
+            profile.debug_info = value == "true"
+        "lto" =>
+            profile.lto = value == "true"
+        "codegen_units" | "codegen-units" =>
+            # parse integer
+            profile.codegen_units = parse_u32(value).unwrap_or(1)
+        "overflow_checks" | "overflow-checks" =>
+            profile.overflow_checks = value == "true"
+        "panic" =>
+            profile.panic_strategy = match value:
+                "unwind" => PanicStrategy::Unwind
+                "abort" => PanicStrategy::Abort
+                _ => return Err(format!("invalid panic strategy: {}", value))
+        _ => pass
+    return Ok(())
+
+fn parse_string_array(s: &str) -> Vector<String>:
+    let trimmed = s.trim()
+    let inner = if trimmed.starts_with('[') and trimmed.ends_with(']'):
+        &trimmed[1..trimmed.len()-1]
+    else:
+        trimmed
+    let mut result = Vector::new()
+    let parts = inner.split(',')
+    for part in parts:
+        let p = strip_quotes(part.trim())
+        if not p.is_empty():
+            result.push(String::from(p))
+    return result
+
+fn parse_u32(s: &str) -> Option<u32>:
+    let mut result: u32 = 0
+    for i in 0..s.len():
+        let ch = s.as_bytes()[i]
+        if ch < 48 or ch > 57:  # '0'-'9'
+            return None
+        result = result * 10 + (ch - 48) as u32
+    return Some(result)
+
+# ============================================================================
+# Build Context
+# ============================================================================
+
+struct BuildConfig:
+    manifest: Manifest
+    project_root: String
+    profile: BuildProfile
+    target_triple: String
+    features: HashSet<String>
+    verbose: bool
+    jobs: u32
+    color: bool
+
+enum BuildProfile:
+    Debug
+    Release
+
+    fn to_str(&self) -> &str:
+        match self:
+            BuildProfile::Debug => "debug"
+            BuildProfile::Release => "release"
+
+struct BuildContext:
+    config: BuildConfig
+    source_files: Vector<SourceFile>
+    dependency_order: Vector<String>
+    compile_commands: Vector<CompileCommand>
+    link_command: Option<LinkCommand>
+    errors: Vector<String>
+    warnings: Vector<String>
+
+    fn new(config: BuildConfig) -> own BuildContext:
+        return BuildContext {
+            config,
+            source_files: Vector::new(),
+            dependency_order: Vector::new(),
+            compile_commands: Vector::new(),
+            link_command: None,
+            errors: Vector::new(),
+            warnings: Vector::new(),
+        }
+
+struct SourceFile:
+    path: String
+    module_name: String
+    last_modified: u64
+    object_file: String
+    needs_rebuild: bool
+
+struct CompileCommand:
+    source: String
+    output: String
+    flags: Vector<String>
+
+struct LinkCommand:
+    objects: Vector<String>
+    output: String
+    libraries: Vector<String>
+    lib_paths: Vector<String>
+    flags: Vector<String>
+
+# ============================================================================
+# Build Pipeline
+# ============================================================================
+
+fn build(project_root: &str, profile: BuildProfile, verbose: bool) -> Result<(), String>:
+    # 1. Read manifest
+    let manifest_path = format!("{}/omni.toml", project_root)
+    let manifest_src = read_to_string(&manifest_path)
+        .map_err(|e| format!("failed to read {}: {}", manifest_path, e))?
+    let manifest = parse_manifest(&manifest_src)?
+
+    if verbose:
+        println!("  Compiling {} v{}", manifest.name, manifest.version)
+
+    # 2. Setup build config
+    let profile_config = match &profile:
+        BuildProfile::Debug => &manifest.profile_debug
+        BuildProfile::Release => &manifest.profile_release
+
+    let target_dir = format!("{}/{}/{}", project_root, manifest.target_dir,
+        match &profile:
+            BuildProfile::Debug => "debug"
+            BuildProfile::Release => "release"
+    )
+    create_dir_all(&target_dir).map_err(|e| format!("cannot create target dir: {}", e))?
+
+    # 3. Discover source files
+    let mut sources = Vector::new()
+    discover_sources(project_root, &manifest.entry_point, &mut sources)?
+
+    if verbose:
+        println!("  Found {} source files", sources.len())
+
+    # 4. Check for incremental rebuild
+    let mut needs_link = false
+    for source in sources.iter_mut():
+        let obj_path = format!("{}/{}.o", target_dir,
+            source.module_name.replace("::", "_"))
+        source.object_file = obj_path.clone()
+
+        if not path_exists(&obj_path):
+            source.needs_rebuild = true
+            needs_link = true
+        else:
+            let src_time = file_modified_time(&source.path)
+            let obj_time = file_modified_time(&obj_path)
+            if src_time > obj_time:
+                source.needs_rebuild = true
+                needs_link = true
+
+    # 5. Compile changed files
+    let mut object_files = Vector::new()
+    let compiler = find_compiler()?
+
+    for source in sources.iter():
+        if source.needs_rebuild:
+            if verbose:
+                println!("  Compiling {}", source.path)
+
+            let mut cmd = format!("{} {} -o {} --emit object", compiler, source.path, source.object_file)
+
+            # Add optimization flags
+            cmd.push_str(&format!(" -O{}", profile_config.opt_level))
+
+            if profile_config.debug_info:
+                cmd.push_str(" -g")
+
+            if profile_config.lto:
+                cmd.push_str(" --lto")
+
+            let c_cmd = CString::new(&cmd).map_err(|e| String::from(e))?
+            let ret = system(c_cmd.as_ptr())
+            if ret != 0:
+                return Err(format!("compilation failed for {}", source.path))
+
+        object_files.push(source.object_file.clone())
+
+    # 6. Link
+    if needs_link or not path_exists(&output_path(project_root, &manifest, &profile)):
+        let output = output_path(project_root, &manifest, &profile)
+        if verbose:
+            println!("  Linking {}", output)
+
+        let mut link_cmd = format!("{} --link", compiler)
+        for obj in object_files.iter():
+            link_cmd.push_str(&format!(" {}", obj))
+        link_cmd.push_str(&format!(" -o {}", output))
+
+        match manifest.output_type:
+            OutputType::Library =>
+                link_cmd.push_str(" --emit staticlib")
+            OutputType::DynamicLibrary =>
+                link_cmd.push_str(" --emit dylib")
+            OutputType::Executable => pass
+
+        let c_cmd = CString::new(&link_cmd).map_err(|e| String::from(e))?
+        let ret = system(c_cmd.as_ptr())
+        if ret != 0:
+            return Err(String::from("linking failed"))
+
+    let output = output_path(project_root, &manifest, &profile)
+    println!("  Finished {} [{}] target", manifest.name,
+        match &profile:
+            BuildProfile::Debug => "debug"
+            BuildProfile::Release => "optimized"
+    )
+
+    return Ok(())
+
+fn output_path(root: &str, manifest: &Manifest, profile: &BuildProfile) -> String:
+    let dir = format!("{}/{}/{}", root, manifest.target_dir, profile.to_str())
+    match manifest.output_type:
+        OutputType::Executable =>
+            #[cfg(windows)]
+            format!("{}/{}.exe", dir, manifest.name)
+            #[cfg(unix)]
+            format!("{}/{}", dir, manifest.name)
+        OutputType::Library =>
+            format!("{}/lib{}.a", dir, manifest.name)
+        OutputType::DynamicLibrary =>
+            #[cfg(windows)]
+            format!("{}/{}.dll", dir, manifest.name)
+            #[cfg(unix)]
+            format!("{}/lib{}.so", dir, manifest.name)
+
+fn discover_sources(root: &str, entry: &str, sources: &mut Vector<SourceFile>) -> Result<(), String>:
+    let entry_path = format!("{}/{}", root, entry)
+    if not path_exists(&entry_path):
+        return Err(format!("entry point not found: {}", entry_path))
+
+    # Walk src directory
+    let src_dir = format!("{}/src", root)
+    if is_dir(&src_dir):
+        walk_dir_for_sources(&src_dir, "", sources)?
+    else:
+        # Single-file project
+        sources.push(SourceFile {
+            path: entry_path,
+            module_name: String::from("main"),
+            last_modified: 0,
+            object_file: String::new(),
+            needs_rebuild: false,
+        })
+    return Ok(())
+
+fn walk_dir_for_sources(dir: &str, module_prefix: &str, sources: &mut Vector<SourceFile>) -> Result<(), String>:
+    # List directory entries and collect .omni files
+    # Uses platform-specific directory iteration from std::io
+    let entries = list_directory(dir)?
+    for entry in entries.iter():
+        let full_path = format!("{}/{}", dir, entry)
+        if entry.ends_with(".omni"):
+            let mod_name = &entry[0..entry.len()-5]
+            let full_mod = if module_prefix.is_empty():
+                String::from(mod_name)
+            else:
+                format!("{}::{}", module_prefix, mod_name)
+            sources.push(SourceFile {
+                path: full_path,
+                module_name: full_mod,
+                last_modified: file_modified_time(&full_path),
+                object_file: String::new(),
+                needs_rebuild: false,
+            })
+        elif is_dir(&full_path):
+            let sub_prefix = if module_prefix.is_empty():
+                String::from(entry)
+            else:
+                format!("{}::{}", module_prefix, entry)
+            walk_dir_for_sources(&full_path, &sub_prefix, sources)?
+    return Ok(())
+
+fn list_directory(dir: &str) -> Result<Vector<String>, String>:
+    # Delegate to std::io filesystem operations
+    let mut entries = Vector::new()
+    #[cfg(unix)]
+    {
+        extern "C":
+            fn opendir(name: *const c_char) -> *mut c_void
+            fn readdir(dirp: *mut c_void) -> *const u8
+            fn closedir(dirp: *mut c_void) -> c_int
+
+        let c_dir = CString::new(dir).map_err(|e| String::from(e))?
+        let dp = opendir(c_dir.as_ptr())
+        if dp.is_null():
+            return Err(format!("cannot open directory: {}", dir))
+        loop:
+            let ent = readdir(dp)
+            if ent.is_null():
+                break
+            # d_name is at offset 19 on Linux (after d_ino, d_off, d_reclen, d_type)
+            unsafe:
+                let name_ptr = ent.offset(19) as *const c_char
+                let name = std::ffi::CStr::from_ptr(name_ptr).to_string_lossy()
+                if name != "." and name != "..":
+                    entries.push(name)
+        closedir(dp)
+    }
+    #[cfg(windows)]
+    {
+        extern "C":
+            fn FindFirstFileA(pattern: *const c_char, data: *mut u8) -> *mut c_void
+            fn FindNextFileA(handle: *mut c_void, data: *mut u8) -> c_int
+            fn FindClose(handle: *mut c_void) -> c_int
+
+        let pattern = format!("{}\\*", dir)
+        let c_pattern = CString::new(&pattern).map_err(|e| String::from(e))?
+        let mut find_data = [0u8; 592]  # WIN32_FIND_DATAA
+        let handle = FindFirstFileA(c_pattern.as_ptr(), find_data.as_mut_ptr())
+        if handle.is_null() or handle == (-1isize as *mut c_void):
+            return Err(format!("cannot open directory: {}", dir))
+        loop:
+            unsafe:
+                let name_ptr = find_data.as_ptr().offset(44) as *const c_char  # cFileName offset
+                let name = std::ffi::CStr::from_ptr(name_ptr).to_string_lossy()
+                if name != "." and name != "..":
+                    entries.push(name)
+            if FindNextFileA(handle, find_data.as_mut_ptr()) == 0:
+                break
+        FindClose(handle)
+    }
+    return Ok(entries)
+
+fn file_modified_time(path: &str) -> u64:
+    # Returns modification time in seconds since epoch (simplified)
+    #[cfg(unix)]
+    {
+        let c_path = CString::new(path).unwrap_or(CString::new("").unwrap())
+        let mut buf = [0u8; 144]  # struct stat
+        if stat(c_path.as_ptr(), buf.as_mut_ptr()) == 0:
+            unsafe:
+                # st_mtim.tv_sec at offset 88 on Linux x86_64
+                return *(buf.as_ptr().offset(88) as *const u64)
+        return 0
+    }
+    #[cfg(windows)]
+    {
+        let c_path = CString::new(path).unwrap_or(CString::new("").unwrap())
+        let mut info = [0u8; 36]  # WIN32_FILE_ATTRIBUTE_DATA
+        if GetFileAttributesExA(c_path.as_ptr(), 0, info.as_mut_ptr()) != 0:
+            unsafe:
+                # ftLastWriteTime at offset 20 (FILETIME = 8 bytes)
+                return *(info.as_ptr().offset(20) as *const u64)
+        return 0
+    }
+
+fn find_compiler() -> Result<String, String>:
+    # Look for omnc compiler in PATH or known locations
+    if let Some(path) = env_get("OMNC"):
+        return Ok(path)
+
+    # Check well-known locations
+    let candidates = [
+        "omnc",
+        "./target/debug/omnc",
+        "./target/release/omnc",
+        #[cfg(windows)]
+        "omnc.exe",
+    ]
+
+    for candidate in candidates.iter():
+        if path_exists(candidate):
+            return Ok(String::from(candidate))
+
+    return Ok(String::from("omnc"))  # Hope it's in PATH
+
+# ============================================================================
+# Clean
+# ============================================================================
+
+fn clean(project_root: &str) -> Result<(), String>:
+    let manifest_path = format!("{}/omni.toml", project_root)
+    let manifest_src = read_to_string(&manifest_path)
+        .map_err(|e| format!("failed to read manifest: {}", e))?
+    let manifest = parse_manifest(&manifest_src)?
+
+    let target_dir = format!("{}/{}", project_root, manifest.target_dir)
+    if is_dir(&target_dir):
+        let cmd = {
+            #[cfg(unix)]
+            format!("rm -rf {}", target_dir)
+            #[cfg(windows)]
+            format!("rmdir /s /q {}", target_dir)
+        }
+        let c_cmd = CString::new(&cmd).map_err(|e| String::from(e))?
+        system(c_cmd.as_ptr())
+        println!("  Cleaned {}", target_dir)
+    else:
+        println!("  Nothing to clean")
+
+    return Ok(())
+
+# ============================================================================
+# Run
+# ============================================================================
+
+fn run(project_root: &str, profile: BuildProfile, run_args: &[String]) -> Result<i32, String>:
+    build(project_root, profile.clone(), false)?
+
+    let manifest_path = format!("{}/omni.toml", project_root)
+    let manifest_src = read_to_string(&manifest_path)
+        .map_err(|e| String::from(e))?
+    let manifest = parse_manifest(&manifest_src)?
+
+    let output = output_path(project_root, &manifest, &profile)
+    if not path_exists(&output):
+        return Err(format!("executable not found: {}", output))
+
+    let mut cmd = output.clone()
+    for arg in run_args.iter():
+        cmd.push(' ')
+        cmd.push_str(arg)
+
+    let c_cmd = CString::new(&cmd).map_err(|e| String::from(e))?
+    let ret = system(c_cmd.as_ptr())
+    return Ok(ret)
+
+# ============================================================================
+# Test
+# ============================================================================
+
+fn test(project_root: &str) -> Result<(), String>:
+    let manifest_path = format!("{}/omni.toml", project_root)
+    let manifest_src = read_to_string(&manifest_path)
+        .map_err(|e| String::from(e))?
+    let manifest = parse_manifest(&manifest_src)?
+
+    println!("  Testing {} v{}", manifest.name, manifest.version)
+
+    # Compile with test configuration
+    let compiler = find_compiler()?
+    let mut sources = Vector::new()
+    discover_sources(project_root, &manifest.entry_point, &mut sources)?
+
+    let target_dir = format!("{}/{}/test", project_root, manifest.target_dir)
+    create_dir_all(&target_dir).map_err(|e| format!("{}", e))?
+
+    let test_binary = format!("{}/{}_test", target_dir, manifest.name)
+    #[cfg(windows)]
+    let test_binary = format!("{}/{}_test.exe", target_dir, manifest.name)
+
+    let mut compile_cmd = format!("{} --test", compiler)
+    for source in sources.iter():
+        compile_cmd.push_str(&format!(" {}", source.path))
+    compile_cmd.push_str(&format!(" -o {}", test_binary))
+
+    let c_cmd = CString::new(&compile_cmd).map_err(|e| String::from(e))?
+    let ret = system(c_cmd.as_ptr())
+    if ret != 0:
+        return Err(String::from("test compilation failed"))
+
+    # Run test binary
+    let c_test = CString::new(&test_binary).map_err(|e| String::from(e))?
+    let test_ret = system(c_test.as_ptr())
+    if test_ret != 0:
+        return Err(format!("tests failed with exit code {}", test_ret))
+
+    return Ok(())
+
+# ============================================================================
+# Init (create new project)
+# ============================================================================
+
+fn init(name: &str, is_lib: bool) -> Result<(), String>:
+    if path_exists(name):
+        return Err(format!("directory '{}' already exists", name))
+
+    create_dir_all(name).map_err(|e| format!("{}", e))?
+    create_dir_all(&format!("{}/src", name)).map_err(|e| format!("{}", e))?
+
+    # Generate omni.toml
+    let manifest = format!(
+        "[package]\nname = \"{}\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\n",
+        name
+    )
+    write_string(&format!("{}/omni.toml", name), &manifest)
+        .map_err(|e| format!("{}", e))?
+
+    # Generate entry point
+    if is_lib:
+        write_string(&format!("{}/src/lib.omni", name),
+            "module lib\n\npub fn add(a: i32, b: i32) -> i32:\n    return a + b\n\n#[test]\nfn test_add():\n    assert(add(2, 3) == 5, \"2 + 3 should be 5\")\n")
+            .map_err(|e| format!("{}", e))?
+    else:
+        write_string(&format!("{}/src/main.omni", name),
+            "module main\n\nfn main(args: Vector<String>) -> i32:\n    println!(\"Hello, world!\")\n    return 0\n")
+            .map_err(|e| format!("{}", e))?
+
+    # Generate .gitignore
+    write_string(&format!("{}/.gitignore", name), "/target\n")
+        .map_err(|e| format!("{}", e))?
+
+    println!("  Created {} project `{}`",
+        if is_lib { "library" } else { "binary" }, name)
+
+    return Ok(())
+
+# ============================================================================
+# CLI Entry Point
+# ============================================================================
+
+fn main(argv: Vector<String>) -> i32:
+    if argv.len() < 2:
+        print_usage()
+        return 1
+
+    let command = &argv[1]
+    let cwd = current_dir().unwrap_or(String::from("."))
+    let verbose = argv.iter().any(|a| a == "--verbose" or a == "-v")
+
+    let result = match command.as_str():
+        "build" =>
+            let profile = if argv.iter().any(|a| a == "--release" or a == "-r"):
+                BuildProfile::Release
+            else:
+                BuildProfile::Debug
+            build(&cwd, profile, verbose)
+
+        "run" =>
+            let profile = if argv.iter().any(|a| a == "--release" or a == "-r"):
+                BuildProfile::Release
+            else:
+                BuildProfile::Debug
+            let run_args = collect_run_args(&argv)
+            run(&cwd, profile, &run_args).map(|_| ())
+
+        "test" => test(&cwd)
+
+        "clean" => clean(&cwd)
+
+        "init" =>
+            let name = if argv.len() > 2:
+                &argv[2]
+            else:
+                return { eprintln!("usage: omni init <name>"); 1 }
+            let is_lib = argv.iter().any(|a| a == "--lib")
+            init(name, is_lib)
+
+        "new" =>
+            let name = if argv.len() > 2:
+                &argv[2]
+            else:
+                return { eprintln!("usage: omni new <name>"); 1 }
+            let is_lib = argv.iter().any(|a| a == "--lib")
+            init(name, is_lib)
+
+        "check" =>
+            # Compile without linking
+            println!("  Checking project...")
+            build(&cwd, BuildProfile::Debug, verbose)
+
+        "help" | "--help" | "-h" =>
+            print_usage()
+            Ok(())
+
+        "version" | "--version" | "-V" =>
+            println!("omni-build 0.1.0")
+            Ok(())
+
+        _ =>
+            eprintln!("unknown command: {}", command)
+            print_usage()
+            Err(String::from("unknown command"))
+
+    match result:
+        Ok(_) => return 0
+        Err(msg) =>
+            eprintln!("error: {}", msg)
+            return 1
+
+fn collect_run_args(argv: &Vector<String>) -> Vector<String>:
+    let mut args = Vector::new()
+    let mut after_dash_dash = false
+    for i in 2..argv.len():
+        if argv[i] == "--":
+            after_dash_dash = true
+            continue
+        if after_dash_dash:
+            args.push(argv[i].clone())
+    return args
+
+fn print_usage():
+    println!("Usage: omni <command> [options]")
+    println!("")
+    println!("Commands:")
+    println!("  build       Compile the current project")
+    println!("  run         Build and execute the current project")
+    println!("  test        Run project tests")
+    println!("  clean       Remove build artifacts")
+    println!("  new <name>  Create a new project")
+    println!("  init <name> Create a new project (alias for new)")
+    println!("  check       Check the project for errors without building")
+    println!("  help        Show this message")
+    println!("  version     Show version info")
+    println!("")
+    println!("Options:")
+    println!("  --release, -r    Build in release mode (optimized)")
+    println!("  --verbose, -v    Show verbose output")
+    println!("  --lib            Create a library project (with new/init)")
+    println!("  --              Separate build args from run args")
+
+# ============================================================================
+# Tests
+# ============================================================================
+
+#[test]
+fn test_parse_manifest_basic():
+    let src = "[package]\nname = \"myproject\"\nversion = \"1.0.0\"\n"
+    let m = parse_manifest(src).unwrap()
+    assert(m.name == "myproject", "name should be myproject")
+    assert(m.version == "1.0.0", "version should be 1.0.0")
+
+#[test]
+fn test_parse_manifest_deps():
+    let src = "[package]\nname = \"test\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1.0\"\n"
+    let m = parse_manifest(src).unwrap()
+    assert(m.dependencies.len() == 1, "should have 1 dependency")
+    assert(m.dependencies[0].name == "serde", "dep name should be serde")
+    assert(m.dependencies[0].version == "1.0", "dep version should be 1.0")
+
+#[test]
+fn test_parse_manifest_missing_name():
+    let src = "[package]\nversion = \"1.0.0\"\n"
+    let result = parse_manifest(src)
+    assert(result.is_err(), "missing name should error")
+
+#[test]
+fn test_strip_quotes():
+    assert(strip_quotes("\"hello\"") == "hello", "should strip double quotes")
+    assert(strip_quotes("'hello'") == "hello", "should strip single quotes")
+    assert(strip_quotes("hello") == "hello", "no quotes to strip")
+
+#[test]
+fn test_parse_dependency_simple():
+    let dep = parse_dependency("serde", "\"1.0\"").unwrap()
+    assert(dep.name == "serde", "name should be serde")
+    assert(dep.version == "1.0", "version should be 1.0")
+    assert(dep.path.is_none(), "no path")
+
+#[test]
+fn test_parse_dependency_inline():
+    let dep = parse_dependency("mylib", "{ version = \"2.0\", path = \"../mylib\" }").unwrap()
+    assert(dep.name == "mylib", "name should be mylib")
+    assert(dep.version == "2.0", "version should be 2.0")
+    assert(dep.path == Some(String::from("../mylib")), "path should be ../mylib")
+
+#[test]
+fn test_parse_u32():
+    assert(parse_u32("123") == Some(123), "parse 123")
+    assert(parse_u32("0") == Some(0), "parse 0")
+    assert(parse_u32("abc").is_none(), "abc should fail")
+
+#[test]
+fn test_output_type():
+    assert(OutputType::Executable.to_str() == "executable", "exe string")
+    assert(OutputType::Library.to_str() == "library", "lib string")
+
+#[test]
+fn test_profile_defaults():
+    let debug = ProfileConfig::debug_default()
+    assert(debug.opt_level == 0, "debug opt level = 0")
+    assert(debug.debug_info == true, "debug info on")
+
+    let release = ProfileConfig::release_default()
+    assert(release.opt_level == 3, "release opt level = 3")
+    assert(release.lto == true, "release lto on")

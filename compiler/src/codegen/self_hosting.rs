@@ -265,6 +265,11 @@ impl SelfHostingFeatures {
         );
 
         // Phase 3: Semantic analysis features
+        // NOTE: As of Feb 2026, semantic analyzer is ~50% complete
+        // - Type inference partial (no constraint solving)
+        // - Generic monomorphization skeleton only (typed_body empty)
+        // - Trait bounds basic implementation (no associated types)
+        // - ZERO unit tests (critical gap)
         features.insert(
             "Type inference".to_string(),
             FeatureStatus::PartiallyImplemented,
@@ -273,7 +278,10 @@ impl SelfHostingFeatures {
             "Generic types".to_string(),
             FeatureStatus::PartiallyImplemented,
         );
-        features.insert("Trait bounds".to_string(), FeatureStatus::NotImplemented);
+        features.insert(
+            "Trait bounds".to_string(),
+            FeatureStatus::PartiallyImplemented,
+        );
 
         // Phase 4: IR features
         features.insert(

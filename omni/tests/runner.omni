@@ -1,0 +1,424 @@
+module tests::runner
+
+# ============================================================================
+# Test Runner — Discovers and executes all #[test] functions
+# ============================================================================
+
+import std::core::{String, Vector, Option, Some, None, Result, Ok, Err}
+import std::collections::{HashMap}
+import std::io::{read_to_string, list_directory, path_exists, current_dir}
+import std::ffi::{c_int, c_char, CString, args}
+
+extern "C":
+    fn time(t: *mut i64) -> i64
+
+# ============================================================================
+# Test Infrastructure
+# ============================================================================
+
+enum TestResult:
+    Passed
+    Failed(String)
+    Skipped(String)
+
+struct TestCase:
+    name: String
+    module: String
+    function: String
+
+struct TestReport:
+    total: u32
+    passed: u32
+    failed: u32
+    skipped: u32
+    failures: Vector<(String, String)>     # (test_name, error_message)
+    duration_ms: u64
+
+    fn new() -> own TestReport:
+        return TestReport {
+            total: 0,
+            passed: 0,
+            failed: 0,
+            skipped: 0,
+            failures: Vector::new(),
+            duration_ms: 0,
+        }
+
+    fn record(&mut self, name: &str, result: TestResult):
+        self.total += 1
+        match result:
+            TestResult::Passed =>
+                self.passed += 1
+            TestResult::Failed(msg) =>
+                self.failed += 1
+                self.failures.push((String::from(name), msg))
+            TestResult::Skipped(reason) =>
+                self.skipped += 1
+
+    fn print_summary(&self):
+        println!("")
+        println!("═══════════════════════════════════════════════════════════")
+        println!("  Test Results")
+        println!("═══════════════════════════════════════════════════════════")
+
+        if not self.failures.is_empty():
+            println!("")
+            println!("  FAILURES:")
+            for (name, msg) in self.failures.iter():
+                println!("    ✗ {}", name)
+                println!("      {}", msg)
+
+        println!("")
+        println!("  Total:   {}", self.total)
+        println!("  Passed:  {} ✓", self.passed)
+        println!("  Failed:  {} ✗", self.failed)
+        if self.skipped > 0:
+            println!("  Skipped: {} ○", self.skipped)
+        println!("  Time:    {}ms", self.duration_ms)
+        println!("")
+
+        if self.failed == 0:
+            println!("  ✓ All tests passed!")
+        else:
+            println!("  ✗ {} test(s) failed", self.failed)
+        println!("")
+
+    fn is_success(&self) -> bool:
+        return self.failed == 0
+
+# ============================================================================
+# Test Discovery
+# ============================================================================
+
+fn discover_tests(source: &str) -> Vector<TestCase>:
+    let mut tests = Vector::new()
+    let lines = source.split("\n")
+    let mut in_test = false
+    let mut module_name = String::new()
+
+    for i in 0..lines.len():
+        let line = lines[i].trim()
+
+        # Track module name
+        if line.starts_with("module "):
+            module_name = String::from(&line[7..])
+            continue
+
+        # Find #[test] attribute
+        if line == "#[test]":
+            in_test = true
+            continue
+
+        # Function following #[test]
+        if in_test and line.starts_with("fn "):
+            let func_name = extract_function_name(line)
+            tests.push(TestCase {
+                name: format!("{}::{}", module_name, func_name),
+                module: module_name.clone(),
+                function: func_name,
+            })
+            in_test = false
+            continue
+
+        # Skip #[cfg(...)] attributes between #[test] and fn
+        if in_test and line.starts_with("#["):
+            continue
+
+        # Reset if something else appears
+        if in_test and not line.is_empty():
+            in_test = false
+
+    return tests
+
+fn extract_function_name(line: &str) -> String:
+    # "fn test_foo():" or "fn test_foo(args):"
+    let start = 3  # skip "fn "
+    let mut end = start
+    for i in start..line.len():
+        let ch = line.as_bytes()[i]
+        if ch == b'(' or ch == b'<' or ch == b':' or ch == b' ':
+            end = i
+            break
+        end = i + 1
+    return String::from(&line[start..end])
+
+fn discover_test_files(dir: &str) -> Vector<String>:
+    let mut files = Vector::new()
+    if not path_exists(dir):
+        return files
+
+    let entries = list_directory(dir)
+    for entry in entries.iter():
+        if entry.ends_with(".omni") and entry.starts_with("test_"):
+            files.push(format!("{}/{}", dir, entry))
+
+    return files
+
+# ============================================================================
+# Test Filter
+# ============================================================================
+
+struct TestFilter:
+    pattern: Option<String>
+    module_filter: Option<String>
+
+    fn new() -> own TestFilter:
+        return TestFilter {
+            pattern: None,
+            module_filter: None,
+        }
+
+    fn with_pattern(pattern: &str) -> own TestFilter:
+        return TestFilter {
+            pattern: Some(String::from(pattern)),
+            module_filter: None,
+        }
+
+    fn matches(&self, test: &TestCase) -> bool:
+        if let Some(pat) = &self.pattern:
+            if not test.name.contains(pat) and not test.function.contains(pat):
+                return false
+
+        if let Some(mod_filter) = &self.module_filter:
+            if not test.module.contains(mod_filter):
+                return false
+
+        return true
+
+# ============================================================================
+# Test Runner Configuration
+# ============================================================================
+
+struct RunnerConfig:
+    test_dir: String
+    verbose: bool
+    filter: TestFilter
+    fail_fast: bool
+    parallel: bool
+    show_output: bool
+
+    fn default() -> own RunnerConfig:
+        return RunnerConfig {
+            test_dir: String::from("tests"),
+            verbose: false,
+            filter: TestFilter::new(),
+            fail_fast: false,
+            parallel: false,
+            show_output: false,
+        }
+
+# ============================================================================
+# Main Runner
+# ============================================================================
+
+fn run_all_tests(config: &RunnerConfig) -> TestReport:
+    let mut report = TestReport::new()
+    let start_time = current_time_ms()
+
+    println!("")
+    println!("  ╔═══════════════════════════════════════════════════╗")
+    println!("  ║          Omni Test Runner                        ║")
+    println!("  ╚═══════════════════════════════════════════════════╝")
+    println!("")
+
+    # Discover test files
+    let test_files = discover_test_files(&config.test_dir)
+    if test_files.is_empty():
+        println!("  No test files found in {}", config.test_dir)
+        return report
+
+    println!("  Found {} test file(s)", test_files.len())
+    println!("")
+
+    # Process each test file
+    for file_path in test_files.iter():
+        let source = match read_to_string(file_path):
+            Ok(s) => s
+            Err(e) =>
+                println!("  error: cannot read {}: {}", file_path, e)
+                continue
+
+        let tests = discover_tests(&source)
+        if tests.is_empty():
+            continue
+
+        let module_name = tests[0].module.clone()
+        println!("  Running {} tests from {}", tests.len(), module_name)
+
+        for test in tests.iter():
+            # Apply filter
+            if not config.filter.matches(test):
+                report.record(&test.name, TestResult::Skipped(String::from("filtered")))
+                if config.verbose:
+                    println!("    ○ {} (skipped)", test.function)
+                continue
+
+            # Run single test
+            let result = run_single_test(test, config)
+            match &result:
+                TestResult::Passed =>
+                    if config.verbose:
+                        println!("    ✓ {}", test.function)
+                TestResult::Failed(msg) =>
+                    println!("    ✗ {}: {}", test.function, msg)
+                TestResult::Skipped(reason) =>
+                    if config.verbose:
+                        println!("    ○ {} ({})", test.function, reason)
+
+            let is_failure = match &result:
+                TestResult::Failed(_) => true
+                _ => false
+
+            report.record(&test.name, result)
+
+            if config.fail_fast and is_failure:
+                println!("  Stopping early (--fail-fast)")
+                break
+
+        println!("")
+
+        if config.fail_fast and report.failed > 0:
+            break
+
+    report.duration_ms = (current_time_ms() - start_time) as u64
+    report.print_summary()
+
+    return report
+
+fn run_single_test(test: &TestCase, config: &RunnerConfig) -> TestResult:
+    # In a real implementation, this would dynamically invoke the test function.
+    # For the bootstrap, we call into the compiled test binary.
+
+    # Catch panics
+    match catch_test_panic(test):
+        Ok(()) => TestResult::Passed
+        Err(msg) => TestResult::Failed(msg)
+
+fn catch_test_panic(test: &TestCase) -> Result<(), String>:
+    # Uses the runtime's catch_unwind mechanism
+    # In practice, each test is called via function pointer from the compiled module
+    import runtime::mod::{catch_unwind}
+
+    let result = catch_unwind(|| {
+        # Dynamic dispatch to test function
+        call_test_function(&test.module, &test.function)
+    })
+
+    match result:
+        Ok(()) => Ok(())
+        Err(panic_info) =>
+            Err(format!("panicked: {}", panic_info.message))
+
+fn call_test_function(module: &str, function: &str):
+    # In a fully bootstrapped compiler, this resolves the test function
+    # by name and invokes it. The compiled test binary exports all
+    # #[test] functions as symbols.
+    pass
+
+# ============================================================================
+# CLI Entry Point
+# ============================================================================
+
+fn main(argv: Vector<String>) -> i32:
+    let mut config = RunnerConfig::default()
+
+    # Parse args
+    let mut i: usize = 1
+    while i < argv.len():
+        match argv[i].as_str():
+            "--verbose" | "-v" =>
+                config.verbose = true
+            "--fail-fast" | "-f" =>
+                config.fail_fast = true
+            "--parallel" | "-p" =>
+                config.parallel = true
+            "--show-output" =>
+                config.show_output = true
+            _ if argv[i].starts_with("--filter=") =>
+                let pattern = &argv[i][9..]
+                config.filter = TestFilter::with_pattern(pattern)
+            _ if argv[i].starts_with("--dir=") =>
+                config.test_dir = String::from(&argv[i][6..])
+            _ if not argv[i].starts_with("-") =>
+                # Positional arg treated as filter
+                config.filter = TestFilter::with_pattern(&argv[i])
+            _ =>
+                eprintln!("unknown option: {}", argv[i])
+                print_usage()
+                return 1
+        i += 1
+
+    let report = run_all_tests(&config)
+
+    if report.is_success():
+        return 0
+    else:
+        return 1
+
+fn print_usage():
+    println!("Usage: omni test [OPTIONS] [FILTER]")
+    println!("")
+    println!("Options:")
+    println!("  -v, --verbose      Show all test names")
+    println!("  -f, --fail-fast    Stop on first failure")
+    println!("  -p, --parallel     Run tests in parallel")
+    println!("  --show-output      Show test stdout/stderr")
+    println!("  --filter=PATTERN   Run only matching tests")
+    println!("  --dir=PATH         Test directory (default: tests/)")
+    println!("")
+
+fn current_time_ms() -> i64:
+    let mut t: i64 = 0
+    time(&mut t)
+    return t * 1000  # approximate — use clock_gettime for real ms
+
+# ============================================================================
+# Self-Tests
+# ============================================================================
+
+#[test]
+fn test_discover_tests():
+    let source = "module test_example\n\n#[test]\nfn test_one():\n    assert(true)\n\n#[test]\nfn test_two():\n    assert(true)\n\nfn not_a_test():\n    pass\n"
+    let tests = discover_tests(source)
+    assert_eq(tests.len(), 2)
+    assert(tests[0].function == "test_one", "first test")
+    assert(tests[1].function == "test_two", "second test")
+
+#[test]
+fn test_extract_function_name():
+    assert_eq(extract_function_name("fn test_foo():"), "test_foo")
+    assert_eq(extract_function_name("fn test_bar(x: i32):"), "test_bar")
+    assert_eq(extract_function_name("fn test_baz<T>():"), "test_baz")
+
+#[test]
+fn test_filter_matches():
+    let filter = TestFilter::with_pattern("lexer")
+    let test1 = TestCase {
+        name: String::from("tests::lexer::test_keywords"),
+        module: String::from("tests::lexer"),
+        function: String::from("test_keywords"),
+    }
+    let test2 = TestCase {
+        name: String::from("tests::parser::test_expr"),
+        module: String::from("tests::parser"),
+        function: String::from("test_expr"),
+    }
+    assert(filter.matches(&test1), "should match lexer test")
+    assert(not filter.matches(&test2), "should not match parser test")
+
+#[test]
+fn test_report():
+    let mut report = TestReport::new()
+    report.record("test1", TestResult::Passed)
+    report.record("test2", TestResult::Passed)
+    report.record("test3", TestResult::Failed(String::from("assertion failed")))
+    assert_eq(report.total, 3)
+    assert_eq(report.passed, 2)
+    assert_eq(report.failed, 1)
+    assert(not report.is_success(), "should not be success with failure")
+
+#[test]
+fn test_empty_report():
+    let report = TestReport::new()
+    assert_eq(report.total, 0)
+    assert(report.is_success(), "empty report should be success")

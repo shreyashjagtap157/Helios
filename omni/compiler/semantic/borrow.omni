@@ -1,0 +1,576 @@
+module compiler::semantic::borrow
+
+# ============================================================================
+# Omni Borrow Checker — Ownership, Borrowing, Lifetime Verification
+# ============================================================================
+
+import compiler::lexer::token::Span
+import compiler::parser::ast::{
+    Expr, Stmt, Block, FunctionDef, Pattern, LetStmt,
+    BinaryOp, UnaryOp, AssignExpr, NodeId,
+}
+import compiler::semantic::{SemanticError, Severity, ScopeId}
+import compiler::semantic::types::TypeId
+
+# --- Ownership State ---
+
+enum OwnershipState:
+    Owned             # Exclusively owned by this binding
+    Moved             # Ownership transferred away
+    Borrowed          # Immutably borrowed
+    MutBorrowed       # Mutably borrowed
+    PartiallyMoved    # Some fields moved out
+    Dropped           # Explicitly dropped
+
+    fn is_accessible(&self) -> bool:
+        match self:
+            Owned | Borrowed | MutBorrowed => true
+            _ => false
+
+    fn is_movable(&self) -> bool:
+        match self:
+            Owned => true
+            _ => false
+
+# --- Place ---
+
+enum PlaceKind:
+    Local(str)                    # variable name
+    Field(Box<Place>, str)        # obj.field
+    Index(Box<Place>, Box<Expr>)  # arr[i]
+    Deref(Box<Place>)             # *ptr
+
+struct Place:
+    kind: PlaceKind
+    span: Span
+
+    fn root_name(&self) -> str:
+        match &self.kind:
+            PlaceKind::Local(name) => name.clone()
+            PlaceKind::Field(base, _) => base.root_name()
+            PlaceKind::Index(base, _) => base.root_name()
+            PlaceKind::Deref(base) => base.root_name()
+
+# --- Loan ---
+
+type LoanId = u32
+
+enum LoanKind:
+    Shared        # &x
+    Mutable       # &mut x
+    Move          # ownership transfer
+
+struct Loan:
+    id: LoanId
+    kind: LoanKind
+    place: Place
+    region: Region
+    span: Span
+
+# --- Region (Lifetime) ---
+
+type RegionId = u32
+
+struct Region:
+    id: RegionId
+    scope: ScopeId
+    parent: Option<RegionId>
+
+    fn outlives(&self, other: &Region) -> bool:
+        # A region outlives another if it's the same or an ancestor
+        return self.id <= other.id
+
+# --- Binding Info ---
+
+struct BindingInfo:
+    name: str
+    type_id: TypeId
+    is_mutable: bool
+    state: OwnershipState
+    defined_at: Span
+    moved_at: Option<Span>
+    borrows: Vector<LoanId>       # active borrows of this binding
+    drop_order: u32               # for deterministic drop ordering
+
+# --- Borrow Checker ---
+
+struct BorrowChecker:
+    bindings: HashMap<str, BindingInfo>
+    loans: Vector<Loan>
+    regions: Vector<Region>
+    next_loan_id: LoanId
+    next_region_id: RegionId
+    errors: Vector<SemanticError>
+    binding_stack: Vector<Vector<str>>    # stack of scopes with binding names
+    drop_counter: u32
+
+    fn new() -> own Self:
+        return BorrowChecker {
+            bindings: HashMap::new(),
+            loans: Vector::new(),
+            regions: Vector::new(),
+            next_loan_id: 0,
+            next_region_id: 0,
+            errors: Vector::new(),
+            binding_stack: Vector::from([Vector::new()]),
+            drop_counter: 0,
+        }
+
+    fn error(&mut self, msg: str, span: Span):
+        self.errors.push(SemanticError::new(msg, span))
+
+    fn warning(&mut self, msg: str, span: Span):
+        self.errors.push(SemanticError::warning(msg, span))
+
+    fn push_scope(&mut self):
+        self.binding_stack.push(Vector::new())
+
+    fn pop_scope(&mut self):
+        if let Some(names) = self.binding_stack.pop():
+            # Drop bindings in reverse order
+            for name in names.iter().rev():
+                self.drop_binding(name)
+
+    fn create_region(&mut self, scope: ScopeId) -> Region:
+        let id = self.next_region_id
+        self.next_region_id += 1
+        let parent = if not self.regions.is_empty():
+            Some(self.regions.len() as RegionId - 1)
+        else:
+            None
+        let region = Region { id: id, scope: scope, parent: parent }
+        self.regions.push(region.clone())
+        return region
+
+    # ====================================================================
+    # Binding Management
+    # ====================================================================
+
+    fn define_binding(&mut self, name: str, type_id: TypeId, is_mutable: bool, span: Span):
+        let info = BindingInfo {
+            name: name.clone(),
+            type_id: type_id,
+            is_mutable: is_mutable,
+            state: OwnershipState::Owned,
+            defined_at: span,
+            moved_at: None,
+            borrows: Vector::new(),
+            drop_order: self.drop_counter,
+        }
+        self.drop_counter += 1
+        self.bindings.insert(name.clone(), info)
+        if let Some(scope_names) = self.binding_stack.last_mut():
+            scope_names.push(name)
+
+    fn drop_binding(&mut self, name: &str):
+        if let Some(info) = self.bindings.get(name):
+            # Check for active borrows at drop point
+            if not info.borrows.is_empty():
+                self.error(
+                    format("value '{}' dropped while still borrowed", name),
+                    info.defined_at.clone(),
+                )
+            self.bindings.remove(name)
+
+    fn get_binding(&self, name: &str) -> Option<&BindingInfo>:
+        return self.bindings.get(name)
+
+    fn get_binding_mut(&mut self, name: &str) -> Option<&mut BindingInfo>:
+        return self.bindings.get_mut(name)
+
+    # ====================================================================
+    # Move Checking
+    # ====================================================================
+
+    fn check_move(&mut self, name: &str, span: Span):
+        match self.bindings.get(name):
+            Some(info) =>
+                match info.state:
+                    OwnershipState::Moved =>
+                        self.error(
+                            format("use of moved value '{}' (moved at {}:{})",
+                                name,
+                                info.moved_at.as_ref().map(|s| s.line).unwrap_or(0),
+                                info.moved_at.as_ref().map(|s| s.column).unwrap_or(0)),
+                            span,
+                        )
+                    OwnershipState::PartiallyMoved =>
+                        self.error(
+                            format("use of partially moved value '{}'", name),
+                            span,
+                        )
+                    OwnershipState::Dropped =>
+                        self.error(
+                            format("use of dropped value '{}'", name),
+                            span,
+                        )
+                    _ => pass
+            None => pass  # Undefined variable handled by semantic analyzer
+
+    fn perform_move(&mut self, name: &str, span: Span):
+        if let Some(info) = self.bindings.get_mut(name):
+            match info.state:
+                OwnershipState::Owned =>
+                    # Check no active borrows
+                    if not info.borrows.is_empty():
+                        self.error(
+                            format("cannot move '{}' while it is borrowed", name),
+                            span.clone(),
+                        )
+                    info.state = OwnershipState::Moved
+                    info.moved_at = Some(span)
+                OwnershipState::Moved =>
+                    self.error(
+                        format("value '{}' already moved", name),
+                        span,
+                    )
+                OwnershipState::Borrowed | OwnershipState::MutBorrowed =>
+                    self.error(
+                        format("cannot move '{}' while it is borrowed", name),
+                        span,
+                    )
+                _ => pass
+
+    # ====================================================================
+    # Borrow Checking
+    # ====================================================================
+
+    fn create_borrow(&mut self, name: &str, kind: LoanKind, region: Region, span: Span) -> LoanId:
+        let loan_id = self.next_loan_id
+        self.next_loan_id += 1
+
+        let place = Place {
+            kind: PlaceKind::Local(name.to_string()),
+            span: span.clone(),
+        }
+
+        let loan = Loan {
+            id: loan_id, kind: kind.clone(), place: place,
+            region: region, span: span.clone(),
+        }
+        self.loans.push(loan)
+
+        if let Some(info) = self.bindings.get_mut(name):
+            # Validate borrow compatibility
+            match (&info.state, &kind):
+                (OwnershipState::Moved, _) =>
+                    self.error(
+                        format("cannot borrow '{}': value has been moved", name),
+                        span,
+                    )
+                (OwnershipState::Dropped, _) =>
+                    self.error(
+                        format("cannot borrow '{}': value has been dropped", name),
+                        span,
+                    )
+                (_, LoanKind::Mutable) =>
+                    # Check no existing borrows (shared or mutable)
+                    if not info.borrows.is_empty():
+                        let existing = &self.loans[info.borrows[0] as usize]
+                        self.error(
+                            format("cannot borrow '{}' as mutable: already borrowed as {} at {}:{}",
+                                name,
+                                match existing.kind:
+                                    LoanKind::Shared => "immutable"
+                                    LoanKind::Mutable => "mutable"
+                                    _ => "moved",
+                                existing.span.line, existing.span.column),
+                            span,
+                        )
+                    if not info.is_mutable:
+                        self.error(
+                            format("cannot borrow '{}' as mutable: not declared as mutable", name),
+                            span,
+                        )
+                    info.state = OwnershipState::MutBorrowed
+                (_, LoanKind::Shared) =>
+                    # Check no mutable borrow exists
+                    for loan_id in &info.borrows:
+                        let existing = &self.loans[*loan_id as usize]
+                        match existing.kind:
+                            LoanKind::Mutable =>
+                                self.error(
+                                    format("cannot borrow '{}' as immutable: already borrowed as mutable at {}:{}",
+                                        name, existing.span.line, existing.span.column),
+                                    span,
+                                )
+                            _ => pass
+                    info.state = OwnershipState::Borrowed
+                _ => pass
+
+            info.borrows.push(loan_id)
+
+        return loan_id
+
+    fn expire_loans(&mut self, region: &Region):
+        # Remove all loans from this region
+        let mut to_remove = Vector::new()
+        for loan in &self.loans:
+            if loan.region.id == region.id:
+                to_remove.push(loan.id)
+
+        for loan_id in &to_remove:
+            let loan = &self.loans[*loan_id as usize]
+            let name = loan.place.root_name()
+            if let Some(info) = self.bindings.get_mut(&name):
+                info.borrows.retain(|id| id != loan_id)
+                if info.borrows.is_empty():
+                    match info.state:
+                        OwnershipState::Borrowed | OwnershipState::MutBorrowed =>
+                            info.state = OwnershipState::Owned
+                        _ => pass
+
+    # ====================================================================
+    # Expression Analysis
+    # ====================================================================
+
+    fn check_expr(&mut self, expr: &Expr, region: &Region):
+        match expr:
+            Expr::Identifier(name, span) =>
+                self.check_move(name, span.clone())
+
+            Expr::Binary(bin) =>
+                self.check_expr(&bin.left, region)
+                self.check_expr(&bin.right, region)
+
+            Expr::Unary(un) =>
+                match un.op:
+                    UnaryOp::Ref =>
+                        self.check_borrow_expr(&un.operand, LoanKind::Shared, region)
+                    UnaryOp::RefMut =>
+                        self.check_borrow_expr(&un.operand, LoanKind::Mutable, region)
+                    UnaryOp::Deref =>
+                        self.check_expr(&un.operand, region)
+                    _ =>
+                        self.check_expr(&un.operand, region)
+
+            Expr::Call(call) =>
+                self.check_expr(&call.callee, region)
+                for arg in &call.args:
+                    self.check_expr(arg, region)
+
+            Expr::MethodCall(mc) =>
+                self.check_expr(&mc.receiver, region)
+                for arg in &mc.args:
+                    self.check_expr(arg, region)
+
+            Expr::FieldAccess(obj, _, _) =>
+                self.check_expr(obj, region)
+
+            Expr::Index(obj, idx, _) =>
+                self.check_expr(obj, region)
+                self.check_expr(idx, region)
+
+            Expr::If(if_expr) =>
+                self.check_expr(&if_expr.condition, region)
+                self.check_block(&if_expr.then_block, region)
+                for elif in &if_expr.elif_clauses:
+                    self.check_expr(&elif.condition, region)
+                    self.check_block(&elif.body, region)
+                if let Some(ref else_block) = if_expr.else_block:
+                    self.check_block(else_block, region)
+
+            Expr::Match(m) =>
+                self.check_expr(&m.subject, region)
+                for arm in &m.arms:
+                    self.push_scope()
+                    self.check_expr(&arm.body, region)
+                    self.pop_scope()
+
+            Expr::Closure(c) =>
+                # Closures capture by reference by default
+                self.push_scope()
+                for p in &c.params:
+                    self.define_binding(p.name.clone(), TypeId(0), false, p.span.clone())
+                self.check_expr(&c.body, region)
+                self.pop_scope()
+
+            Expr::ArrayLiteral(elems, _) =>
+                for elem in elems:
+                    self.check_expr(elem, region)
+
+            Expr::TupleLiteral(elems, _) =>
+                for elem in elems:
+                    self.check_expr(elem, region)
+
+            Expr::StructLiteral(sl) =>
+                for fi in &sl.fields:
+                    self.check_expr(&fi.value, region)
+
+            _ => pass
+
+    fn check_borrow_expr(&mut self, expr: &Expr, kind: LoanKind, region: &Region):
+        match expr:
+            Expr::Identifier(name, span) =>
+                self.create_borrow(name, kind, region.clone(), span.clone())
+            _ =>
+                self.check_expr(expr, region)
+
+    # ====================================================================
+    # Statement Analysis
+    # ====================================================================
+
+    fn check_stmt(&mut self, stmt: &Stmt, region: &Region):
+        match stmt:
+            Stmt::Let(let_stmt) =>
+                if let Some(ref value) = let_stmt.value:
+                    self.check_expr(value, region)
+                    # Check if the value is a move from another binding
+                    match value:
+                        Expr::Identifier(name, span) =>
+                            if not self.is_copy_type(name):
+                                self.perform_move(name, span.clone())
+                        _ => pass
+                self.define_binding(
+                    let_stmt.name.clone(),
+                    TypeId(0),  # Type resolved elsewhere
+                    let_stmt.is_mutable,
+                    let_stmt.span.clone(),
+                )
+
+            Stmt::Assign(assign) =>
+                # Check target is mutable
+                match &*assign.target:
+                    Expr::Identifier(name, span) =>
+                        match self.bindings.get(name):
+                            Some(info) =>
+                                if not info.is_mutable:
+                                    self.error(
+                                        format("cannot assign to immutable variable '{}'", name),
+                                        span.clone(),
+                                    )
+                                # Check no active borrows on target
+                                if not info.borrows.is_empty():
+                                    self.error(
+                                        format("cannot assign to '{}' while it is borrowed", name),
+                                        span.clone(),
+                                    )
+                            None => pass
+                    _ => pass
+                self.check_expr(&assign.value, region)
+
+            Stmt::Return(value, _) =>
+                if let Some(expr) = value:
+                    self.check_expr(expr, region)
+
+            Stmt::If(if_stmt) =>
+                self.check_expr(&if_stmt.condition, region)
+                self.push_scope()
+                self.check_block(&if_stmt.then_block, region)
+                self.pop_scope()
+                for elif in &if_stmt.elif_clauses:
+                    self.check_expr(&elif.condition, region)
+                    self.push_scope()
+                    self.check_block(&elif.body, region)
+                    self.pop_scope()
+                if let Some(ref else_block) = if_stmt.else_block:
+                    self.push_scope()
+                    self.check_block(else_block, region)
+                    self.pop_scope()
+
+            Stmt::For(for_stmt) =>
+                self.check_expr(&for_stmt.iterable, region)
+                self.push_scope()
+                self.bind_pattern_for_borrow(&for_stmt.pattern)
+                self.check_block(&for_stmt.body, region)
+                self.pop_scope()
+
+            Stmt::While(while_stmt) =>
+                self.check_expr(&while_stmt.condition, region)
+                self.push_scope()
+                self.check_block(&while_stmt.body, region)
+                self.pop_scope()
+
+            Stmt::Loop(loop_stmt) =>
+                self.push_scope()
+                self.check_block(&loop_stmt.body, region)
+                self.pop_scope()
+
+            Stmt::Match(match_stmt) =>
+                self.check_expr(&match_stmt.subject, region)
+                for arm in &match_stmt.arms:
+                    self.push_scope()
+                    self.bind_pattern_for_borrow(&arm.pattern)
+                    self.check_expr(&arm.body, region)
+                    self.pop_scope()
+
+            Stmt::Expr(expr) =>
+                self.check_expr(expr, region)
+
+            Stmt::Defer(inner, _) =>
+                # Defer runs at scope exit — check statement but note deferred execution
+                self.check_stmt(inner, region)
+
+            _ => pass
+
+    fn check_block(&mut self, block: &Block, region: &Region):
+        self.push_scope()
+        for stmt in &block.stmts:
+            self.check_stmt(stmt, region)
+        self.pop_scope()
+
+    fn bind_pattern_for_borrow(&mut self, pattern: &Pattern):
+        match pattern:
+            Pattern::Identifier(name, is_mut, span) =>
+                self.define_binding(name.clone(), TypeId(0), *is_mut, span.clone())
+            Pattern::Tuple(pats, _) =>
+                for pat in pats:
+                    self.bind_pattern_for_borrow(pat)
+            Pattern::Struct(sp) =>
+                for fp in &sp.fields:
+                    if let Some(ref inner) = fp.pattern:
+                        self.bind_pattern_for_borrow(inner)
+                    else:
+                        self.define_binding(fp.name.clone(), TypeId(0), false, fp.span.clone())
+            Pattern::Enum(ep) =>
+                for pat in &ep.fields:
+                    self.bind_pattern_for_borrow(pat)
+            Pattern::Or(pats, _) =>
+                # All alternatives must bind the same names
+                if let Some(first) = pats.first():
+                    self.bind_pattern_for_borrow(first)
+            Pattern::Ref(inner, _, _) =>
+                self.bind_pattern_for_borrow(inner)
+            _ => pass
+
+    fn is_copy_type(&self, name: &str) -> bool:
+        # Primitive types are Copy, everything else is Move by default
+        match self.bindings.get(name):
+            Some(info) =>
+                # Check if the type implements Copy
+                # For now, return false (conservative)
+                return false
+            None => return true  # Unknown = assume copy
+
+    # ====================================================================
+    # Function-Level Check
+    # ====================================================================
+
+    fn check_function(&mut self, func: &FunctionDef, scope: ScopeId):
+        let region = self.create_region(scope)
+        self.push_scope()
+
+        # Define parameters as bindings
+        for param in &func.params:
+            let is_mut = match &param.self_kind:
+                Some(SelfKind::RefMut) => true
+                _ => false
+            self.define_binding(
+                param.name.clone(),
+                TypeId(0),
+                is_mut or param.is_self,
+                param.span.clone(),
+            )
+
+        self.check_block(&func.body, &region)
+        self.pop_scope()
+        self.expire_loans(&region)
+
+# ============================================================================
+# Public API
+# ============================================================================
+
+fn check_borrows(func: &FunctionDef, scope: ScopeId) -> Vector<SemanticError>:
+    let mut checker = BorrowChecker::new()
+    checker.check_function(func, scope)
+    return checker.errors

@@ -1,0 +1,820 @@
+module compiler::codegen::gpu
+
+# ============================================================================
+# GPU Code Generation Backend — SPIR-V / CUDA PTX / Metal
+# ============================================================================
+# Translates IR kernels annotated with @gpu to GPU compute shaders.
+# Supports: SPIR-V (Vulkan/OpenCL), CUDA PTX, Metal Shading Language.
+
+import compiler::ir::{
+    IrModule, IrFunction, IrInst, IrConst, IrType,
+    BasicBlock, VarId, BlockId,
+}
+
+# ============================================================================
+# GPU Target Selection
+# ============================================================================
+
+enum GpuTarget:
+    SPIRV       # Vulkan / OpenCL
+    PTX         # NVIDIA CUDA
+    Metal       # Apple Metal
+    WGSL        # WebGPU
+
+enum GpuMemorySpace:
+    Global      # __global
+    Shared      # __shared / groupshared
+    Constant    # __constant
+    Private     # thread-local
+    Uniform     # uniform buffer
+
+struct GpuKernelInfo:
+    name: str
+    work_group_size: (u32, u32, u32)
+    shared_memory_size: u32
+    params: Vector<GpuParam>
+    body_blocks: Vector<BlockId>
+
+struct GpuParam:
+    name: str
+    ty: IrType
+    memory_space: GpuMemorySpace
+    is_buffer: bool
+    binding: u32
+
+# ============================================================================
+# SPIR-V Generation
+# ============================================================================
+
+# SPIR-V magic number and version
+const SPIRV_MAGIC: u32 = 0x07230203
+const SPIRV_VERSION: u32 = 0x00010500  # SPIR-V 1.5
+
+# SPIR-V instruction opcodes
+enum SpvOp: u16
+    OpCapability        = 17
+    OpExtInstImport     = 11
+    OpMemoryModel       = 14
+    OpEntryPoint        = 15
+    OpExecutionMode     = 16
+    OpName              = 5
+    OpDecorate          = 71
+    OpTypeVoid          = 19
+    OpTypeBool          = 20
+    OpTypeInt           = 21
+    OpTypeFloat         = 22
+    OpTypeVector        = 23
+    OpTypeArray         = 28
+    OpTypeStruct        = 30
+    OpTypePointer       = 32
+    OpTypeFunction      = 33
+    OpConstant          = 43
+    OpConstantTrue      = 41
+    OpConstantFalse     = 42
+    OpConstantComposite = 44
+    OpVariable          = 59
+    OpLoad              = 61
+    OpStore             = 62
+    OpAccessChain       = 65
+    OpFunction          = 54
+    OpFunctionParameter = 55
+    OpFunctionEnd       = 56
+    OpFunctionCall      = 57
+    OpLabel             = 248
+    OpBranch            = 249
+    OpBranchConditional = 250
+    OpReturn            = 253
+    OpReturnValue       = 254
+    OpIAdd              = 128
+    OpISub              = 130
+    OpIMul              = 132
+    OpSDiv              = 135
+    OpSMod              = 139
+    OpFAdd              = 129
+    OpFSub              = 131
+    OpFMul              = 133
+    OpFDiv              = 136
+    OpIEqual            = 170
+    OpINotEqual         = 171
+    OpSLessThan         = 177
+    OpSGreaterThan      = 173
+    OpSLessThanEqual    = 178
+    OpSGreaterThanEqual = 175
+    OpSelect            = 169
+    OpPhi               = 245
+    OpBitwiseAnd        = 199
+    OpBitwiseOr         = 197
+    OpBitwiseXor        = 198
+    OpShiftLeftLogical  = 196
+    OpShiftRightArith   = 195
+    OpConvertSToF       = 111
+    OpConvertFToS       = 110
+
+# SPIR-V capability flags
+enum SpvCapability: u32
+    Shader          = 1
+    Kernel          = 6
+    Float64         = 10
+    Int16           = 22
+    Int64           = 11
+    AtomicFloat32Add = 6033
+
+# SPIR-V execution model
+enum SpvExecutionModel: u32
+    Vertex      = 0
+    Fragment    = 4
+    GLCompute   = 5
+    Kernel_     = 6
+
+# SPIR-V storage class
+enum SpvStorageClass: u32
+    UniformConstant = 0
+    Input           = 1
+    Uniform         = 2
+    Output          = 3
+    Function        = 7
+    StorageBuffer   = 12
+    Workgroup       = 4
+
+struct SpvBuilder:
+    next_id: u32
+    capabilities: Vector<SpvCapability>
+    extensions: Vector<str>
+    entry_points: Vector<(str, u32)>  # (name, func_id)
+    type_ids: HashMap<str, u32>       # type_key -> id
+    const_ids: HashMap<str, u32>      # const_key -> id
+    instructions: Vector<Vector<u32>> # encoded instructions
+    name_annotations: Vector<(u32, str)>
+    decorations: Vector<Vector<u32>>
+
+    fn new() -> own Self:
+        return SpvBuilder {
+            next_id: 1,
+            capabilities: Vector::new(),
+            extensions: Vector::new(),
+            entry_points: Vector::new(),
+            type_ids: HashMap::new(),
+            const_ids: HashMap::new(),
+            instructions: Vector::new(),
+            name_annotations: Vector::new(),
+            decorations: Vector::new(),
+        }
+
+    fn fresh_id(&mut self) -> u32:
+        let id = self.next_id
+        self.next_id += 1
+        return id
+
+    fn add_capability(&mut self, cap: SpvCapability):
+        self.capabilities.push(cap)
+
+    fn emit_type_void(&mut self) -> u32:
+        let key = "void".to_string()
+        if let Some(id) = self.type_ids.get(&key):
+            return *id
+        let id = self.fresh_id()
+        self.type_ids.insert(key, id)
+        self.instructions.push(encode_inst(SpvOp::OpTypeVoid, Vector::from([id])))
+        return id
+
+    fn emit_type_bool(&mut self) -> u32:
+        let key = "bool".to_string()
+        if let Some(id) = self.type_ids.get(&key):
+            return *id
+        let id = self.fresh_id()
+        self.type_ids.insert(key, id)
+        self.instructions.push(encode_inst(SpvOp::OpTypeBool, Vector::from([id])))
+        return id
+
+    fn emit_type_int(&mut self, width: u32, signed: bool) -> u32:
+        let key = format("int_{}_{}", width, signed)
+        if let Some(id) = self.type_ids.get(&key):
+            return *id
+        let id = self.fresh_id()
+        self.type_ids.insert(key, id)
+        self.instructions.push(encode_inst(SpvOp::OpTypeInt, Vector::from([id, width, if signed: 1 else: 0])))
+        return id
+
+    fn emit_type_float(&mut self, width: u32) -> u32:
+        let key = format("float_{}", width)
+        if let Some(id) = self.type_ids.get(&key):
+            return *id
+        let id = self.fresh_id()
+        self.type_ids.insert(key, id)
+        self.instructions.push(encode_inst(SpvOp::OpTypeFloat, Vector::from([id, width])))
+        return id
+
+    fn emit_type_vector(&mut self, component: u32, count: u32) -> u32:
+        let key = format("vec_{}_{}", component, count)
+        if let Some(id) = self.type_ids.get(&key):
+            return *id
+        let id = self.fresh_id()
+        self.type_ids.insert(key, id)
+        self.instructions.push(encode_inst(SpvOp::OpTypeVector, Vector::from([id, component, count])))
+        return id
+
+    fn emit_type_pointer(&mut self, storage_class: SpvStorageClass, pointee: u32) -> u32:
+        let key = format("ptr_{}_{}", storage_class as u32, pointee)
+        if let Some(id) = self.type_ids.get(&key):
+            return *id
+        let id = self.fresh_id()
+        self.type_ids.insert(key, id)
+        self.instructions.push(encode_inst(SpvOp::OpTypePointer, Vector::from([id, storage_class as u32, pointee])))
+        return id
+
+    fn emit_type_function(&mut self, return_type: u32, params: &Vector<u32>) -> u32:
+        let mut args = Vector::from([self.fresh_id(), return_type])
+        let id = args[0]
+        for p in params:
+            args.push(*p)
+        self.instructions.push(encode_inst(SpvOp::OpTypeFunction, args))
+        return id
+
+    fn emit_type_struct(&mut self, members: &Vector<u32>) -> u32:
+        let id = self.fresh_id()
+        let mut args = Vector::from([id])
+        for m in members:
+            args.push(*m)
+        self.instructions.push(encode_inst(SpvOp::OpTypeStruct, args))
+        return id
+
+    fn emit_constant_int(&mut self, ty: u32, value: i64) -> u32:
+        let key = format("const_int_{}_{}", ty, value)
+        if let Some(id) = self.const_ids.get(&key):
+            return *id
+        let id = self.fresh_id()
+        self.const_ids.insert(key, id)
+        self.instructions.push(encode_inst(SpvOp::OpConstant, Vector::from([ty, id, value as u32])))
+        return id
+
+    fn emit_constant_float(&mut self, ty: u32, value: f64) -> u32:
+        let key = format("const_float_{}_{}", ty, value)
+        if let Some(id) = self.const_ids.get(&key):
+            return *id
+        let id = self.fresh_id()
+        self.const_ids.insert(key, id)
+        let bits = value.to_bits()
+        self.instructions.push(encode_inst(SpvOp::OpConstant, Vector::from([ty, id, (bits & 0xFFFFFFFF) as u32, (bits >> 32) as u32])))
+        return id
+
+    fn emit_function(&mut self, return_type: u32, func_type: u32, name: str) -> u32:
+        let id = self.fresh_id()
+        self.instructions.push(encode_inst(SpvOp::OpFunction, Vector::from([return_type, id, 0, func_type])))
+        self.name_annotations.push((id, name))
+        return id
+
+    fn emit_function_end(&mut self):
+        self.instructions.push(encode_inst(SpvOp::OpFunctionEnd, Vector::new()))
+
+    fn emit_label(&mut self) -> u32:
+        let id = self.fresh_id()
+        self.instructions.push(encode_inst(SpvOp::OpLabel, Vector::from([id])))
+        return id
+
+    fn emit_return(&mut self):
+        self.instructions.push(encode_inst(SpvOp::OpReturn, Vector::new()))
+
+    fn emit_return_value(&mut self, value: u32):
+        self.instructions.push(encode_inst(SpvOp::OpReturnValue, Vector::from([value])))
+
+    fn emit_branch(&mut self, target: u32):
+        self.instructions.push(encode_inst(SpvOp::OpBranch, Vector::from([target])))
+
+    fn emit_cond_branch(&mut self, cond: u32, true_label: u32, false_label: u32):
+        self.instructions.push(encode_inst(SpvOp::OpBranchConditional, Vector::from([cond, true_label, false_label])))
+
+    fn emit_iadd(&mut self, result_type: u32, a: u32, b: u32) -> u32:
+        let id = self.fresh_id()
+        self.instructions.push(encode_inst(SpvOp::OpIAdd, Vector::from([result_type, id, a, b])))
+        return id
+
+    fn emit_isub(&mut self, result_type: u32, a: u32, b: u32) -> u32:
+        let id = self.fresh_id()
+        self.instructions.push(encode_inst(SpvOp::OpISub, Vector::from([result_type, id, a, b])))
+        return id
+
+    fn emit_imul(&mut self, result_type: u32, a: u32, b: u32) -> u32:
+        let id = self.fresh_id()
+        self.instructions.push(encode_inst(SpvOp::OpIMul, Vector::from([result_type, id, a, b])))
+        return id
+
+    fn emit_fadd(&mut self, result_type: u32, a: u32, b: u32) -> u32:
+        let id = self.fresh_id()
+        self.instructions.push(encode_inst(SpvOp::OpFAdd, Vector::from([result_type, id, a, b])))
+        return id
+
+    fn emit_fmul(&mut self, result_type: u32, a: u32, b: u32) -> u32:
+        let id = self.fresh_id()
+        self.instructions.push(encode_inst(SpvOp::OpFMul, Vector::from([result_type, id, a, b])))
+        return id
+
+    fn emit_load(&mut self, result_type: u32, pointer: u32) -> u32:
+        let id = self.fresh_id()
+        self.instructions.push(encode_inst(SpvOp::OpLoad, Vector::from([result_type, id, pointer])))
+        return id
+
+    fn emit_store(&mut self, pointer: u32, value: u32):
+        self.instructions.push(encode_inst(SpvOp::OpStore, Vector::from([pointer, value])))
+
+    fn emit_variable(&mut self, pointer_type: u32, storage_class: SpvStorageClass) -> u32:
+        let id = self.fresh_id()
+        self.instructions.push(encode_inst(SpvOp::OpVariable, Vector::from([pointer_type, id, storage_class as u32])))
+        return id
+
+    fn emit_access_chain(&mut self, result_type: u32, base: u32, indices: &Vector<u32>) -> u32:
+        let id = self.fresh_id()
+        let mut args = Vector::from([result_type, id, base])
+        for idx in indices:
+            args.push(*idx)
+        self.instructions.push(encode_inst(SpvOp::OpAccessChain, args))
+        return id
+
+    fn finalize(&self) -> Vector<u32>:
+        let mut output = Vector::new()
+
+        # Header
+        output.push(SPIRV_MAGIC)
+        output.push(SPIRV_VERSION)
+        output.push(0)  # Generator ID
+        output.push(self.next_id)  # Bound
+        output.push(0)  # Schema
+
+        # Capabilities
+        for cap in &self.capabilities:
+            output.push(encode_word_count(SpvOp::OpCapability, 2))
+            output.push(*cap as u32)
+
+        # Memory model
+        output.push(encode_word_count(SpvOp::OpMemoryModel, 3))
+        output.push(0)  # Logical addressing
+        output.push(1)  # GLSL450
+
+        # Entry points
+        for (name, func_id) in &self.entry_points:
+            let words = 3 + string_word_count(name)
+            output.push(encode_word_count(SpvOp::OpEntryPoint, words as u32))
+            output.push(SpvExecutionModel::GLCompute as u32)
+            output.push(*func_id)
+            encode_string(&mut output, name)
+
+        # Name annotations
+        for (id, name) in &self.name_annotations:
+            let words = 2 + string_word_count(name)
+            output.push(encode_word_count(SpvOp::OpName, words as u32))
+            output.push(*id)
+            encode_string(&mut output, name)
+
+        # Decorations
+        for dec in &self.decorations:
+            for word in dec:
+                output.push(*word)
+
+        # All other instructions
+        for inst in &self.instructions:
+            for word in inst:
+                output.push(*word)
+
+        return output
+
+fn encode_inst(op: SpvOp, args: Vector<u32>) -> Vector<u32>:
+    let word_count = (1 + args.len()) as u32
+    let mut result = Vector::new()
+    result.push((word_count << 16) | (op as u32))
+    for a in &args:
+        result.push(*a)
+    return result
+
+fn encode_word_count(op: SpvOp, count: u32) -> u32:
+    return (count << 16) | (op as u32)
+
+fn string_word_count(s: &str) -> usize:
+    return (s.len() + 4) / 4  # Round up to word boundary + null terminator
+
+fn encode_string(output: &mut Vector<u32>, s: &str):
+    let bytes = s.as_bytes()
+    let mut i = 0
+    while i < bytes.len():
+        let mut word: u32 = 0
+        for j in 0..4:
+            if i + j < bytes.len():
+                word |= (bytes[i + j] as u32) << (j * 8)
+        output.push(word)
+        i += 4
+    if bytes.len() % 4 == 0:
+        output.push(0)  # Null terminator word
+
+# ============================================================================
+# GPU Code Generator
+# ============================================================================
+
+struct GpuCodegen:
+    target: GpuTarget
+    spv_builder: SpvBuilder
+    var_map: HashMap<VarId, u32>   # IR var -> SPIR-V id
+    block_map: HashMap<BlockId, u32>
+    errors: Vector<str>
+
+    fn new(target: GpuTarget) -> own Self:
+        let mut builder = SpvBuilder::new()
+        builder.add_capability(SpvCapability::Shader)
+        return GpuCodegen {
+            target: target,
+            spv_builder: builder,
+            var_map: HashMap::new(),
+            block_map: HashMap::new(),
+            errors: Vector::new(),
+        }
+
+    fn generate_kernel(&mut self, func: &IrFunction, kernel_info: &GpuKernelInfo):
+        match self.target:
+            GpuTarget::SPIRV => self.generate_spirv_kernel(func, kernel_info)
+            GpuTarget::PTX => self.generate_ptx_kernel(func, kernel_info)
+            GpuTarget::Metal => self.generate_metal_kernel(func, kernel_info)
+            GpuTarget::WGSL => self.generate_wgsl_kernel(func, kernel_info)
+
+    fn generate_spirv_kernel(&mut self, func: &IrFunction, kernel_info: &GpuKernelInfo):
+        self.var_map.clear()
+        self.block_map.clear()
+
+        # Type declarations
+        let void_type = self.spv_builder.emit_type_void()
+        let i32_type = self.spv_builder.emit_type_int(32, true)
+        let u32_type = self.spv_builder.emit_type_int(32, false)
+        let f32_type = self.spv_builder.emit_type_float(32)
+        let func_type = self.spv_builder.emit_type_function(void_type, &Vector::new())
+
+        # Emit function
+        let func_id = self.spv_builder.emit_function(void_type, func_type, kernel_info.name.clone())
+        self.spv_builder.entry_points.push((kernel_info.name.clone(), func_id))
+
+        # Entry label
+        let entry = self.spv_builder.emit_label()
+
+        # Emit instructions
+        for block in &func.blocks:
+            for inst in &block.instructions:
+                self.emit_spirv_instruction(inst, i32_type, f32_type)
+
+        # Return
+        self.spv_builder.emit_return()
+        self.spv_builder.emit_function_end()
+
+    fn emit_spirv_instruction(&mut self, inst: &IrInst, int_type: u32, float_type: u32):
+        match inst:
+            IrInst::Const(dest, IrConst::Int(n), _) =>
+                let val = self.spv_builder.emit_constant_int(int_type, *n)
+                self.var_map.insert(*dest, val)
+
+            IrInst::Const(dest, IrConst::Float(f), _) =>
+                let val = self.spv_builder.emit_constant_float(float_type, *f)
+                self.var_map.insert(*dest, val)
+
+            IrInst::Add(dest, lhs, rhs, _) =>
+                let l = self.get_spirv_var(*lhs)
+                let r = self.get_spirv_var(*rhs)
+                let result = self.spv_builder.emit_iadd(int_type, l, r)
+                self.var_map.insert(*dest, result)
+
+            IrInst::Sub(dest, lhs, rhs, _) =>
+                let l = self.get_spirv_var(*lhs)
+                let r = self.get_spirv_var(*rhs)
+                let result = self.spv_builder.emit_isub(int_type, l, r)
+                self.var_map.insert(*dest, result)
+
+            IrInst::Mul(dest, lhs, rhs, _) =>
+                let l = self.get_spirv_var(*lhs)
+                let r = self.get_spirv_var(*rhs)
+                let result = self.spv_builder.emit_imul(int_type, l, r)
+                self.var_map.insert(*dest, result)
+
+            IrInst::FAdd(dest, lhs, rhs) =>
+                let l = self.get_spirv_var(*lhs)
+                let r = self.get_spirv_var(*rhs)
+                let result = self.spv_builder.emit_fadd(float_type, l, r)
+                self.var_map.insert(*dest, result)
+
+            IrInst::FMul(dest, lhs, rhs) =>
+                let l = self.get_spirv_var(*lhs)
+                let r = self.get_spirv_var(*rhs)
+                let result = self.spv_builder.emit_fmul(float_type, l, r)
+                self.var_map.insert(*dest, result)
+
+            IrInst::Load(dest, ptr, _) =>
+                let p = self.get_spirv_var(*ptr)
+                let result = self.spv_builder.emit_load(int_type, p)
+                self.var_map.insert(*dest, result)
+
+            IrInst::Store(ptr, val) =>
+                let p = self.get_spirv_var(*ptr)
+                let v = self.get_spirv_var(*val)
+                self.spv_builder.emit_store(p, v)
+
+            IrInst::Branch(target) =>
+                if let Some(label) = self.block_map.get(target):
+                    self.spv_builder.emit_branch(*label)
+
+            IrInst::CondBranch(cond, then_block, else_block) =>
+                let c = self.get_spirv_var(*cond)
+                let then_label = self.block_map.get(then_block).copied().unwrap_or(0)
+                let else_label = self.block_map.get(else_block).copied().unwrap_or(0)
+                self.spv_builder.emit_cond_branch(c, then_label, else_label)
+
+            _ => pass
+
+    fn get_spirv_var(&self, var: VarId) -> u32:
+        self.var_map.get(&var).copied().unwrap_or(0)
+
+    # ====================================================================
+    # PTX Generation (NVIDIA CUDA)
+    # ====================================================================
+
+    fn generate_ptx_kernel(&self, func: &IrFunction, kernel_info: &GpuKernelInfo) -> str:
+        let mut ptx = String::new()
+
+        # PTX header
+        ptx.push_str(".version 7.8\n")
+        ptx.push_str(".target sm_70\n")
+        ptx.push_str(".address_size 64\n\n")
+
+        # Kernel declaration
+        ptx.push_str(format(".visible .entry {}(\n", kernel_info.name))
+        for (i, param) in kernel_info.params.iter().enumerate():
+            let ptx_type = ir_type_to_ptx(&param.ty)
+            if i > 0:
+                ptx.push_str(",\n")
+            ptx.push_str(format("    .param .{} {}", ptx_type, param.name))
+        ptx.push_str("\n)\n{\n")
+
+        # Register declarations
+        ptx.push_str("    .reg .s64 %rd<64>;\n")
+        ptx.push_str("    .reg .s32 %r<64>;\n")
+        ptx.push_str("    .reg .f32 %f<64>;\n")
+        ptx.push_str("    .reg .f64 %fd<64>;\n")
+        ptx.push_str("    .reg .pred %p<16>;\n\n")
+
+        # Thread index intrinsics
+        ptx.push_str("    // Thread identification\n")
+        ptx.push_str("    mov.u32 %r0, %tid.x;\n")
+        ptx.push_str("    mov.u32 %r1, %tid.y;\n")
+        ptx.push_str("    mov.u32 %r2, %tid.z;\n")
+        ptx.push_str("    mov.u32 %r3, %ctaid.x;\n")
+        ptx.push_str("    mov.u32 %r4, %ctaid.y;\n")
+        ptx.push_str("    mov.u32 %r5, %ntid.x;\n\n")
+
+        # Global thread ID: r6 = ctaid.x * ntid.x + tid.x
+        ptx.push_str("    mad.lo.s32 %r6, %r3, %r5, %r0;\n\n")
+
+        # Emit instructions
+        let mut reg_idx: u32 = 10
+        for block in &func.blocks:
+            ptx.push_str(format("{}:\n", block.label))
+            for inst in &block.instructions:
+                let ptx_inst = self.ir_inst_to_ptx(inst, &mut reg_idx)
+                if not ptx_inst.is_empty():
+                    ptx.push_str(format("    {};\n", ptx_inst))
+
+        ptx.push_str("    ret;\n")
+        ptx.push_str("}\n")
+
+        return ptx
+
+    fn ir_inst_to_ptx(&self, inst: &IrInst, reg_idx: &mut u32) -> str:
+        match inst:
+            IrInst::Add(_, lhs, rhs, _) =>
+                let r = *reg_idx
+                *reg_idx += 1
+                format("add.s64 %rd{}, %rd{}, %rd{}", r, lhs, rhs)
+            IrInst::Sub(_, lhs, rhs, _) =>
+                let r = *reg_idx
+                *reg_idx += 1
+                format("sub.s64 %rd{}, %rd{}, %rd{}", r, lhs, rhs)
+            IrInst::Mul(_, lhs, rhs, _) =>
+                let r = *reg_idx
+                *reg_idx += 1
+                format("mul.lo.s64 %rd{}, %rd{}, %rd{}", r, lhs, rhs)
+            IrInst::FAdd(_, lhs, rhs) =>
+                let r = *reg_idx
+                *reg_idx += 1
+                format("add.f32 %f{}, %f{}, %f{}", r, lhs, rhs)
+            IrInst::FMul(_, lhs, rhs) =>
+                let r = *reg_idx
+                *reg_idx += 1
+                format("mul.f32 %f{}, %f{}, %f{}", r, lhs, rhs)
+            IrInst::Load(_, ptr, _) =>
+                let r = *reg_idx
+                *reg_idx += 1
+                format("ld.global.u64 %rd{}, [%rd{}]", r, ptr)
+            IrInst::Store(ptr, val) =>
+                format("st.global.u64 [%rd{}], %rd{}", ptr, val)
+            IrInst::Branch(target) =>
+                format("bra {}", target)
+            _ => "".to_string()
+
+    # ====================================================================
+    # Metal Shading Language Generation
+    # ====================================================================
+
+    fn generate_metal_kernel(&self, func: &IrFunction, kernel_info: &GpuKernelInfo) -> str:
+        let mut metal = String::new()
+
+        metal.push_str("#include <metal_stdlib>\n")
+        metal.push_str("using namespace metal;\n\n")
+
+        # Kernel function
+        metal.push_str(format("kernel void {}(\n", kernel_info.name))
+        for (i, param) in kernel_info.params.iter().enumerate():
+            let metal_type = ir_type_to_metal(&param.ty)
+            if i > 0:
+                metal.push_str(",\n")
+            if param.is_buffer:
+                metal.push_str(format("    device {} *{} [[buffer({})]]", metal_type, param.name, param.binding))
+            else:
+                metal.push_str(format("    constant {} &{} [[buffer({})]]", metal_type, param.name, param.binding))
+        metal.push_str(",\n    uint3 gid [[thread_position_in_grid]]\n")
+        metal.push_str(") {\n")
+
+        # Emit body
+        metal.push_str("    uint idx = gid.x;\n")
+        for block in &func.blocks:
+            for inst in &block.instructions:
+                let metal_stmt = self.ir_inst_to_metal(inst)
+                if not metal_stmt.is_empty():
+                    metal.push_str(format("    {};\n", metal_stmt))
+
+        metal.push_str("}\n")
+
+        return metal
+
+    fn ir_inst_to_metal(&self, inst: &IrInst) -> str:
+        match inst:
+            IrInst::Add(dest, lhs, rhs, _) =>
+                format("auto v{} = v{} + v{}", dest, lhs, rhs)
+            IrInst::Sub(dest, lhs, rhs, _) =>
+                format("auto v{} = v{} - v{}", dest, lhs, rhs)
+            IrInst::Mul(dest, lhs, rhs, _) =>
+                format("auto v{} = v{} * v{}", dest, lhs, rhs)
+            IrInst::FAdd(dest, lhs, rhs) =>
+                format("auto v{} = v{} + v{}", dest, lhs, rhs)
+            IrInst::FMul(dest, lhs, rhs) =>
+                format("auto v{} = v{} * v{}", dest, lhs, rhs)
+            _ => "".to_string()
+
+    # ====================================================================
+    # WGSL Generation (WebGPU)
+    # ====================================================================
+
+    fn generate_wgsl_kernel(&self, func: &IrFunction, kernel_info: &GpuKernelInfo) -> str:
+        let mut wgsl = String::new()
+
+        # Bindings
+        for (i, param) in kernel_info.params.iter().enumerate():
+            let wgsl_type = ir_type_to_wgsl(&param.ty)
+            wgsl.push_str(format("@group(0) @binding({}) var<storage, read_write> {}: array<{}>;\n", i, param.name, wgsl_type))
+
+        wgsl.push_str("\n")
+
+        # Compute shader entry
+        let (wgx, wgy, wgz) = kernel_info.work_group_size
+        wgsl.push_str(format("@compute @workgroup_size({}, {}, {})\n", wgx, wgy, wgz))
+        wgsl.push_str(format("fn {}(@builtin(global_invocation_id) gid: vec3<u32>) {{\n", kernel_info.name))
+        wgsl.push_str("    let idx = gid.x;\n")
+
+        # Emit body
+        for block in &func.blocks:
+            for inst in &block.instructions:
+                let wgsl_stmt = self.ir_inst_to_wgsl(inst)
+                if not wgsl_stmt.is_empty():
+                    wgsl.push_str(format("    {};\n", wgsl_stmt))
+
+        wgsl.push_str("}\n")
+
+        return wgsl
+
+    fn ir_inst_to_wgsl(&self, inst: &IrInst) -> str:
+        match inst:
+            IrInst::Add(dest, lhs, rhs, _) =>
+                format("let v{} = v{} + v{}", dest, lhs, rhs)
+            IrInst::Sub(dest, lhs, rhs, _) =>
+                format("let v{} = v{} - v{}", dest, lhs, rhs)
+            IrInst::Mul(dest, lhs, rhs, _) =>
+                format("let v{} = v{} * v{}", dest, lhs, rhs)
+            IrInst::FMul(dest, lhs, rhs) =>
+                format("let v{} = v{} * v{}", dest, lhs, rhs)
+            _ => "".to_string()
+
+# Helper functions for type name mapping
+fn ir_type_to_ptx(ty: &IrType) -> str:
+    match ty:
+        IrType::I32 => "s32".to_string()
+        IrType::I64 => "s64".to_string()
+        IrType::F32 => "f32".to_string()
+        IrType::F64 => "f64".to_string()
+        IrType::Ptr(_) => "u64".to_string()
+        _ => "b64".to_string()
+
+fn ir_type_to_metal(ty: &IrType) -> str:
+    match ty:
+        IrType::I32 => "int".to_string()
+        IrType::I64 => "long".to_string()
+        IrType::F32 => "float".to_string()
+        IrType::F64 => "double".to_string()
+        IrType::Ptr(_) => "device void*".to_string()
+        _ => "uint".to_string()
+
+fn ir_type_to_wgsl(ty: &IrType) -> str:
+    match ty:
+        IrType::I32 => "i32".to_string()
+        IrType::I64 => "i32".to_string()  # WGSL doesn't have i64
+        IrType::F32 => "f32".to_string()
+        IrType::F64 => "f32".to_string()  # WGSL doesn't have f64
+        _ => "u32".to_string()
+
+# ============================================================================
+# Public API
+# ============================================================================
+
+fn generate_spirv(ir_module: &IrModule, kernels: &Vector<GpuKernelInfo>) -> Vector<u32>:
+    let mut codegen = GpuCodegen::new(GpuTarget::SPIRV)
+    for kernel in kernels:
+        if let Some(func) = ir_module.find_function(&kernel.name):
+            codegen.generate_kernel(func, kernel)
+    return codegen.spv_builder.finalize()
+
+fn generate_ptx(ir_module: &IrModule, kernels: &Vector<GpuKernelInfo>) -> str:
+    let codegen = GpuCodegen::new(GpuTarget::PTX)
+    let mut ptx = String::new()
+    for kernel in kernels:
+        if let Some(func) = ir_module.find_function(&kernel.name):
+            ptx.push_str(&codegen.generate_ptx_kernel(func, kernel))
+            ptx.push_str("\n")
+    return ptx
+
+fn generate_metal(ir_module: &IrModule, kernels: &Vector<GpuKernelInfo>) -> str:
+    let codegen = GpuCodegen::new(GpuTarget::Metal)
+    let mut metal = String::new()
+    for kernel in kernels:
+        if let Some(func) = ir_module.find_function(&kernel.name):
+            metal.push_str(&codegen.generate_metal_kernel(func, kernel))
+            metal.push_str("\n")
+    return metal
+
+fn generate_wgsl(ir_module: &IrModule, kernels: &Vector<GpuKernelInfo>) -> str:
+    let codegen = GpuCodegen::new(GpuTarget::WGSL)
+    let mut wgsl = String::new()
+    for kernel in kernels:
+        if let Some(func) = ir_module.find_function(&kernel.name):
+            wgsl.push_str(&codegen.generate_wgsl_kernel(func, kernel))
+            wgsl.push_str("\n")
+    return wgsl
+
+# ============================================================================
+# Tests
+# ============================================================================
+
+#[test]
+fn test_spirv_builder():
+    let mut builder = SpvBuilder::new()
+    builder.add_capability(SpvCapability::Shader)
+    let void_ty = builder.emit_type_void()
+    let i32_ty = builder.emit_type_int(32, true)
+    let f32_ty = builder.emit_type_float(32)
+    assert(void_ty > 0, "void type should have valid id")
+    assert(i32_ty > 0, "i32 type should have valid id")
+    assert(f32_ty > 0, "f32 type should have valid id")
+
+#[test]
+fn test_spirv_finalize():
+    let mut builder = SpvBuilder::new()
+    builder.add_capability(SpvCapability::Shader)
+    let void_ty = builder.emit_type_void()
+    let func_ty = builder.emit_type_function(void_ty, &Vector::new())
+    let func_id = builder.emit_function(void_ty, func_ty, "main")
+    builder.entry_points.push(("main".to_string(), func_id))
+    builder.emit_label()
+    builder.emit_return()
+    builder.emit_function_end()
+
+    let spirv = builder.finalize()
+    assert(spirv[0] == SPIRV_MAGIC, "first word should be SPIR-V magic")
+
+#[test]
+fn test_ptx_generation():
+    let mut ir_module = IrModule::new("test")
+    let func = ir_module.add_function("vector_add", IrType::Void)
+    let a = func.add_param(IrType::Ptr(Box::new(IrType::F32)))
+    let b = func.add_param(IrType::Ptr(Box::new(IrType::F32)))
+
+    let kernel = GpuKernelInfo {
+        name: "vector_add".to_string(),
+        work_group_size: (256, 1, 1),
+        shared_memory_size: 0,
+        params: Vector::from([
+            GpuParam { name: "a".to_string(), ty: IrType::Ptr(Box::new(IrType::F32)), memory_space: GpuMemorySpace::Global, is_buffer: true, binding: 0 },
+            GpuParam { name: "b".to_string(), ty: IrType::Ptr(Box::new(IrType::F32)), memory_space: GpuMemorySpace::Global, is_buffer: true, binding: 1 },
+        ]),
+        body_blocks: Vector::new(),
+    }
+
+    let ptx = generate_ptx(&ir_module, &Vector::from([kernel]))
+    assert(ptx.contains(".entry vector_add"), "PTX should contain kernel entry")
+    assert(ptx.contains(".version"), "PTX should have version header")
