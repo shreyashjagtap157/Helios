@@ -21,7 +21,7 @@ use crate::ir::{
 };
 use std::collections::HashMap;
 use std::fmt;
-use log::{debug, info, warn};
+use log::{debug, info};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Target Architecture

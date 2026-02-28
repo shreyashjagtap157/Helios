@@ -15,7 +15,7 @@ use crate::ir::{IrFunction, IrInstruction, IrType, IrBinOp, IrTerminator, IrValu
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::{Arc, Mutex};
-use log::{debug, info, warn, error};
+use log::{debug, info, warn};
 use libloading::{Library, Symbol};
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -3,7 +3,7 @@
 //! Maps Omni source locations to machine code addresses for DAP (Debug Adapter Protocol) support.
 //! Generates .debug_info, .debug_abbrev, .debug_line, and .debug_str sections.
 
-use crate::ir::{IrFunction, IrType};
+use crate::ir::IrFunction;
 use log::debug;
 
 /// DWARF constants

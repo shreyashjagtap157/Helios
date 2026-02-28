@@ -8,7 +8,7 @@
 //! - Try/catch IR lowering
 //! - Zero-cost exception model (no overhead on non-exception paths)
 
-use crate::ir::{IrBlock, IrConst, IrFunction, IrInstruction, IrTerminator, IrType, IrValue};
+use crate::ir::{IrBlock, IrFunction, IrInstruction, IrTerminator, IrType};
 use log::{debug, info};
 use std::collections::HashMap;
 

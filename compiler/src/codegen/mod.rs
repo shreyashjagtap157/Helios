@@ -14,9 +14,11 @@ pub mod gpu_dispatch;
 pub mod gpu_fusion;
 #[cfg(test)]
 pub mod gpu_tests;
+pub mod gpu_hardware;
 pub mod jit;
 pub mod jit_complete;
 pub mod mlir;
+pub mod native_linker;
 pub mod native_codegen;
 pub mod native_extended;
 pub mod opt;

@@ -13,7 +13,7 @@
 use crate::ir::{IrFunction, IrInstruction, IrTerminator, IrType, IrBinOp, IrValue};
 use std::collections::HashMap;
 use crate::codegen::optimizing_jit::OptimizingJit;
-use std::sync::{Arc, Mutex, RwLock};
+
 use std::time::Instant;
 use log::{debug, info, trace, warn};
 

@@ -7,11 +7,11 @@
 //! - RISC-V emitter for RISC-V 64-bit targets
 //! - Linker integration for external linking
 
-use crate::codegen::native_codegen::{AluOp, Architecture, MachineInst};
+use crate::codegen::native_codegen::{AluOp, MachineInst};
 use crate::ir::{
-    IrBinOp, IrBlock, IrConst, IrFunction, IrInstruction, IrTerminator, IrType, IrValue,
+    IrFunction, IrInstruction, IrTerminator, IrType, IrValue,
 };
-use log::{debug, info};
+use log::info;
 use std::collections::HashMap;
 
 // ─────────────────────────────────────────────────────────────────────────────

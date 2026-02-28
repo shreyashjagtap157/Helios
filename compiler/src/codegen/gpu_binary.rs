@@ -11,8 +11,7 @@
 
 use crate::ir::{IrFunction, IrInstruction, IrType, IrBinOp, IrTerminator, IrValue, IrConst};
 use std::collections::HashMap;
-use std::path::Path;
-use log::{debug, info, warn};
+use log::{debug, info};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PTX Binary Compilation

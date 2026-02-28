@@ -3,7 +3,7 @@
 //! Merges consecutive element-wise operations into single GPU kernels,
 //! reducing memory bandwidth by keeping intermediate results in registers/shared memory.
 
-use crate::ir::{IrModule, IrFunction, IrBlock, IrInstruction, IrValue, IrBinOp};
+use crate::ir::{IrModule, IrFunction, IrBlock, IrInstruction, IrValue};
 
 pub struct KernelFusionPass;
 

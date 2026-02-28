@@ -23,6 +23,7 @@ pub mod lifetimes;
 pub mod monomorphization;
 pub mod optimization;
 pub mod performance;
+pub mod properties;  // Properties & sealed classes support
 pub mod traits;
 pub mod types;
 

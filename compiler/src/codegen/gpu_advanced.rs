@@ -2,8 +2,7 @@
 //! 
 //! Warp divergence analysis, shared memory banking, Tensor Cores, CUDA Graphs.
 
-use crate::ir::{IrModule, IrFunction, IrInstruction, IrBlock, IrType};
-use std::collections::HashMap;
+use crate::ir::{IrModule, IrFunction, IrInstruction, IrType};
 
 /// Warp Divergence Analyzer
 pub struct WarpDivergenceAnalyzer;

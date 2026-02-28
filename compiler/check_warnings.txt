@@ -1,0 +1,554 @@
+warning: value assigned to `executable` is never read
+   --> src\codegen\native_linker.rs:784:30
+    |
+784 |         let mut executable = Vec::new();
+    |                              ^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: `omnc` (lib) generated 1 warning
+warning: unused import: `crate::semantic::constraints::*`
+  --> src\semantic\edge_cases.rs:11:5
+   |
+11 | use crate::semantic::constraints::*;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `HashSet`
+ --> src\semantic\lifetimes.rs:9:33
+  |
+9 | use std::collections::{HashMap, HashSet};
+  |                                 ^^^^^^^
+
+warning: unused import: `std::collections::HashSet`
+ --> src\semantic\properties.rs:8:5
+  |
+8 | use std::collections::HashSet;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `IrType`
+ --> src\codegen\dwarf.rs:6:29
+  |
+6 | use crate::ir::{IrFunction, IrType};
+  |                             ^^^^^^
+
+warning: unused imports: `IrConst` and `IrValue`
+  --> src\codegen\exception_handling.rs:11:26
+   |
+11 | use crate::ir::{IrBlock, IrConst, IrFunction, IrInstruction, IrTerminator, IrType, IrValue};
+   |                          ^^^^^^^                                                   ^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+  --> src\codegen\exception_handling.rs:13:5
+   |
+13 | use std::collections::HashMap;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `IrBlock`
+ --> src\codegen\gpu_advanced.rs:5:54
+  |
+5 | use crate::ir::{IrModule, IrFunction, IrInstruction, IrBlock, IrType};
+  |                                                      ^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+ --> src\codegen\gpu_advanced.rs:6:5
+  |
+6 | use std::collections::HashMap;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::path::Path`
+  --> src\codegen\gpu_binary.rs:14:5
+   |
+14 | use std::path::Path;
+   |     ^^^^^^^^^^^^^^^
+
+warning: unused import: `warn`
+  --> src\codegen\gpu_binary.rs:15:24
+   |
+15 | use log::{debug, info, warn};
+   |                        ^^^^
+
+warning: unused import: `error`
+  --> src\codegen\gpu_dispatch.rs:18:30
+   |
+18 | use log::{debug, info, warn, error};
+   |                              ^^^^^
+
+warning: unused import: `IrBinOp`
+ --> src\codegen\gpu_fusion.rs:6:72
+  |
+6 | use crate::ir::{IrModule, IrFunction, IrBlock, IrInstruction, IrValue, IrBinOp};
+  |                                                                        ^^^^^^^
+
+warning: unused import: `Stdio`
+ --> src\codegen\gpu_hardware.rs:8:29
+  |
+8 | use std::process::{Command, Stdio};
+  |                             ^^^^^
+
+warning: unused imports: `Arc`, `Mutex`, and `RwLock`
+  --> src\codegen\jit.rs:16:17
+   |
+16 | use std::sync::{Arc, Mutex, RwLock};
+   |                 ^^^  ^^^^^  ^^^^^^
+
+warning: unused imports: `Command` and `Stdio`
+ --> src\codegen\native_linker.rs:8:20
+  |
+8 | use std::process::{Command, Stdio};
+  |                    ^^^^^^^  ^^^^^
+
+warning: unused import: `IrBlock`
+  --> src\codegen\native_codegen.rs:19:27
+   |
+19 |     IrModule, IrFunction, IrBlock, IrInstruction, IrTerminator,
+   |                           ^^^^^^^
+
+warning: unused import: `warn`
+  --> src\codegen\native_codegen.rs:24:24
+   |
+24 | use log::{debug, info, warn};
+   |                        ^^^^
+
+warning: unnecessary parentheses around assigned value
+    --> src\codegen\native_codegen.rs:1322:29
+     |
+1322 |                     word |= ((rel as u32 & 0x7FFFF) << 5);
+     |                             ^                           ^
+     |
+     = note: `#[warn(unused_parens)]` (part of `#[warn(unused)]`) on by default
+help: remove these parentheses
+     |
+1322 -                     word |= ((rel as u32 & 0x7FFFF) << 5);
+1322 +                     word |= (rel as u32 & 0x7FFFF) << 5;
+     |
+
+warning: unnecessary parentheses around assigned value
+    --> src\codegen\native_codegen.rs:1325:29
+     |
+1325 |                     word |= (rel as u32 & 0x3FFFFFF);
+     |                             ^                      ^
+     |
+help: remove these parentheses
+     |
+1325 -                     word |= (rel as u32 & 0x3FFFFFF);
+1325 +                     word |= rel as u32 & 0x3FFFFFF;
+     |
+
+warning: unused import: `Architecture`
+  --> src\codegen\native_extended.rs:10:45
+   |
+10 | use crate::codegen::native_codegen::{AluOp, Architecture, MachineInst};
+   |                                             ^^^^^^^^^^^^
+
+warning: unused imports: `IrBinOp`, `IrBlock`, `IrConst`, `IrFunction`, `IrInstruction`, `IrTerminator`, `IrType`, and `IrValue`
+  --> src\codegen\native_extended.rs:12:5
+   |
+12 |     IrBinOp, IrBlock, IrConst, IrFunction, IrInstruction, IrTerminator, IrType, IrValue,
+   |     ^^^^^^^  ^^^^^^^  ^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^^^^^  ^^^^^^  ^^^^^^^
+
+warning: unused import: `debug`
+  --> src\codegen\native_extended.rs:14:11
+   |
+14 | use log::{debug, info};
+   |           ^^^^^
+
+warning: unused import: `trace`
+ --> src\codegen\opt\licm.rs:4:18
+  |
+4 | use log::{debug, trace};
+  |                  ^^^^^
+
+warning: unused variable: `scope_to_exit`
+  --> src\semantic\borrow_check.rs:53:13
+   |
+53 |         let scope_to_exit = self.current_scope;
+   |             ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_scope_to_exit`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `base_type`
+   --> src\semantic\constraints.rs:212:9
+    |
+212 |         base_type: &InferenceType,
+    |         ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_base_type`
+
+warning: unused variable: `trait_name`
+   --> src\semantic\constraints.rs:287:44
+    |
+287 |                 Constraint::TraitBound(ty, trait_name) => {
+    |                                            ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_trait_name`
+
+warning: unused variable: `args`
+  --> src\semantic\edge_cases.rs:56:33
+   |
+56 |             Type::Generic(name, args) => {
+   |                                 ^^^^ help: if this is intentional, prefix it with an underscore: `_args`
+
+warning: unused variable: `trait_bounds`
+  --> src\semantic\edge_cases.rs:74:9
+   |
+74 |         trait_bounds: &[String],
+   |         ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_trait_bounds`
+
+warning: variable does not need to be mutable
+   --> src\semantic\edge_cases.rs:101:13
+    |
+101 |         let mut result = base_type.clone();
+    |             ----^^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `generic`
+   --> src\semantic\edge_cases.rs:104:17
+    |
+104 |         for (i, generic) in generics.iter().enumerate() {
+    |                 ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_generic`
+
+warning: unused variable: `type_var_name`
+   --> src\semantic\edge_cases.rs:105:17
+    |
+105 |             let type_var_name = format!("T{}", i);
+    |                 ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_type_var_name`
+
+warning: unused variable: `lifetime`
+   --> src\semantic\edge_cases.rs:177:9
+    |
+177 |         lifetime: &str,
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_lifetime`
+
+warning: unused variable: `container`
+   --> src\semantic\properties.rs:307:5
+    |
+307 |     container: &PropertyContainer,
+    |     ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_container`
+
+warning: unused variable: `ty`
+   --> src\semantic\traits.rs:288:9
+    |
+288 |         ty: &Type,
+    |         ^^ help: if this is intentional, prefix it with an underscore: `_ty`
+
+warning: unused variable: `expr`
+    --> src\semantic\mod.rs:1293:43
+     |
+1293 |                     Statement::Expression(expr) => {
+     |                                           ^^^^ help: if this is intentional, prefix it with an underscore: `_expr`
+
+warning: unused variable: `type_param`
+    --> src\semantic\mod.rs:2153:46
+     |
+2153 |     fn check_generic_trait_bounds(&mut self, type_param: &str, bounds: &[String], concrete_type: &Type) -> Result<(), SemanticError> {
+     |                                              ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_type_param`
+
+warning: unused variable: `e`
+    --> src\semantic\mod.rs:2194:23
+     |
+2194 |             .map_err(|e| SemanticError::MoveError { name: name.to_string() })?;
+     |                       ^ help: if this is intentional, prefix it with an underscore: `_e`
+
+warning: variable does not need to be mutable
+    --> src\semantic\mod.rs:2265:21
+     |
+2265 |                 let mut substitutor = StatementSubstitutor::new(subst.clone());
+     |                     ----^^^^^^^^^^^
+     |                     |
+     |                     help: remove this `mut`
+
+warning: unused variable: `bounds`
+    --> src\semantic\mod.rs:2217:72
+     |
+2217 |         let bounds_to_check: Vec<(String, String, Type)> = if let Some(bounds) = self.generic_bounds.get(func_name) {
+     |                                                                        ^^^^^^ help: if this is intentional, prefix it with an underscore: `_bounds`
+
+warning: variable does not need to be mutable
+   --> src\runtime\mod.rs:119:21
+    |
+119 |                 let mut dummy_func = crate::ir::IrFunction {
+    |                     ----^^^^^^^^^^
+    |                     |
+    |                     help: remove this `mut`
+
+warning: unused variable: `source`
+   --> src\runtime\mod.rs:112:23
+    |
+112 |             if let Ok(source) = std::fs::read_to_string(&change.path) {
+    |                       ^^^^^^ help: if this is intentional, prefix it with an underscore: `_source`
+
+warning: unused variable: `funcs`
+   --> src\codegen\dwarf.rs:122:37
+    |
+122 |     fn emit_abbrev_table(&mut self, funcs: &[IrFunction]) -> Vec<u8> {
+    |                                     ^^^^^ help: if this is intentional, prefix it with an underscore: `_funcs`
+
+warning: unused variable: `ty`
+   --> src\codegen\dwarf.rs:253:24
+    |
+253 |             for (name, ty) in &func.params {
+    |                        ^^ help: if this is intentional, prefix it with an underscore: `_ty`
+
+warning: unused variable: `ty`
+   --> src\codegen\dwarf.rs:260:24
+    |
+260 |             for (name, ty) in &func.locals {
+    |                        ^^ help: if this is intentional, prefix it with an underscore: `_ty`
+
+warning: variable does not need to be mutable
+   --> src\codegen\dwarf.rs:320:13
+    |
+320 |         let mut line: u32 = 1;
+    |             ----^^^^
+    |             |
+    |             help: remove this `mut`
+
+warning: unused variable: `bi`
+   --> src\codegen\dwarf.rs:330:18
+    |
+330 |             for (bi, block) in func.blocks.iter().enumerate() {
+    |                  ^^ help: if this is intentional, prefix it with an underscore: `_bi`
+
+warning: unused variable: `compute_capability`
+   --> src\codegen\gpu_advanced.rs:235:9
+    |
+235 |         compute_capability: (u32, u32),
+    |         ^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_compute_capability`
+
+warning: unused variable: `dest`
+   --> src\codegen\gpu_binary.rs:142:44
+    |
+142 |                     IrInstruction::BinOp { dest, op, left, right } => {
+    |                                            ^^^^ help: try ignoring the field: `dest: _`
+
+warning: unused variable: `dest`
+   --> src\codegen\gpu_binary.rs:150:43
+    |
+150 |                     IrInstruction::Load { dest, ptr, ty } => {
+    |                                           ^^^^ help: try ignoring the field: `dest: _`
+
+warning: unused variable: `kernel`
+  --> src\codegen\gpu_dispatch.rs:51:27
+   |
+51 |     fn load_kernel(&self, kernel: &GpuKernel) -> Result<(), String> {
+   |                           ^^^^^^ help: if this is intentional, prefix it with an underscore: `_kernel`
+
+warning: unused variable: `grid`
+   --> src\codegen\gpu_dispatch.rs:318:9
+    |
+318 |         grid: [u32; 3],
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_grid`
+
+warning: unused variable: `block`
+   --> src\codegen\gpu_dispatch.rs:319:9
+    |
+319 |         block: [u32; 3],
+    |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_block`
+
+warning: unused variable: `shared_mem`
+   --> src\codegen\gpu_dispatch.rs:320:9
+    |
+320 |         shared_mem: u32,
+    |         ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_shared_mem`
+
+warning: unused variable: `func`
+    --> src\codegen\gpu_dispatch.rs:1730:35
+     |
+1730 |     fn estimate_shared_mem(&self, func: &IrFunction) -> u32 {
+     |                                   ^^^^ help: if this is intentional, prefix it with an underscore: `_func`
+
+warning: unused variable: `args`
+    --> src\codegen\gpu_dispatch.rs:1795:9
+     |
+1795 |         args: &[u64], // allocation IDs or scalar values
+     |         ^^^^ help: if this is intentional, prefix it with an underscore: `_args`
+
+warning: unused variable: `kernel`
+    --> src\codegen\gpu_dispatch.rs:1802:13
+     |
+1802 |         let kernel = self.kernel_cache.get(kernel_name)
+     |             ^^^^^^ help: if this is intentional, prefix it with an underscore: `_kernel`
+
+warning: unused variable: `kernel`
+   --> src\codegen\gpu_hardware.rs:237:9
+    |
+237 |         kernel: &CudaKernel,
+    |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_kernel`
+
+warning: unused variable: `args`
+   --> src\codegen\gpu_hardware.rs:240:9
+    |
+240 |         args: &[CudaDeviceMemory],
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_args`
+
+warning: unused variable: `buffers`
+   --> src\codegen\gpu_hardware.rs:346:9
+    |
+346 |         buffers: &[&VulkanBuffer],
+    |         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_buffers`
+
+warning: unused variable: `func`
+   --> src\codegen\jit.rs:832:41
+    |
+832 |             IrInstruction::Call { dest, func, args } => {
+    |                                         ^^^^ help: try ignoring the field: `func: _`
+
+warning: unused variable: `ty`
+   --> src\codegen\jit.rs:857:43
+    |
+857 |             IrInstruction::Alloca { dest, ty } => {
+    |                                           ^^ help: try ignoring the field: `ty: _`
+
+warning: unused variable: `ty`
+   --> src\codegen\jit.rs:862:46
+    |
+862 |             IrInstruction::Load { dest, ptr, ty } => {
+    |                                              ^^ help: try ignoring the field: `ty: _`
+
+warning: unused variable: `dest`
+   --> src\codegen\jit.rs:884:44
+    |
+884 |             IrInstruction::TraitDispatch { dest, object, method, args } => {
+    |                                            ^^^^ help: try ignoring the field: `dest: _`
+
+warning: unused variable: `args`
+   --> src\codegen\jit.rs:884:66
+    |
+884 |             IrInstruction::TraitDispatch { dest, object, method, args } => {
+    |                                                                  ^^^^ help: try ignoring the field: `args: _`
+
+warning: unused variable: `obj_reg`
+   --> src\codegen\jit.rs:887:21
+    |
+887 |                 let obj_reg = self.load_value(emitter, &crate::ir::IrValue::Var(object.clone()), "rcv_tmp")?;
+    |                     ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_obj_reg`
+
+warning: unused variable: `max_ic`
+    --> src\codegen\jit.rs:1293:13
+     |
+1293 |         let max_ic = config.max_ic_entries;
+     |             ^^^^^^ help: if this is intentional, prefix it with an underscore: `_max_ic`
+
+warning: unused variable: `incoming`
+   --> src\codegen\native_codegen.rs:825:47
+    |
+825 |             IrInstruction::Phi { dest, ty: _, incoming } => {
+    |                                               ^^^^^^^^ help: try ignoring the field: `incoming: _`
+
+warning: unused variable: `size`
+   --> src\codegen\native_codegen.rs:952:53
+    |
+952 |             MachineInst::Store { src, base, offset, size } => {
+    |                                                     ^^^^ help: try ignoring the field: `size: _`
+
+warning: unused variable: `dest`
+    --> src\codegen\native_codegen.rs:1457:36
+     |
+1457 |             IrInstruction::BinOp { dest, op, left, right } => {
+     |                                    ^^^^ help: try ignoring the field: `dest: _`
+
+warning: unused variable: `dest`
+    --> src\codegen\native_codegen.rs:1480:35
+     |
+1480 |             IrInstruction::Call { dest, func, args } => {
+     |                                   ^^^^ help: try ignoring the field: `dest: _`
+
+warning: unused variable: `func`
+    --> src\codegen\native_codegen.rs:1480:41
+     |
+1480 |             IrInstruction::Call { dest, func, args } => {
+     |                                         ^^^^ help: try ignoring the field: `func: _`
+
+warning: unused variable: `name`
+    --> src\codegen\native_codegen.rs:1507:26
+     |
+1507 |             IrValue::Var(name) => {
+     |                          ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `target`
+   --> src\codegen\native_extended.rs:774:33
+    |
+774 |             MachineInst::Call { target } => {
+    |                                 ^^^^^^ help: try ignoring the field: `target: _`
+
+warning: unused variable: `format_str`
+  --> src\codegen\python_interop.rs:57:9
+   |
+57 |     let format_str: String = func.params.iter()
+   |         ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_format_str`
+
+warning: variable `gridDimX` should have a snake case name
+   --> src\codegen\gpu_dispatch.rs:217:5
+    |
+217 |     gridDimX: u32, gridDimY: u32, gridDimZ: u32,
+    |     ^^^^^^^^ help: convert the identifier to snake case: `grid_dim_x`
+    |
+    = note: `#[warn(non_snake_case)]` (part of `#[warn(nonstandard_style)]`) on by default
+
+warning: variable `gridDimY` should have a snake case name
+   --> src\codegen\gpu_dispatch.rs:217:20
+    |
+217 |     gridDimX: u32, gridDimY: u32, gridDimZ: u32,
+    |                    ^^^^^^^^ help: convert the identifier to snake case: `grid_dim_y`
+
+warning: variable `gridDimZ` should have a snake case name
+   --> src\codegen\gpu_dispatch.rs:217:35
+    |
+217 |     gridDimX: u32, gridDimY: u32, gridDimZ: u32,
+    |                                   ^^^^^^^^ help: convert the identifier to snake case: `grid_dim_z`
+
+warning: variable `blockDimX` should have a snake case name
+   --> src\codegen\gpu_dispatch.rs:218:5
+    |
+218 |     blockDimX: u32, blockDimY: u32, blockDimZ: u32,
+    |     ^^^^^^^^^ help: convert the identifier to snake case: `block_dim_x`
+
+warning: variable `blockDimY` should have a snake case name
+   --> src\codegen\gpu_dispatch.rs:218:21
+    |
+218 |     blockDimX: u32, blockDimY: u32, blockDimZ: u32,
+    |                     ^^^^^^^^^ help: convert the identifier to snake case: `block_dim_y`
+
+warning: variable `blockDimZ` should have a snake case name
+   --> src\codegen\gpu_dispatch.rs:218:37
+    |
+218 |     blockDimX: u32, blockDimY: u32, blockDimZ: u32,
+    |                                     ^^^^^^^^^ help: convert the identifier to snake case: `block_dim_z`
+
+warning: variable `sharedMemBytes` should have a snake case name
+   --> src\codegen\gpu_dispatch.rs:219:5
+    |
+219 |     sharedMemBytes: u32, hStream: u64,
+    |     ^^^^^^^^^^^^^^ help: convert the identifier to snake case: `shared_mem_bytes`
+
+warning: variable `hStream` should have a snake case name
+   --> src\codegen\gpu_dispatch.rs:219:26
+    |
+219 |     sharedMemBytes: u32, hStream: u64,
+    |                          ^^^^^^^ help: convert the identifier to snake case: `h_stream`
+
+warning: variable `kernelParams` should have a snake case name
+   --> src\codegen\gpu_dispatch.rs:220:5
+    |
+220 |     kernelParams: *mut *mut std::ffi::c_void,
+    |     ^^^^^^^^^^^^ help: convert the identifier to snake case: `kernel_params`
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src\codegen\gpu_dispatch.rs:253:22
+    |
+253 |     fn get_symbol<T>(&self, name: &[u8]) -> Result<Symbol<T>, String> {
+    |                      ^^^^^                         ^^^^^^^^^ the same lifetime is hidden here
+    |                      |
+    |                      the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+    = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
+help: use `'_` for type paths
+    |
+253 |     fn get_symbol<T>(&self, name: &[u8]) -> Result<Symbol<'_, T>, String> {
+    |                                                           +++
+
+warning: `omnc` (bin "omnc") generated 85 warnings (1 duplicate) (run `cargo fix --bin "omnc" -p omnc` to apply 75 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.80s

@@ -6,7 +6,7 @@
 //! - Lifetime bounds checking
 
 use crate::parser::ast::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Lifetime relationship: which lifetime outlives which
 #[derive(Debug, Clone, PartialEq, Eq)]

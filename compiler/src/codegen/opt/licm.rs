@@ -1,7 +1,7 @@
 use crate::ir::{IrFunction, IrInstruction, IrValue, IrTerminator};
 use crate::codegen::opt::OptimizationPass;
 use std::collections::{HashMap, HashSet};
-use log::{debug, trace};
+use log::debug;
 
 /// Loop Invariant Code Motion (LICM) Pass
 ///

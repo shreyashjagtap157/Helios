@@ -8,7 +8,6 @@
 //! - Complex lifetime scenarios
 
 use crate::parser::ast::*;
-use crate::semantic::constraints::*;
 use crate::semantic::traits::*;
 use crate::semantic::lifetimes::*;
 use std::collections::{HashMap, HashSet};
