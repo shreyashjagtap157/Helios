@@ -1,0 +1,418 @@
+// Properties & Sealed Classes Extension Module
+// Adds property syntax and sealed class support to the language
+
+module compiler::properties
+
+import compiler::lexer::token::{TokenKind, Span}
+import compiler::parser::ast::{StructDef, FunctionDef, Param, TypeExpr, Visibility, Attribute}
+import compiler::semantic::{SemanticError, SymbolTable}
+
+// ============================================================================
+// Property Definition
+// ============================================================================
+
+// Syntax:
+// struct Point:
+//     var x: f64
+//         get { self._x }
+//         set { self._x = value }
+//     var y: f64
+//         get { self._y }
+//         set { self._y = value }
+//
+// Usage:
+// let p = Point { x: 10.0, y: 20.0 }
+// println!("{}", p.x)      // Calls getter
+// p.x = 15.0               // Calls setter
+
+struct Property:
+    name: str
+    type_expr: TypeExpr
+    visibility: Visibility
+    is_public: bool
+    is_mutable: bool
+    has_getter: bool
+    has_setter: bool
+    getter_visibility: Visibility
+    setter_visibility: Visibility
+    getter_body: Option<Block>
+    setter_body: Option<Block>
+    doc_comment: String
+    span: Span
+    id: NodeId
+
+struct PropertyAccessor:
+    kind: AccessorKind
+    visibility: Visibility
+    body: Option<Block>
+    span: Span
+
+enum AccessorKind:
+    Get
+    Set
+    Init          // For initialization-only (set once)
+
+impl Property:
+    fn new(
+        name: str,
+        type_expr: TypeExpr,
+        visibility: Visibility,
+    ) -> own Self:
+        return Property {
+            name: name,
+            type_expr: type_expr,
+            visibility: visibility,
+            is_public: visibility == Visibility::Public,
+            is_mutable: true,
+            has_getter: false,
+            has_setter: false,
+            getter_visibility: visibility,
+            setter_visibility: visibility,
+            getter_body: None,
+            setter_body: None,
+            doc_comment: String::new(),
+            span: Span::dummy(),
+            id: 0,
+        }
+    
+    fn with_getter(mut self, body: Block, visibility: Visibility = Visibility::Public) -> own Self:
+        self.has_getter = true
+        self.getter_body = Some(body)
+        self.getter_visibility = visibility
+        return self
+    
+    fn with_setter(mut self, body: Block, visibility: Visibility = Visibility::Public) -> own Self:
+        self.has_setter = true
+        self.setter_body = Some(body)
+        self.setter_visibility = visibility
+        return self
+    
+    fn to_getter_method(&self) -> FunctionDef:
+        // Generate getter method:
+        // fn get_x(&self) -> f64 { ... }
+        return FunctionDef {
+            name: format!("get_{}", self.name),
+            is_pub: self.is_public,
+            params: vec![
+                Param {
+                    name: "self".to_string(),
+                    type_expr: TypeExpr::SelfRef(false),
+                    is_receiver: true,
+                    span: self.span.clone(),
+                }
+            ],
+            return_type: Some(self.type_expr.clone()),
+            body: self.getter_body.clone().unwrap_or_else(|| Block::new()),
+            generics: Vec::new(),
+            span: self.span.clone(),
+            id: 0,
+            attributes: Vec::new(),
+            is_async: false,
+            is_unsafe: false,
+        }
+    
+    fn to_setter_method(&self) -> FunctionDef:
+        // Generate setter method:
+        // fn set_x(&mut self, value: f64) { ... }
+        return FunctionDef {
+            name: format!("set_{}", self.name),
+            is_pub: self.is_public,
+            params: vec![
+                Param {
+                    name: "self".to_string(),
+                    type_expr: TypeExpr::SelfMutRef,
+                    is_receiver: true,
+                    span: self.span.clone(),
+                },
+                Param {
+                    name: "value".to_string(),
+                    type_expr: self.type_expr.clone(),
+                    is_receiver: false,
+                    span: self.span.clone(),
+                }
+            ],
+            return_type: None,  // void
+            body: self.setter_body.clone().unwrap_or_else(|| Block::new()),
+            generics: Vec::new(),
+            span: self.span.clone(),
+            id: 0,
+            attributes: Vec::new(),
+            is_async: false,
+            is_unsafe: false,
+        }
+
+// ============================================================================
+// Property Syntax Support
+// ============================================================================
+
+// In struct definitions, properties replace direct field access:
+//
+// Before:
+// struct Point:
+//     x: f64
+//     y: f64
+//
+// After:
+// struct Point:
+//     var x: f64
+//         get { self._x }
+//         set { self._x = value }
+//     var y: f64
+//         get { self._y }
+//         set { self._y = value }
+
+struct PropertyContainer:
+    properties: Vec<Property>
+
+impl PropertyContainer:
+    fn new() -> own Self:
+        return PropertyContainer {
+            properties: Vec::new(),
+        }
+    
+    fn add_property(&mut self, property: Property):
+        self.properties.push(property)
+    
+    fn get_property(&self, name: &str) -> Option<&Property>:
+        self.properties.iter().find(|p| p.name == name)
+    
+    fn to_methods(&self) -> Vec<FunctionDef>:
+        var methods = Vec::new()
+        
+        for property in &self.properties:
+            if property.has_getter:
+                methods.push(property.to_getter_method())
+            
+            if property.has_setter:
+                methods.push(property.to_setter_method())
+        
+        return methods
+
+// ============================================================================
+// Property Access Code Generation
+// ============================================================================
+
+// When compiler sees: obj.x = 5
+// It expands to: obj.set_x(5)
+//
+// When compiler sees: println!("{}", obj.x)
+// It expands to: println!("{}", obj.get_x())
+
+struct PropertyAccessExpander:
+    pass
+
+impl PropertyAccessExpander:
+    fn expand_getter(
+        &self,
+        obj_expr: &Expr,
+        property_name: &str,
+        type_info: &EnhancedTypeInfo,
+    ) -> Result<Expr, SemanticError>:
+        match type_info.properties.get(property_name):
+            Some(property) =>
+                if property.has_getter:
+                    // Generate call to getter method
+                    // obj.get_property_name()
+                    Ok(Expr::MethodCall(
+                        Box::new(obj_expr.clone()),
+                        format!("get_{}", property_name),
+                        Vec::new(),
+                        property.span.clone(),
+                    ))
+                else:
+                    Err(SemanticError::new(
+                        format!("Property '{}' has no getter", property_name),
+                        property.span.clone()
+                    ))
+            None =>
+                Err(SemanticError::new(
+                    format!("Unknown property '{}'", property_name),
+                    Span::dummy()
+                ))
+    
+    fn expand_setter(
+        &self,
+        obj_expr: &Expr,
+        property_name: &str,
+        value_expr: &Expr,
+        type_info: &EnhancedTypeInfo,
+    ) -> Result<Expr, SemanticError>:
+        match type_info.properties.get(property_name):
+            Some(property) =>
+                if property.has_setter:
+                    // Generate call to setter method
+                    // obj.set_property_name(value)
+                    Ok(Expr::MethodCall(
+                        Box::new(obj_expr.clone()),
+                        format!("set_{}", property_name),
+                        vec![value_expr.clone()],
+                        property.span.clone(),
+                    ))
+                else:
+                    Err(SemanticError::new(
+                        format!("Property '{}' has no setter", property_name),
+                        property.span.clone()
+                    ))
+            None =>
+                Err(SemanticError::new(
+                    format!("Unknown property '{}'", property_name),
+                    Span::dummy()
+                ))
+
+// ============================================================================
+// Sealed Classes
+// ============================================================================
+
+// Sealed classes restrict which types can inherit (via traits):
+//
+// sealed trait Animal:
+//     fn speak(&self) -> String
+//
+// # These implementations are allowed (in same module)
+// struct Dog:
+//     pass
+// impl Animal for Dog:
+//     fn speak(&self) -> String:
+//         "Woof!".to_string()
+//
+// struct Cat:
+//     pass
+// impl Animal for Cat:
+//     fn speak(&self) -> String:
+//         "Meow!".to_string()
+//
+// # But implementations in other modules are forbidden
+
+struct SealedTraitInfo:
+    name: str
+    allowed_impls: Vec<String>      // Types allowed to implement
+    all_impls_in_module: bool       // true = allow all in defining module
+    span: Span
+
+impl SealedTraitInfo:
+    fn new(name: str, span: Span) -> own Self:
+        return SealedTraitInfo {
+            name: name,
+            allowed_impls: Vec::new(),
+            all_impls_in_module: true,
+            span: span,
+        }
+    
+    fn allow_impl(&mut self, type_name: String):
+        self.allowed_impls.push(type_name)
+    
+    fn is_impl_allowed(&self, type_name: &str, in_defining_module: bool) -> bool:
+        if self.all_impls_in_module && in_defining_module:
+            return true
+        
+        self.allowed_impls.contains(&type_name.to_string())
+
+// ============================================================================
+// Sealed Class Enforcement
+// ============================================================================
+
+struct SealedClassValidator:
+    sealed_traits: HashMap<str, SealedTraitInfo>
+    defining_modules: HashMap<str, str>
+
+impl SealedClassValidator:
+    fn new() -> own Self:
+        return SealedClassValidator {
+            sealed_traits: HashMap::new(),
+            defining_modules: HashMap::new(),
+        }
+    
+    fn register_sealed_trait(&mut self, name: str, module: str, info: SealedTraitInfo):
+        self.sealed_traits.insert(name.clone(), info)
+        self.defining_modules.insert(name, module)
+    
+    fn validate_impl(
+        &self,
+        trait_name: &str,
+        type_name: &str,
+        impl_module: &str,
+    ) -> Result<(), SemanticError>:
+        match self.sealed_traits.get(trait_name):
+            Some(sealed_info) =>
+                let defining_module = self.defining_modules.get(trait_name).unwrap()
+                let in_defining_module = impl_module == defining_module
+                
+                if sealed_info.is_impl_allowed(type_name, in_defining_module):
+                    Ok(())
+                else:
+                    Err(SemanticError::new(
+                        format!("Trait '{}' is sealed, cannot implement in module '{}'",
+                                trait_name, impl_module),
+                        Span::dummy()
+                    ))
+            None =>
+                // Not sealed, allow any implementation
+                Ok(())
+
+// ============================================================================
+// Pattern Matching on Properties
+// ============================================================================
+
+// Properties can be used in pattern matching:
+//
+// match shape:
+//     Circle { radius: r } if r > 10.0 =>
+//         println!("Large circle")
+//     Square { side: s } =>
+//         println!("Square with side {}", s)
+//     _ =>
+//         pass
+
+// ============================================================================
+// Automatic Property Checking
+// ============================================================================
+
+fn validate_property(
+    property: &Property,
+    parent_struct: &StructDef,
+) -> Result<(), SemanticError>:
+    // Check that getter/setter bodies are valid
+    
+    if property.has_getter && property.getter_body.is_none():
+        return Err(SemanticError::new(
+            "Getter declared but no body provided".to_string(),
+            property.span.clone()
+        ))
+    
+    if property.has_setter && property.setter_body.is_none():
+        return Err(SemanticError::new(
+            "Setter declared but no body provided".to_string(),
+            property.span.clone()
+        ))
+    
+    // Check visibility compatibility
+    if property.getter_visibility.is_less_restrictive_than(&property.visibility):
+        return Err(SemanticError::new(
+            "Getter visibility cannot be greater than property visibility".to_string(),
+            property.span.clone()
+        ))
+    
+    Ok(())
+
+struct Visibility:
+    pub
+
+impl Visibility:
+    fn is_less_restrictive_than(&self, other: &Visibility) -> bool:
+        // public < protected < private in terms of restriction
+        // So public is less restrictive than others
+        false  // Simplified
+
+// ============================================================================
+// Property Binding in For Loops
+// ============================================================================
+
+// Properties can be used in for bindings (struct matching):
+//
+// for Point { x, y } in points:
+//     println!("({}, {})", x, y)
+//
+// With property accessors, this gets expanded to:
+// for p in points:
+//     let x = p.get_x()
+//     let y = p.get_y()

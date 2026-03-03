@@ -1,0 +1,169 @@
+// HELIOS HTTP Client
+// Web requests for learning and updates
+
+module core::http
+
+import core::logging as log
+import safety::asimov
+
+struct Response:
+    status_code: u16
+    headers: HashMap<String, String>
+    body: String
+    
+    fn is_success(&self) -> bool:
+        return self.status_code >= 200 && self.status_code < 300
+
+struct Request:
+    url: String
+    method: Method
+    headers: HashMap<String, String>
+    body: Option<String>
+    timeout_ms: usize
+    
+    fn get(url: &str) -> own Request:
+        return Request {
+            url: url.to_string(),
+            method: Method::GET,
+            headers: HashMap::new(),
+            body: None,
+            timeout_ms: 30000
+        }
+    
+    fn post(url: &str, body: &str) -> own Request:
+        return Request {
+            url: url.to_string(),
+            method: Method::POST,
+            headers: HashMap::new(),
+            body: Some(body.to_string()),
+            timeout_ms: 30000
+        }
+    
+    fn with_header(&mut self, key: &str, value: &str) -> &mut Self:
+        self.headers.insert(key.to_string(), value.to_string())
+        return self
+    
+    fn with_timeout(&mut self, ms: usize) -> &mut Self:
+        self.timeout_ms = ms
+        return self
+
+enum Method:
+    GET
+    POST
+    PUT
+    DELETE
+    PATCH
+
+enum HttpError:
+    ConnectionFailed(reason: String)
+    Timeout
+    InvalidUrl
+    TlsError(reason: String)
+    SafetyBlocked
+
+// Convenience functions
+fn get(url: &str) -> Result<Response, HttpError>:
+    log::debug("HTTP GET: {}", url)
+    let req = Request::get(url)
+    return send(&req)
+
+fn post(url: &str, body: &str) -> Result<Response, HttpError>:
+    log::debug("HTTP POST: {}", url)
+    let req = Request::post(url, body)
+    return send(&req)
+
+fn send(request: &Request) -> Result<Response, HttpError>:
+    // Safety check - verify the request is allowed
+    let action = asimov::Action {
+        action_type: asimov::ActionType::NetworkRequest(
+            request.url.clone(),
+            request.method.to_string()
+        ),
+        timestamp: time::now_ms(),
+        source: "HTTP"
+    }
+    
+    // Get global safety protocol
+    let safety = asimov::get_global()
+    match safety.check(&action):
+        asimov::SafetyResult::Blocked(_):
+            log::warn("HTTP request blocked by safety protocol")
+            return Err(HttpError::SafetyBlocked)
+        _: pass
+    
+    // Perform actual HTTP request (native implementation)
+    return http_native::send(request)
+
+// Native HTTP implementation
+// Would use system TLS libraries (OpenSSL, SChannel, etc.)
+module http_native:
+    fn send(request: &Request) -> Result<Response, HttpError>:
+        // Parse URL
+        let (host, port, path, is_https) = parse_url(&request.url)?
+        
+        // Create socket
+        let socket = if is_https:
+            tls::connect(host, port)?
+        else:
+            tcp::connect(host, port)?
+        
+        // Build HTTP request
+        let req_line = format("{} {} HTTP/1.1\r\n", request.method, path)
+        socket.write(&req_line)
+        socket.write(&format("Host: {}\r\n", host))
+        socket.write("Connection: close\r\n")
+        
+        for (key, value) in &request.headers:
+            socket.write(&format("{}: {}\r\n", key, value))
+        
+        if let Some(body) = &request.body:
+            socket.write(&format("Content-Length: {}\r\n", body.len()))
+            socket.write("\r\n")
+            socket.write(body)
+        else:
+            socket.write("\r\n")
+        
+        // Read response
+        let response_data = socket.read_all(request.timeout_ms)?
+        return parse_response(&response_data)
+    
+    fn parse_url(url: &str) -> Result<(String, u16, String, bool), HttpError>:
+        let is_https = url.starts_with("https://")
+        let url = url.strip_prefix("https://")
+            .or_else(|| url.strip_prefix("http://"))
+            .ok_or(HttpError::InvalidUrl)?
+        
+        let (host_port, path) = url.split_once("/")
+            .unwrap_or((url, "/"))
+        
+        let (host, port) = if host_port.contains(":"):
+            let parts = host_port.split_once(":")
+            (parts.0, parts.1.parse().unwrap_or(443))
+        else:
+            (host_port, if is_https: 443 else: 80)
+        
+        return Ok((host.to_string(), port, format("/{}", path), is_https))
+    
+    fn parse_response(data: &str) -> Result<Response, HttpError>:
+        let lines = data.split("\r\n").collect::<Vec<_>>()
+        
+        // Parse status line
+        let status_line = lines[0]
+        let status_code = status_line.split(" ").nth(1)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0)
+        
+        // Parse headers
+        let mut headers = HashMap::new()
+        let mut body_start = 0
+        for (i, line) in lines.iter().enumerate().skip(1):
+            if line.is_empty():
+                body_start = i + 1
+                break
+            if let Some((key, value)) = line.split_once(": "):
+                headers.insert(key.to_string(), value.to_string())
+        
+        // Get body
+        let body = lines[body_start..].join("\r\n")
+        
+        return Ok(Response { status_code, headers, body })

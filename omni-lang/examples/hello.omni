@@ -1,0 +1,30 @@
+// Omni Hello World Example
+// File: examples/hello.omni
+
+module examples::hello
+
+import core::logging as log
+
+struct Greeter:
+    name: &str
+    count: usize
+    
+    fn new(name: &str) -> own Greeter:
+        log::debug("Creating greeter for {}", name)
+        return Greeter { name: name, count: 0 }
+    
+    fn greet(&mut self) -> String:
+        self.count += 1
+        log::info("Greeting #{}", self.count)
+        return format("Hello, {}!", self.name)
+
+fn main():
+    log::info("Hello World example starting")
+    
+    let mut greeter = Greeter::new("World")
+    
+    for i in 0..5:
+        let msg = greeter.greet()
+        println(msg)
+    
+    log::info("Total greetings: {}", greeter.count)

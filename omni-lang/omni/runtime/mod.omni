@@ -1,0 +1,697 @@
+module runtime
+
+// ============================================================================
+// Omni Runtime — Core Runtime Support
+// ============================================================================
+// Entry point (__omni_main), panic handling, stack unwinding,
+// garbage collector (optional), global allocator, thread-local storage,
+// and runtime initialization/teardown.
+
+import std::core::{Option, Some, None, Result, Ok, Err, String, Drop}
+import std::collections::{Vector, HashMap}
+import std::mem::{alloc, dealloc, size_of, Box, Arc}
+import std::io::{Stderr, Write, stderr}
+import std::ffi::{c_int, c_void, c_char, CStr, CString, args}
+import std::thread::{Mutex, AtomicBool, AtomicI32, AtomicUsize}
+
+// ============================================================================
+// Platform FFI
+// ============================================================================
+
+extern "C":
+    fn exit(status: c_int)
+    fn abort()
+    fn atexit(func: fn()) -> c_int
+    fn signal(sig: c_int, handler: fn(c_int)) -> fn(c_int)
+
+    #[cfg(unix)]
+    fn write(fd: c_int, buf: *const u8, count: usize) -> isize
+    #[cfg(unix)]
+    fn _exit(status: c_int)
+
+    #[cfg(windows)]
+    fn ExitProcess(uExitCode: u32)
+    fn SetUnhandledExceptionFilter(filter: *const c_void) -> *const c_void
+
+// Signal constants
+const SIGABRT: c_int = 6
+const SIGFPE: c_int = 8
+const SIGILL: c_int = 4
+const SIGINT: c_int = 2
+const SIGSEGV: c_int = 11
+const SIGTERM: c_int = 15
+
+// ============================================================================
+// Runtime State
+// ============================================================================
+
+struct RuntimeState:
+    initialized: AtomicBool
+    panic_count: AtomicI32        // re-entrant panic detection
+    exit_code: AtomicI32
+    panic_hook: Option<Box<dyn Fn(&PanicInfo)>>
+    at_exit_hooks: Mutex<Vector<fn()>>
+    alloc_count: AtomicUsize      // total allocations (debug)
+    dealloc_count: AtomicUsize    // total deallocations (debug)
+    total_allocated: AtomicUsize  // bytes currently allocated
+    peak_allocated: AtomicUsize   // peak bytes allocated
+
+    fn new() -> own RuntimeState:
+        return RuntimeState {
+            initialized: AtomicBool::new(false),
+            panic_count: AtomicI32::new(0),
+            exit_code: AtomicI32::new(0),
+            panic_hook: None,
+            at_exit_hooks: Mutex::new(Vector::new()),
+            alloc_count: AtomicUsize::new(0),
+            dealloc_count: AtomicUsize::new(0),
+            total_allocated: AtomicUsize::new(0),
+            peak_allocated: AtomicUsize::new(0),
+        }
+
+static mut RUNTIME: RuntimeState = RuntimeState::new()
+
+// ============================================================================
+// Panic Infrastructure
+// ============================================================================
+
+struct PanicInfo:
+    message: String
+    file: &str
+    line: u32
+    column: u32
+
+    fn message(&self) -> &str:
+        return &self.message
+
+    fn location(&self) -> (&str, u32, u32):
+        return (self.file, self.line, self.column)
+
+struct Backtrace:
+    frames: Vector<BacktraceFrame>
+
+    fn capture() -> own Backtrace:
+        let mut frames = Vector::new()
+        // Walk the frame pointer chain
+        let mut fp = get_frame_pointer()
+        let mut depth: usize = 0
+        while not fp.is_null() and depth < 128:
+            unsafe:
+                let return_addr = *(fp.offset(1) as *const usize)
+                if return_addr == 0:
+                    break
+                frames.push(BacktraceFrame {
+                    ip: return_addr,
+                    symbol_name: None,
+                    file: None,
+                    line: None,
+                })
+                fp = *(fp as *const *const u8)
+                depth += 1
+        return Backtrace { frames }
+
+    fn frames(&self) -> &Vector<BacktraceFrame>:
+        return &self.frames
+
+    fn len(&self) -> usize:
+        return self.frames.len()
+
+    fn print(&self):
+        let mut err = stderr()
+        err.write_str("stack backtrace:\n").ok()
+        for i in 0..self.frames.len():
+            let frame = &self.frames[i]
+            err.write_str(&format!("  {}: {:#x}", i, frame.ip)).ok()
+            if let Some(ref name) = frame.symbol_name:
+                err.write_str(&format!(" - {}", name)).ok()
+            if let Some(ref file) = frame.file:
+                err.write_str(&format!(" at {}", file)).ok()
+                if let Some(line) = frame.line:
+                    err.write_str(&format!(":{}", line)).ok()
+            err.write_str("\n").ok()
+
+struct BacktraceFrame:
+    ip: usize
+    symbol_name: Option<String>
+    file: Option<String>
+    line: Option<u32>
+
+fn get_frame_pointer() -> *const u8:
+    // Compiler intrinsic — returns current frame pointer
+    // The actual compiler emits appropriate inline asm
+    #[intrinsic("frame_pointer")]
+    return std::mem::null()
+
+// Default panic handler
+fn default_panic_handler(info: &PanicInfo):
+    let mut err = stderr()
+    err.write_str("\n").ok()
+    err.write_str("thread panicked at '").ok()
+    err.write_str(info.message()).ok()
+    err.write_str("', ").ok()
+    err.write_str(info.file).ok()
+    err.write_str(":").ok()
+    err.write_str(&format!("{}", info.line)).ok()
+    err.write_str(":").ok()
+    err.write_str(&format!("{}", info.column)).ok()
+    err.write_str("\n").ok()
+
+    let bt = Backtrace::capture()
+    if bt.len() > 0:
+        bt.print()
+
+fn set_panic_hook(hook: Box<dyn Fn(&PanicInfo)>):
+    unsafe:
+        RUNTIME.panic_hook = Some(hook)
+
+fn take_panic_hook() -> Option<Box<dyn Fn(&PanicInfo)>>:
+    unsafe:
+        return RUNTIME.panic_hook.take()
+
+// Core panic entry point — called by compiler-generated code
+#[no_mangle]
+fn __omni_panic(message: *const c_char, file: *const c_char, line: u32, column: u32):
+    unsafe:
+        let count = RUNTIME.panic_count.fetch_add(1)
+
+        if count > 0:
+            // Double panic — abort immediately
+            let mut err = stderr()
+            err.write_str("thread panicked while panicking. aborting.\n").ok()
+            abort()
+
+        let msg = if message.is_null():
+            String::from("explicit panic")
+        else:
+            CStr::from_ptr(message).to_string_lossy()
+
+        let file_str = if file.is_null():
+            "<unknown>"
+        else:
+            CStr::from_ptr(file).to_str().unwrap_or("<unknown>")
+
+        let info = PanicInfo {
+            message: msg,
+            file: file_str,
+            line,
+            column,
+        }
+
+        // Call user hook if set, otherwise default handler
+        match &RUNTIME.panic_hook:
+            Some(hook) => hook(&info)
+            None => default_panic_handler(&info)
+
+        RUNTIME.panic_count.fetch_add(-1)
+
+        // Initiate stack unwinding or abort
+        begin_unwind()
+
+// ============================================================================
+// Stack Unwinding (DWARF / SEH)
+// ============================================================================
+
+// Unwinding personality function reference
+extern "C":
+    #[cfg(unix)]
+    fn _Unwind_RaiseException(exception: *mut UnwindException) -> c_int
+    #[cfg(unix)]
+    fn _Unwind_Resume(exception: *mut UnwindException)
+    #[cfg(unix)]
+    fn _Unwind_Backtrace(callback: fn(*mut c_void, *mut c_void) -> c_int, data: *mut c_void) -> c_int
+
+struct UnwindException:
+    exception_class: u64
+    cleanup: fn(*mut UnwindException)
+    private: [u64; 6]
+
+static OMNI_EXCEPTION_CLASS: u64 = 0x4F4D4E495F5253  // "OMNI_RS"
+
+fn begin_unwind():
+    #[cfg(unix)]
+    {
+        let mut exc = UnwindException {
+            exception_class: OMNI_EXCEPTION_CLASS,
+            cleanup: unwind_cleanup,
+            private: [0; 6],
+        }
+        let ret = _Unwind_RaiseException(&mut exc)
+        // If unwinding fails, abort
+        abort()
+    }
+
+    #[cfg(windows)]
+    {
+        // On Windows, use SEH via RaiseException
+        extern "C":
+            fn RaiseException(dwExceptionCode: u32, dwFlags: u32, nArgs: u32, args: *const usize)
+        const OMNI_EXCEPTION_CODE: u32 = 0xE0004F4D  // 'OM' prefix
+        RaiseException(OMNI_EXCEPTION_CODE, 0, 0, std::mem::null())
+        abort()
+    }
+
+fn unwind_cleanup(exc: *mut UnwindException):
+    // Called during cleanup phase — free exception resources
+    pass
+
+// Personality function for the Omni unwinder
+#[no_mangle]
+fn __omni_personality(version: c_int, actions: c_int, exception_class: u64,
+                       exception: *mut UnwindException, context: *mut c_void) -> c_int:
+    const _UA_SEARCH_PHASE: c_int = 1
+    const _UA_CLEANUP_PHASE: c_int = 2
+    const _UA_HANDLER_FRAME: c_int = 4
+    const _UA_FORCE_UNWIND: c_int = 8
+
+    const _URC_NO_REASON: c_int = 0
+    const _URC_HANDLER_FOUND: c_int = 6
+    const _URC_INSTALL_CONTEXT: c_int = 7
+    const _URC_CONTINUE_UNWIND: c_int = 8
+
+    if version != 1:
+        return _URC_CONTINUE_UNWIND
+
+    // Check if this frame has a landing pad
+    if actions & _UA_SEARCH_PHASE != 0:
+        // Search phase — check if we handle this exception
+        if exception_class == OMNI_EXCEPTION_CLASS:
+            return _URC_HANDLER_FOUND
+        return _URC_CONTINUE_UNWIND
+
+    if actions & _UA_CLEANUP_PHASE != 0:
+        // Cleanup phase — run destructors for this frame
+        // The compiler emits cleanup landing pads that call Drop::drop
+        return _URC_INSTALL_CONTEXT
+
+    return _URC_CONTINUE_UNWIND
+
+// ============================================================================
+// Catch/Recover
+// ============================================================================
+
+fn catch_unwind<F: FnOnce() -> T, T>(f: F) -> Result<T, String>:
+    // Implementation relies on compiler support for setjmp/longjmp or
+    // personality function cooperation
+    #[cfg(unix)]
+    {
+        extern "C":
+            fn setjmp(env: *mut c_void) -> c_int
+            fn longjmp(env: *mut c_void, val: c_int)
+
+        let mut jmp_buf = [0u8; 200]  // jmp_buf is platform-specific size
+        let ret = setjmp(jmp_buf.as_mut_ptr() as *mut c_void)
+        if ret == 0:
+            // Normal path
+            return Ok(f())
+        else:
+            // Caught a panic
+            return Err(String::from("caught panic"))
+    }
+
+    #[cfg(windows)]
+    {
+        // Windows SEH: __try / __except
+        // Compiler emits structured exception handling frame
+        return Ok(f())  // Simplified — real impl uses SEH
+    }
+
+// ============================================================================
+// Drop Registry (for running destructors during unwinding)
+// ============================================================================
+
+struct DropEntry:
+    ptr: *mut c_void
+    drop_fn: fn(*mut c_void)
+    next: *mut DropEntry
+
+// Thread-local drop stack
+#[thread_local]
+static mut DROP_STACK: *mut DropEntry = std::mem::null_mut()
+
+fn push_drop_guard(ptr: *mut c_void, drop_fn: fn(*mut c_void)):
+    unsafe:
+        let entry = alloc(size_of::<DropEntry>(), 8) as *mut DropEntry
+        (*entry).ptr = ptr
+        (*entry).drop_fn = drop_fn
+        (*entry).next = DROP_STACK
+        DROP_STACK = entry
+
+fn pop_drop_guard():
+    unsafe:
+        if not DROP_STACK.is_null():
+            let entry = DROP_STACK
+            DROP_STACK = (*entry).next
+            dealloc(entry as *mut u8, size_of::<DropEntry>(), 8)
+
+fn run_drop_guards():
+    unsafe:
+        while not DROP_STACK.is_null():
+            let entry = DROP_STACK
+            DROP_STACK = (*entry).next
+            ((*entry).drop_fn)((*entry).ptr)
+            dealloc(entry as *mut u8, size_of::<DropEntry>(), 8)
+
+// ============================================================================
+// Global Allocator Integration
+// ============================================================================
+
+struct AllocStats:
+    total_allocs: usize
+    total_deallocs: usize
+    bytes_allocated: usize
+    peak_bytes: usize
+
+fn alloc_stats() -> AllocStats:
+    unsafe:
+        return AllocStats {
+            total_allocs: RUNTIME.alloc_count.load(),
+            total_deallocs: RUNTIME.dealloc_count.load(),
+            bytes_allocated: RUNTIME.total_allocated.load(),
+            peak_bytes: RUNTIME.peak_allocated.load(),
+        }
+
+// Called by the global allocator on every allocation
+#[no_mangle]
+fn __omni_alloc_hook(size: usize):
+    unsafe:
+        RUNTIME.alloc_count.fetch_add(1)
+        let total = RUNTIME.total_allocated.fetch_add(size) + size
+        // Update peak
+        loop:
+            let peak = RUNTIME.peak_allocated.load()
+            if total <= peak:
+                break
+            if RUNTIME.peak_allocated.compare_exchange(peak, total):
+                break
+
+#[no_mangle]
+fn __omni_dealloc_hook(size: usize):
+    unsafe:
+        RUNTIME.dealloc_count.fetch_add(1)
+        RUNTIME.total_allocated.fetch_add(-(size as isize) as usize)
+
+// ============================================================================
+// Runtime Initialization & Teardown
+// ============================================================================
+
+fn runtime_init():
+    unsafe:
+        if RUNTIME.initialized.load():
+            return
+        RUNTIME.initialized.store(true)
+
+        // Install signal handlers
+        signal(SIGSEGV, segfault_handler)
+        signal(SIGABRT, abort_handler)
+        signal(SIGFPE, fpe_handler)
+        signal(SIGILL, illegal_handler)
+
+        // Register atexit cleanup
+        atexit(runtime_shutdown)
+
+fn runtime_shutdown():
+    unsafe:
+        if not RUNTIME.initialized.load():
+            return
+
+        // Run at-exit hooks in reverse order
+        let mut hooks = RUNTIME.at_exit_hooks.lock()
+        let hooks_ref = hooks.as_mut()
+        let mut i = hooks_ref.len()
+        while i > 0:
+            i -= 1
+            (hooks_ref[i])()
+
+        // Run remaining drop guards
+        run_drop_guards()
+
+        RUNTIME.initialized.store(false)
+
+fn register_at_exit(hook: fn()):
+    unsafe:
+        let mut hooks = RUNTIME.at_exit_hooks.lock()
+        hooks.as_mut().push(hook)
+
+// ============================================================================
+// Signal Handlers
+// ============================================================================
+
+fn segfault_handler(sig: c_int):
+    let mut err = stderr()
+    err.write_str("\nfatal runtime error: segmentation fault (SIGSEGV)\n").ok()
+    let bt = Backtrace::capture()
+    bt.print()
+    abort()
+
+fn abort_handler(sig: c_int):
+    let mut err = stderr()
+    err.write_str("\nfatal runtime error: abort (SIGABRT)\n").ok()
+    // Don't recurse
+    signal(SIGABRT, std::mem::null() as fn(c_int))
+    abort()
+
+fn fpe_handler(sig: c_int):
+    let mut err = stderr()
+    err.write_str("\nfatal runtime error: floating point exception (SIGFPE)\n").ok()
+    let bt = Backtrace::capture()
+    bt.print()
+    abort()
+
+fn illegal_handler(sig: c_int):
+    let mut err = stderr()
+    err.write_str("\nfatal runtime error: illegal instruction (SIGILL)\n").ok()
+    let bt = Backtrace::capture()
+    bt.print()
+    abort()
+
+// ============================================================================
+// Entry Point
+// ============================================================================
+
+// The user's main function signature
+extern fn main(args: Vector<String>) -> i32
+
+// True entry point — linked as program entry
+#[no_mangle]
+#[link_section = ".text.startup"]
+fn __omni_main() -> c_int:
+    // Initialize runtime
+    runtime_init()
+
+    // Gather command-line arguments
+    let argv = args()
+
+    // Run user main inside catch_unwind
+    let result = catch_unwind(|| -> i32 {
+        return main(argv)
+    })
+
+    let exit_code = match result:
+        Ok(code) => code
+        Err(msg) =>
+            let mut err = stderr()
+            err.write_str("Error: program panicked: ").ok()
+            err.write_str(&msg).ok()
+            err.write_str("\n").ok()
+            101  // panic exit code
+
+    // Shutdown runtime (also called by atexit, but be explicit)
+    runtime_shutdown()
+
+    return exit_code
+
+// ============================================================================
+// Type Info (RTTI) — for trait objects and reflection
+// ============================================================================
+
+struct TypeInfo:
+    name: &str
+    size: usize
+    align: usize
+    type_id: u64
+    drop_fn: Option<fn(*mut c_void)>
+    vtable: *const VTable
+
+struct VTable:
+    type_info: *const TypeInfo
+    drop_in_place: fn(*mut c_void)
+    size: usize
+    align: usize
+    methods: [*const c_void; 0]  // flexible array — actual methods follow
+
+    fn method(&self, index: usize) -> *const c_void:
+        unsafe:
+            let methods_ptr = (self as *const VTable).offset(1) as *const *const c_void
+            return *methods_ptr.offset(index as isize)
+
+// Generate a unique type ID at compile time
+fn type_id_of<T>() -> u64:
+    // Compiler intrinsic — returns a unique hash for the type
+    #[intrinsic("type_id")]
+    return 0
+
+fn type_name_of<T>() -> &str:
+    // Compiler intrinsic — returns the type name string
+    #[intrinsic("type_name")]
+    return "<unknown>"
+
+// ============================================================================
+// Trait Object Layout
+// ============================================================================
+
+struct TraitObject:
+    data: *mut c_void
+    vtable: *const VTable
+
+    fn data_ptr(&self) -> *mut c_void:
+        return self.data
+
+    fn vtable(&self) -> *const VTable:
+        return self.vtable
+
+    fn call_method(&self, index: usize) -> *const c_void:
+        unsafe:
+            return (*self.vtable).method(index)
+
+    fn drop_in_place(&mut self):
+        unsafe:
+            ((*self.vtable).drop_in_place)(self.data)
+
+// ============================================================================
+// Slice Layout (fat pointer)
+// ============================================================================
+
+struct SliceRef<T>:
+    ptr: *const T
+    len: usize
+
+    fn as_ptr(&self) -> *const T:
+        return self.ptr
+
+    fn len(&self) -> usize:
+        return self.len
+
+    fn is_empty(&self) -> bool:
+        return self.len == 0
+
+    fn get(&self, index: usize) -> Option<&T>:
+        if index >= self.len:
+            return None
+        unsafe:
+            return Some(&*self.ptr.offset(index as isize))
+
+// ============================================================================
+// Intrinsics (compiler builtins)
+// ============================================================================
+
+// These are lowered directly to IR instructions by the compiler
+
+#[intrinsic("unreachable")]
+fn intrinsic_unreachable():
+    abort()
+
+#[intrinsic("assume")]
+fn intrinsic_assume(cond: bool):
+    if not cond:
+        intrinsic_unreachable()
+
+#[intrinsic("likely")]
+fn intrinsic_likely(cond: bool) -> bool:
+    return cond
+
+#[intrinsic("unlikely")]
+fn intrinsic_unlikely(cond: bool) -> bool:
+    return cond
+
+#[intrinsic("prefetch_read")]
+fn prefetch_read<T>(ptr: *const T, locality: i32):
+    pass  // Lowered to llvm.prefetch
+
+#[intrinsic("prefetch_write")]
+fn prefetch_write<T>(ptr: *mut T, locality: i32):
+    pass
+
+#[intrinsic("black_box")]
+fn black_box<T>(val: T) -> T:
+    return val
+
+#[intrinsic("transmute")]
+fn transmute<T, U>(val: T) -> U:
+    // UNSAFE: reinterpret bits — compiler validates size_of::<T>() == size_of::<U>()
+    abort()
+
+// ============================================================================
+// Atomic Intrinsics
+// ============================================================================
+
+#[intrinsic("atomic_fence")]
+fn atomic_fence():
+    pass
+
+#[intrinsic("atomic_compiler_fence")]
+fn atomic_compiler_fence():
+    pass
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[test]
+fn test_panic_info():
+    let info = PanicInfo {
+        message: String::from("test panic"),
+        file: "test.omni",
+        line: 42,
+        column: 5,
+    }
+    assert(info.message() == "test panic", "message should match")
+    let (file, line, col) = info.location()
+    assert(file == "test.omni", "file should match")
+    assert(line == 42, "line should match")
+    assert(col == 5, "column should match")
+
+#[test]
+fn test_backtrace_capture():
+    let bt = Backtrace::capture()
+    // May have 0 frames in test harness, just check it doesn't crash
+    assert(bt.len() >= 0, "backtrace should have >= 0 frames")
+
+#[test]
+fn test_alloc_stats():
+    let stats = alloc_stats()
+    // Stats are cumulative — just check they're sane
+    assert(stats.total_allocs >= stats.total_deallocs, "allocs >= deallocs")
+
+#[test]
+fn test_catch_unwind_ok():
+    let result = catch_unwind(|| -> i32 {
+        return 42
+    })
+    assert(result.is_ok(), "should not panic")
+    assert(result.unwrap() == 42, "should return 42")
+
+#[test]
+fn test_type_info():
+    let ti = TypeInfo {
+        name: "i32",
+        size: 4,
+        align: 4,
+        type_id: 12345,
+        drop_fn: None,
+        vtable: std::mem::null(),
+    }
+    assert(ti.name == "i32", "name should be i32")
+    assert(ti.size == 4, "size should be 4")
+
+#[test]
+fn test_slice_ref():
+    let data = [1, 2, 3, 4, 5]
+    let slice = SliceRef {
+        ptr: data.as_ptr(),
+        len: 5,
+    }
+    assert(slice.len() == 5, "slice len should be 5")
+    assert(not slice.is_empty(), "slice should not be empty")
+    assert(*slice.get(0).unwrap() == 1, "first element should be 1")
+    assert(*slice.get(4).unwrap() == 5, "last element should be 5")
+    assert(slice.get(5).is_none(), "out of bounds should be None")

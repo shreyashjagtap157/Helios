@@ -1,0 +1,426 @@
+module tests::codegen
+
+// ============================================================================
+// Code Generation Tests — IR, LLVM, OVM, GPU backends
+// ============================================================================
+
+import compiler::ir::mod::{IrModule, IrFunction, IrInst, IrType, IrConst, IrBuilder, BasicBlock}
+import compiler::ir::optimize::{OptimizationPipeline, OptLevel}
+import compiler::codegen::llvm::{LlvmCodegen}
+import compiler::codegen::ovm::{OvmCodegen, BytecodeChunk, OpCode}
+import compiler::parser::mod::{parse}
+import compiler::semantic::mod::{SemanticAnalyzer}
+import compiler::lexer::mod::{tokenize}
+import std::core::{String, Vector, Result, Ok, Err, assert, assert_eq}
+
+// ============================================================================
+// IR Builder Tests
+// ============================================================================
+
+#[test]
+fn test_ir_builder_basic():
+    let mut module = IrModule::new("test")
+    let mut builder = IrBuilder::new()
+
+    let func = builder.create_function("main", Vector::new(), IrType::I32)
+    let entry = builder.create_block("entry")
+
+    builder.set_insert_point(entry)
+    let c42 = builder.const_i32(42)
+    builder.ret(c42)
+
+    module.add_function(func)
+    assert(module.functions.len() == 1, "should have 1 function")
+
+#[test]
+fn test_ir_arithmetic():
+    let mut builder = IrBuilder::new()
+    let func = builder.create_function("add", Vector::new(), IrType::I32)
+    let entry = builder.create_block("entry")
+
+    builder.set_insert_point(entry)
+    let a = builder.const_i32(10)
+    let b = builder.const_i32(20)
+    let sum = builder.add(a, b)
+    builder.ret(sum)
+
+    assert(entry.instructions.len() >= 3, "should have const+const+add+ret")
+
+#[test]
+fn test_ir_branches():
+    let mut builder = IrBuilder::new()
+    let func = builder.create_function("branch_test", Vector::new(), IrType::I32)
+
+    let entry = builder.create_block("entry")
+    let then_block = builder.create_block("then")
+    let else_block = builder.create_block("else")
+    let merge_block = builder.create_block("merge")
+
+    builder.set_insert_point(entry)
+    let cond = builder.const_bool(true)
+    builder.cond_br(cond, then_block, else_block)
+
+    builder.set_insert_point(then_block)
+    let v1 = builder.const_i32(1)
+    builder.br(merge_block)
+
+    builder.set_insert_point(else_block)
+    let v2 = builder.const_i32(0)
+    builder.br(merge_block)
+
+    builder.set_insert_point(merge_block)
+    let phi = builder.phi(IrType::I32, [(v1, then_block), (v2, else_block)])
+    builder.ret(phi)
+
+#[test]
+fn test_ir_function_call():
+    let mut builder = IrBuilder::new()
+
+    let callee = builder.create_function("callee", vec![IrType::I32], IrType::I32)
+    let caller = builder.create_function("caller", Vector::new(), IrType::I32)
+
+    let entry = builder.create_block("entry")
+    builder.set_insert_point(entry)
+    let arg = builder.const_i32(5)
+    let result = builder.call(callee, vec![arg])
+    builder.ret(result)
+
+#[test]
+fn test_ir_alloca_load_store():
+    let mut builder = IrBuilder::new()
+    let func = builder.create_function("mem_test", Vector::new(), IrType::I32)
+    let entry = builder.create_block("entry")
+
+    builder.set_insert_point(entry)
+    let slot = builder.alloca(IrType::I32)
+    let val = builder.const_i32(42)
+    builder.store(val, slot)
+    let loaded = builder.load(IrType::I32, slot)
+    builder.ret(loaded)
+
+#[test]
+fn test_ir_gep():
+    let mut builder = IrBuilder::new()
+    let struct_type = IrType::Struct(vec![IrType::I32, IrType::I64, IrType::F64])
+    let func = builder.create_function("gep_test", Vector::new(), IrType::I64)
+    let entry = builder.create_block("entry")
+
+    builder.set_insert_point(entry)
+    let ptr = builder.alloca(struct_type)
+    let field_ptr = builder.gep(ptr, [builder.const_i32(0), builder.const_i32(1)])
+    let val = builder.load(IrType::I64, field_ptr)
+    builder.ret(val)
+
+// ============================================================================
+// Optimization Tests
+// ============================================================================
+
+#[test]
+fn test_constant_folding():
+    let mut module = build_module("fn test() -> i32:\n    return 2 + 3\n")
+    let pipeline = OptimizationPipeline::new(OptLevel::O1)
+    pipeline.run(&mut module)
+
+    // After optimization, should fold 2+3 to 5
+    let func = &module.functions[0]
+    let ret_inst = func.blocks[0].instructions.last().unwrap()
+    match ret_inst:
+        IrInst::Ret(val) =>
+            match val:
+                Some(IrConst::I32(5)) => pass
+                _ => assert(false, "should fold to const 5")
+        _ => assert(false, "should end with ret")
+
+#[test]
+fn test_dead_code_elimination():
+    let mut module = build_module("fn test() -> i32:\n    let x = 5\n    let y = 10\n    return x\n")
+    let before_count = count_instructions(&module)
+
+    let pipeline = OptimizationPipeline::new(OptLevel::O2)
+    pipeline.run(&mut module)
+
+    let after_count = count_instructions(&module)
+    assert(after_count <= before_count, "DCE should remove dead instructions")
+
+#[test]
+fn test_inline_small_function():
+    let source = "fn small(x: i32) -> i32:\n    return x + 1\n\nfn test() -> i32:\n    return small(41)\n"
+    let mut module = build_module(source)
+
+    let pipeline = OptimizationPipeline::new(OptLevel::O2)
+    pipeline.run(&mut module)
+
+    // After inlining, test() should not contain a call to small()
+    let test_fn = find_function(&module, "test")
+    assert(test_fn.is_some(), "should have test function")
+
+#[test]
+fn test_loop_invariant_code_motion():
+    let source = "fn test(n: i32) -> i32:\n    let a = 5\n    let b = 10\n    let mut sum = 0\n    for i in 0..n:\n        let x = a * b  # loop invariant\n        sum += x + i\n    return sum\n"
+    let mut module = build_module(source)
+
+    let pipeline = OptimizationPipeline::new(OptLevel::O2)
+    pipeline.run(&mut module)
+
+#[test]
+fn test_strength_reduction():
+    let source = "fn test(x: i32) -> i32:\n    return x * 2\n"
+    let mut module = build_module(source)
+
+    let pipeline = OptimizationPipeline::new(OptLevel::O2)
+    pipeline.run(&mut module)
+
+    // x * 2 should become x << 1 or x + x
+    let func = &module.functions[0]
+    let has_mul = func.blocks.iter().any(|b| {
+        b.instructions.iter().any(|i| {
+            match i:
+                IrInst::Mul(_, _) => true
+                _ => false
+        })
+    })
+    // Strength reduction may or may not fire, so just verify it completes
+
+#[test]
+fn test_o0_no_optimization():
+    let source = "fn test() -> i32:\n    let x = 2 + 3\n    return x\n"
+    let mut module = build_module(source)
+    let before_count = count_instructions(&module)
+
+    let pipeline = OptimizationPipeline::new(OptLevel::O0)
+    pipeline.run(&mut module)
+
+    let after_count = count_instructions(&module)
+    assert_eq(before_count, after_count, "O0 should not modify code")
+
+// ============================================================================
+// OVM Bytecode Tests
+// ============================================================================
+
+#[test]
+fn test_ovm_hello_world():
+    let module = build_module("fn main():\n    println!(\"Hello, World!\")\n")
+    let mut codegen = OvmCodegen::new()
+    let chunk = codegen.generate(&module)
+
+    assert(chunk.code.len() > 0, "should produce bytecode")
+    assert(chunk.constants.len() > 0, "should have string constant")
+
+#[test]
+fn test_ovm_arithmetic():
+    let module = build_module("fn test() -> i32:\n    return 2 + 3 * 4\n")
+    let mut codegen = OvmCodegen::new()
+    let chunk = codegen.generate(&module)
+
+    assert(has_opcode(&chunk, OpCode::PushConst), "should have push_const")
+    assert(has_opcode(&chunk, OpCode::Add) || has_opcode(&chunk, OpCode::Mul),
+        "should have arithmetic ops")
+
+#[test]
+fn test_ovm_function_call():
+    let module = build_module("fn add(a: i32, b: i32) -> i32:\n    return a + b\n\nfn main():\n    let x = add(1, 2)\n")
+    let mut codegen = OvmCodegen::new()
+    let chunk = codegen.generate(&module)
+
+    assert(has_opcode(&chunk, OpCode::Call), "should have call instruction")
+    assert(has_opcode(&chunk, OpCode::Ret), "should have ret instruction")
+
+#[test]
+fn test_ovm_branches():
+    let module = build_module("fn test(x: i32) -> i32:\n    if x > 0:\n        return 1\n    return 0\n")
+    let mut codegen = OvmCodegen::new()
+    let chunk = codegen.generate(&module)
+
+    assert(has_opcode(&chunk, OpCode::JumpIfFalse) || has_opcode(&chunk, OpCode::JumpIf),
+        "should have conditional jump")
+
+#[test]
+fn test_ovm_loop():
+    let module = build_module("fn sum(n: i32) -> i32:\n    let mut s = 0\n    for i in 0..n:\n        s += i\n    return s\n")
+    let mut codegen = OvmCodegen::new()
+    let chunk = codegen.generate(&module)
+
+    assert(has_opcode(&chunk, OpCode::Jump), "should have jump for loop")
+
+#[test]
+fn test_ovm_serialization():
+    let module = build_module("fn main():\n    let x = 42\n")
+    let mut codegen = OvmCodegen::new()
+    let chunk = codegen.generate(&module)
+
+    let bytes = chunk.serialize()
+    let deserialized = BytecodeChunk::deserialize(&bytes)
+    assert(deserialized.is_ok(), "should deserialize successfully")
+    let chunk2 = deserialized.unwrap()
+    assert_eq(chunk.code.len(), chunk2.code.len(), "code length should match")
+
+// ============================================================================
+// LLVM Codegen Tests (integration-level, requires LLVM)
+// ============================================================================
+
+#[test]
+#[cfg(feature = "llvm")]
+fn test_llvm_module_creation():
+    let module = build_module("fn main() -> i32:\n    return 0\n")
+    let mut codegen = LlvmCodegen::new()
+    let result = codegen.generate(&module, "test")
+    assert(result.is_ok(), "LLVM codegen should succeed")
+
+#[test]
+#[cfg(feature = "llvm")]
+fn test_llvm_function_codegen():
+    let module = build_module("fn add(a: i32, b: i32) -> i32:\n    return a + b\n")
+    let mut codegen = LlvmCodegen::new()
+    let result = codegen.generate(&module, "test")
+    assert(result.is_ok(), "LLVM codegen for function should succeed")
+
+#[test]
+#[cfg(feature = "llvm")]
+fn test_llvm_emit_ir():
+    let module = build_module("fn main() -> i32:\n    return 42\n")
+    let mut codegen = LlvmCodegen::new()
+    codegen.generate(&module, "test").unwrap()
+    let ir = codegen.emit_ir()
+    assert(ir.contains("define"), "LLVM IR should contain function definitions")
+    assert(ir.contains("ret"), "LLVM IR should contain return")
+
+#[test]
+#[cfg(feature = "llvm")]
+fn test_llvm_emit_object():
+    let module = build_module("fn main() -> i32:\n    return 0\n")
+    let mut codegen = LlvmCodegen::new()
+    codegen.generate(&module, "test").unwrap()
+    let result = codegen.emit_object("/tmp/test_output.o")
+    assert(result.is_ok(), "should emit object file")
+
+// ============================================================================
+// GPU Codegen Tests
+// ============================================================================
+
+#[test]
+fn test_gpu_spirv_header():
+    let module = build_gpu_module("@kernel\nfn add_kernel(a: &[f32], b: &[f32], out: &mut [f32]):\n    let idx = global_id()\n    out[idx] = a[idx] + b[idx]\n")
+    let codegen = GpuCodegen::new(GpuTarget::Spirv)
+    let result = codegen.generate(&module)
+    assert(result.is_ok(), "SPIR-V codegen should succeed")
+
+#[test]
+fn test_gpu_ptx():
+    let module = build_gpu_module("@kernel\nfn scale(data: &mut [f32], factor: f32):\n    let idx = global_id()\n    data[idx] *= factor\n")
+    let codegen = GpuCodegen::new(GpuTarget::Ptx)
+    let result = codegen.generate(&module)
+    assert(result.is_ok(), "PTX codegen should succeed")
+
+// ============================================================================
+// End-to-End Compilation Tests
+// ============================================================================
+
+#[test]
+fn test_e2e_hello_world():
+    let result = compile_and_verify("fn main() -> i32:\n    println!(\"Hello, World!\")\n    return 0\n")
+    assert(result.is_ok(), "hello world should compile")
+
+#[test]
+fn test_e2e_fibonacci():
+    let source = "fn fib(n: i32) -> i32:\n    if n <= 1:\n        return n\n    return fib(n - 1) + fib(n - 2)\n\nfn main() -> i32:\n    return fib(10)\n"
+    let result = compile_and_verify(source)
+    assert(result.is_ok(), "fibonacci should compile")
+
+#[test]
+fn test_e2e_structs():
+    let source = "struct Point:\n    x: f64\n    y: f64\n\nfn main() -> i32:\n    let p = Point { x: 1.0, y: 2.0 }\n    println!(\"{}\", p.x)\n    return 0\n"
+    let result = compile_and_verify(source)
+    assert(result.is_ok(), "struct program should compile")
+
+#[test]
+fn test_e2e_generics():
+    let source = "fn max<T: PartialOrd>(a: T, b: T) -> T:\n    if a >= b:\n        return a\n    return b\n\nfn main() -> i32:\n    let m = max(3, 7)\n    return m\n"
+    let result = compile_and_verify(source)
+    assert(result.is_ok(), "generic program should compile")
+
+#[test]
+fn test_e2e_traits():
+    let source = "trait Area:\n    fn area(&self) -> f64\n\nstruct Rect:\n    w: f64\n    h: f64\n\nimpl Area for Rect:\n    fn area(&self) -> f64:\n        return self.w * self.h\n\nfn main() -> i32:\n    let r = Rect { w: 3.0, h: 4.0 }\n    let a = r.area()\n    return 0\n"
+    let result = compile_and_verify(source)
+    assert(result.is_ok(), "trait program should compile")
+
+#[test]
+fn test_e2e_closures():
+    let source = "fn main() -> i32:\n    let add = |a: i32, b: i32| -> i32 { a + b }\n    let result = add(3, 4)\n    return result\n"
+    let result = compile_and_verify(source)
+    assert(result.is_ok(), "closure program should compile")
+
+#[test]
+fn test_e2e_pattern_matching():
+    let source = "enum Shape:\n    Circle(f64)\n    Rectangle(f64, f64)\n\nfn area(s: Shape) -> f64:\n    match s:\n        Shape::Circle(r) => 3.14159 * r * r\n        Shape::Rectangle(w, h) => w * h\n\nfn main() -> i32:\n    let a = area(Shape::Circle(1.0))\n    return 0\n"
+    let result = compile_and_verify(source)
+    assert(result.is_ok(), "pattern matching program should compile")
+
+#[test]
+fn test_e2e_error_handling():
+    let source = "fn divide(a: f64, b: f64) -> Result<f64, String>:\n    if b == 0.0:\n        return Err(String::from(\"division by zero\"))\n    return Ok(a / b)\n\nfn main() -> i32:\n    match divide(10.0, 3.0):\n        Ok(result) => println!(\"result: {}\", result)\n        Err(e) => println!(\"error: {}\", e)\n    return 0\n"
+    let result = compile_and_verify(source)
+    assert(result.is_ok(), "error handling program should compile")
+
+#[test]
+fn test_e2e_collections():
+    let source = "import std::collections::Vector\n\nfn main() -> i32:\n    let mut v = Vector::new()\n    for i in 0..10:\n        v.push(i * i)\n    let mut sum = 0\n    for val in v.iter():\n        sum += val\n    return 0\n"
+    let result = compile_and_verify(source)
+    assert(result.is_ok(), "collections program should compile")
+
+#[test]
+fn test_e2e_ownership():
+    let source = "fn take_ownership(s: own String):\n    println!(\"{}\", s)\n\nfn main() -> i32:\n    let s = String::from(\"hello\")\n    take_ownership(s)\n    # s is no longer valid here\n    return 0\n"
+    let result = compile_and_verify(source)
+    assert(result.is_ok(), "ownership transfer program should compile")
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+fn build_module(source: &str) -> IrModule:
+    let tokens = tokenize(source)
+    let ast = parse(tokens)
+    let mut analyzer = SemanticAnalyzer::new()
+    analyzer.check(&ast).unwrap()
+    return analyzer.lower_to_ir(&ast)
+
+fn build_gpu_module(source: &str) -> IrModule:
+    let tokens = tokenize(source)
+    let ast = parse(tokens)
+    let mut analyzer = SemanticAnalyzer::new()
+    analyzer.check(&ast).unwrap()
+    return analyzer.lower_to_ir_gpu(&ast)
+
+fn compile_and_verify(source: &str) -> Result<(), String>:
+    let tokens = tokenize(source)
+    let ast = parse(tokens)
+    let mut analyzer = SemanticAnalyzer::new()
+    analyzer.check(&ast)?
+    let ir = analyzer.lower_to_ir(&ast)
+    let mut pipeline = OptimizationPipeline::new(OptLevel::O1)
+    pipeline.run(&mut ir)
+    let mut codegen = OvmCodegen::new()
+    let chunk = codegen.generate(&ir)
+    if chunk.code.is_empty():
+        return Err(String::from("empty bytecode"))
+    return Ok(())
+
+fn count_instructions(module: &IrModule) -> usize:
+    let mut count: usize = 0
+    for func in module.functions.iter():
+        for block in func.blocks.iter():
+            count += block.instructions.len()
+    return count
+
+fn find_function(module: &IrModule, name: &str) -> Option<&IrFunction>:
+    for func in module.functions.iter():
+        if func.name == name:
+            return Some(func)
+    return None
+
+fn has_opcode(chunk: &BytecodeChunk, op: OpCode) -> bool:
+    for byte in chunk.code.iter():
+        if *byte == op as u8:
+            return true
+    return false

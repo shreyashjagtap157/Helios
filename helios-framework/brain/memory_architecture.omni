@@ -1,0 +1,251 @@
+// HELIOS Framework - Memory Architecture
+// Multi-level memory system with working, short-term, long-term, and episodic layers
+
+module brain::memory_architecture
+
+import core::collections::{HashMap, Vec, VecDeque}
+import core::logging as log
+
+// ============================================================================
+// Memory Item & Query Types
+// ============================================================================
+
+/// A single item stored in the memory system
+struct MemoryItem:
+    id: u64
+    content: String
+    category: String
+    importance: f64
+    timestamp: u64
+    access_count: u32
+    decay_factor: f64
+    metadata: HashMap<String, String>
+
+    fn new(id: u64, content: String, category: String) -> MemoryItem:
+        return MemoryItem {
+            id: id,
+            content: content,
+            category: category,
+            importance: 0.5,
+            timestamp: time::now_ms(),
+            access_count: 0,
+            decay_factor: 1.0,
+            metadata: HashMap::new()
+        }
+
+    /// Effective importance accounting for temporal decay
+    fn effective_importance(&self) -> f64:
+        return self.importance * self.decay_factor
+
+/// Classification of memory levels
+enum MemoryLevel:
+    Working
+    ShortTerm
+    LongTerm
+    Episodic
+
+/// Query for recalling memories
+struct RecallQuery:
+    keywords: Vec<String>
+    category: Option<String>
+    max_results: usize
+    min_importance: f64
+
+    fn new(keywords: Vec<String>) -> RecallQuery:
+        return RecallQuery {
+            keywords: keywords,
+            category: None,
+            max_results: 10,
+            min_importance: 0.0
+        }
+
+    /// Test whether a memory item matches this query
+    fn matches(&self, item: &MemoryItem) -> bool:
+        if item.effective_importance() < self.min_importance:
+            return false
+        if let Some(ref cat) = self.category:
+            if item.category != *cat:
+                return false
+        for keyword in &self.keywords:
+            if item.content.contains(keyword):
+                return true
+        return false
+
+// ============================================================================
+// Memory Layers
+// ============================================================================
+
+/// Working memory — active context, capacity-limited
+struct WorkingMemory:
+    items: VecDeque<MemoryItem>
+    capacity: usize
+
+    fn new(capacity: usize) -> WorkingMemory:
+        return WorkingMemory { items: VecDeque::new(), capacity: capacity }
+
+    fn add(&mut self, item: MemoryItem):
+        self.items.push_back(item)
+        while self.items.len() > self.capacity:
+            self.items.pop_front()
+
+    fn search(&self, query: &RecallQuery) -> Vec<MemoryItem>:
+        return self.items.iter().filter(|i| query.matches(i)).cloned().collect()
+
+    fn count(&self) -> usize:
+        return self.items.len()
+
+/// Short-term memory — recent interactions, time-decaying
+struct ShortTermMemory:
+    items: Vec<MemoryItem>
+    max_age_ms: u64
+
+    fn new(max_age_ms: u64) -> ShortTermMemory:
+        return ShortTermMemory { items: Vec::new(), max_age_ms: max_age_ms }
+
+    fn add(&mut self, item: MemoryItem):
+        self.items.push(item)
+
+    fn search(&self, query: &RecallQuery) -> Vec<MemoryItem>:
+        return self.items.iter().filter(|i| query.matches(i)).cloned().collect()
+
+    /// Remove items that have exceeded the maximum age
+    fn prune_expired(&mut self):
+        let now = time::now_ms()
+        self.items.retain(|i| (now - i.timestamp) < self.max_age_ms)
+
+    /// Return items important enough for consolidation to long-term
+    fn get_for_consolidation(&self) -> Vec<MemoryItem>:
+        return self.items.iter().filter(|i| i.importance > 0.6).cloned().collect()
+
+    fn count(&self) -> usize:
+        return self.items.len()
+
+/// Long-term memory — persistent knowledge, indexed by category
+struct LongTermMemory:
+    items: HashMap<u64, MemoryItem>
+    index_by_category: HashMap<String, Vec<u64>>
+
+    fn new() -> LongTermMemory:
+        return LongTermMemory {
+            items: HashMap::new(),
+            index_by_category: HashMap::new()
+        }
+
+    fn add(&mut self, item: MemoryItem):
+        let id = item.id
+        let cat = item.category.clone()
+        self.items.insert(id, item)
+        self.index_by_category.entry(cat).or_default().push(id)
+
+    fn search(&self, query: &RecallQuery) -> Vec<MemoryItem>:
+        return self.items.values().filter(|i| query.matches(i)).cloned().collect()
+
+    fn count(&self) -> usize:
+        return self.items.len()
+
+/// Episodic memory — event sequences with temporal ordering
+struct EpisodicMemory:
+    episodes: Vec<MemoryItem>
+
+    fn new() -> EpisodicMemory:
+        return EpisodicMemory { episodes: Vec::new() }
+
+    fn add(&mut self, item: MemoryItem):
+        self.episodes.push(item)
+        self.episodes.sort_by_key(|e| e.timestamp)
+
+    fn search(&self, query: &RecallQuery) -> Vec<MemoryItem>:
+        return self.episodes.iter().filter(|i| query.matches(i)).cloned().collect()
+
+    /// Get the most recent episodes
+    fn get_recent(&self, count: usize) -> Vec<&MemoryItem>:
+        return self.episodes.iter().rev().take(count).collect()
+
+    fn count(&self) -> usize:
+        return self.episodes.len()
+
+// ============================================================================
+// Memory System (Orchestrator)
+// ============================================================================
+
+/// The unified multi-level memory system.
+/// Routes storage and retrieval across working, short-term, long-term, and episodic layers.
+struct MemorySystem:
+    working: WorkingMemory
+    short_term: ShortTermMemory
+    long_term: LongTermMemory
+    episodic: EpisodicMemory
+    next_id: u64
+
+    fn new() -> MemorySystem:
+        log::info("Initializing MemorySystem")
+        return MemorySystem {
+            working: WorkingMemory::new(64),
+            short_term: ShortTermMemory::new(30 * 60 * 1000),
+            long_term: LongTermMemory::new(),
+            episodic: EpisodicMemory::new(),
+            next_id: 1
+        }
+
+    /// Store an item at the specified memory level
+    fn store(&mut self, mut item: MemoryItem, level: MemoryLevel):
+        item.id = self.next_id
+        self.next_id += 1
+        log::debug("Storing memory #{} at {:?}", item.id, level)
+
+        match level:
+            MemoryLevel::Working:
+                self.working.add(item)
+            MemoryLevel::ShortTerm:
+                self.short_term.add(item)
+            MemoryLevel::LongTerm:
+                self.long_term.add(item)
+            MemoryLevel::Episodic:
+                self.episodic.add(item)
+
+    /// Recall memories matching a query across all levels
+    fn recall(&self, query: RecallQuery) -> Vec<MemoryItem>:
+        log::debug("Recalling memories for {} keywords", query.keywords.len())
+        let mut results: Vec<MemoryItem> = Vec::new()
+
+        results.extend(self.working.search(&query))
+        results.extend(self.short_term.search(&query))
+        results.extend(self.long_term.search(&query))
+        results.extend(self.episodic.search(&query))
+
+        // Sort by effective importance (descending)
+        results.sort_by(|a, b|
+            b.effective_importance().partial_cmp(&a.effective_importance()).unwrap())
+        results.truncate(query.max_results)
+        return results
+
+    /// Consolidate: promote important short-term memories to long-term
+    fn consolidate(&mut self):
+        log::info("Consolidating memories")
+        let to_promote = self.short_term.get_for_consolidation()
+        for item in to_promote:
+            self.long_term.add(item)
+
+    /// Apply time-based decay to reduce importance of aging memories
+    fn forget(&mut self, decay_factor: f64):
+        log::debug("Applying decay factor {}", decay_factor)
+        for item in self.short_term.items.iter_mut():
+            item.decay_factor *= decay_factor
+        self.short_term.prune_expired()
+
+    /// Total memories stored across all levels
+    fn total_count(&self) -> usize:
+        return self.working.count() + self.short_term.count()
+             + self.long_term.count() + self.episodic.count()
+
+    /// Persist the entire memory system to disk
+    fn save(&self, path: &str) -> Result<(), String>:
+        log::info("Saving memory system to {}", path)
+        let data = serialize::to_json(self)
+        return fs::write_string(path, &data).map_err(|e| e.to_string())
+
+    /// Load a memory system from disk
+    fn load(path: &str) -> Result<MemorySystem, String>:
+        log::info("Loading memory system from {}", path)
+        let data = fs::read_string(path).map_err(|e| e.to_string())?
+        return serialize::from_json(&data).map_err(|e| e.to_string())

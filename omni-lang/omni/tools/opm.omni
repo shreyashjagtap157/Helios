@@ -1,0 +1,872 @@
+module tools::opm
+
+// ============================================================================
+// Omni Package Manager (OPM)
+// ============================================================================
+// Dependency resolution, package registry, semver parsing, lock files,
+// download/cache management. Works with omni.toml manifests.
+
+import std::core::{Option, Some, None, Result, Ok, Err, String, Clone, PartialEq, PartialOrd, Ordering, Iterator}
+import std::collections::{Vector, HashMap, HashSet}
+import std::io::{File, Read, Write, read_to_string, write_string, create_dir_all, path_exists, is_dir, remove_file, current_dir}
+import std::ffi::{CString, c_int, c_char, c_void, env_get}
+import tools::build::{Manifest, Dependency, parse_manifest, OutputType}
+
+// ============================================================================
+// Semantic Versioning
+// ============================================================================
+
+struct SemVer:
+    major: u32
+    minor: u32
+    patch: u32
+    pre_release: String       // e.g. "alpha.1", "beta.2", ""
+    build_metadata: String    // e.g. "build.123", ""
+
+    fn new(major: u32, minor: u32, patch: u32) -> own SemVer:
+        return SemVer {
+            major,
+            minor,
+            patch,
+            pre_release: String::new(),
+            build_metadata: String::new(),
+        }
+
+    fn parse(s: &str) -> Result<SemVer, String>:
+        let trimmed = s.trim()
+        if trimmed.is_empty():
+            return Err(String::from("empty version string"))
+
+        // Strip leading 'v' or 'V'
+        let input = if trimmed.starts_with('v') or trimmed.starts_with('V'):
+            &trimmed[1..]
+        else:
+            trimmed
+
+        // Split off build metadata (+)
+        let (version_pre, build_meta) = match input.find('+'):
+            Some(pos) => (&input[0..pos], String::from(&input[pos+1..]))
+            None => (input, String::new())
+
+        // Split off pre-release (-)
+        let (version_core, pre_rel) = match version_pre.find('-'):
+            Some(pos) => (&version_pre[0..pos], String::from(&version_pre[pos+1..]))
+            None => (version_pre, String::new())
+
+        // Parse major.minor.patch
+        let parts = version_core.split('.')
+        let parts_vec: Vector<&str> = parts.collect()
+
+        if parts_vec.len() < 1 or parts_vec.len() > 3:
+            return Err(format!("invalid version format: {}", s))
+
+        let major = parse_version_num(parts_vec[0])?
+        let minor = if parts_vec.len() > 1:
+            parse_version_num(parts_vec[1])?
+        else:
+            0
+        let patch = if parts_vec.len() > 2:
+            parse_version_num(parts_vec[2])?
+        else:
+            0
+
+        return Ok(SemVer {
+            major,
+            minor,
+            patch,
+            pre_release: pre_rel,
+            build_metadata: build_meta,
+        })
+
+    fn to_string(&self) -> String:
+        let mut s = format!("{}.{}.{}", self.major, self.minor, self.patch)
+        if not self.pre_release.is_empty():
+            s.push('-')
+            s.push_str(&self.pre_release)
+        if not self.build_metadata.is_empty():
+            s.push('+')
+            s.push_str(&self.build_metadata)
+        return s
+
+    fn is_compatible(&self, other: &SemVer) -> bool:
+        // Compatible if major versions match (for major > 0)
+        // For 0.x.y, minor must match
+        if self.major == 0 and other.major == 0:
+            return self.minor == other.minor
+        return self.major == other.major
+
+    fn satisfies(&self, req: &VersionReq) -> bool:
+        return req.matches(self)
+
+impl PartialEq for SemVer:
+    fn eq(&self, other: &SemVer) -> bool:
+        return self.major == other.major
+            and self.minor == other.minor
+            and self.patch == other.patch
+            and self.pre_release == other.pre_release
+
+impl PartialOrd for SemVer:
+    fn partial_cmp(&self, other: &SemVer) -> Option<Ordering>:
+        if self.major != other.major:
+            return Some(if self.major < other.major { Ordering::Less } else { Ordering::Greater })
+        if self.minor != other.minor:
+            return Some(if self.minor < other.minor { Ordering::Less } else { Ordering::Greater })
+        if self.patch != other.patch:
+            return Some(if self.patch < other.patch { Ordering::Less } else { Ordering::Greater })
+        // Pre-release ordering: absence > presence, then lexicographic
+        if self.pre_release.is_empty() and not other.pre_release.is_empty():
+            return Some(Ordering::Greater)
+        if not self.pre_release.is_empty() and other.pre_release.is_empty():
+            return Some(Ordering::Less)
+        if self.pre_release == other.pre_release:
+            return Some(Ordering::Equal)
+        return Some(if self.pre_release < other.pre_release { Ordering::Less } else { Ordering::Greater })
+
+impl Clone for SemVer:
+    fn clone(&self) -> own SemVer:
+        return SemVer {
+            major: self.major,
+            minor: self.minor,
+            patch: self.patch,
+            pre_release: self.pre_release.clone(),
+            build_metadata: self.build_metadata.clone(),
+        }
+
+fn parse_version_num(s: &str) -> Result<u32, String>:
+    if s.is_empty():
+        return Err(String::from("empty version number"))
+    let mut result: u32 = 0
+    for i in 0..s.len():
+        let ch = s.as_bytes()[i]
+        if ch < 48 or ch > 57:
+            return Err(format!("invalid version number: {}", s))
+        result = result * 10 + (ch - 48) as u32
+    return Ok(result)
+
+// ============================================================================
+// Version Requirements
+// ============================================================================
+
+struct VersionReq:
+    comparators: Vector<Comparator>
+
+    fn parse(s: &str) -> Result<VersionReq, String>:
+        let trimmed = s.trim()
+        if trimmed.is_empty() or trimmed == "*":
+            return Ok(VersionReq { comparators: Vector::new() })
+
+        let mut comps = Vector::new()
+        let parts = trimmed.split(',')
+        for part in parts:
+            let comp = Comparator::parse(part.trim())?
+            comps.push(comp)
+        return Ok(VersionReq { comparators: comps })
+
+    fn matches(&self, version: &SemVer) -> bool:
+        if self.comparators.is_empty():
+            return true  // wildcard
+        for comp in self.comparators.iter():
+            if not comp.matches(version):
+                return false
+        return true
+
+struct Comparator:
+    op: CompOp
+    version: SemVer
+
+    fn parse(s: &str) -> Result<Comparator, String>:
+        let trimmed = s.trim()
+
+        if trimmed.starts_with(">="):
+            let ver = SemVer::parse(&trimmed[2..])?
+            return Ok(Comparator { op: CompOp::Gte, version: ver })
+        elif trimmed.starts_with("<="):
+            let ver = SemVer::parse(&trimmed[2..])?
+            return Ok(Comparator { op: CompOp::Lte, version: ver })
+        elif trimmed.starts_with('>'):
+            let ver = SemVer::parse(&trimmed[1..])?
+            return Ok(Comparator { op: CompOp::Gt, version: ver })
+        elif trimmed.starts_with('<'):
+            let ver = SemVer::parse(&trimmed[1..])?
+            return Ok(Comparator { op: CompOp::Lt, version: ver })
+        elif trimmed.starts_with('='):
+            let ver = SemVer::parse(&trimmed[1..])?
+            return Ok(Comparator { op: CompOp::Exact, version: ver })
+        elif trimmed.starts_with('~'):
+            let ver = SemVer::parse(&trimmed[1..])?
+            return Ok(Comparator { op: CompOp::Tilde, version: ver })
+        elif trimmed.starts_with('^'):
+            let ver = SemVer::parse(&trimmed[1..])?
+            return Ok(Comparator { op: CompOp::Caret, version: ver })
+        else:
+            // Default: caret (^)
+            let ver = SemVer::parse(trimmed)?
+            return Ok(Comparator { op: CompOp::Caret, version: ver })
+
+    fn matches(&self, v: &SemVer) -> bool:
+        match self.op:
+            CompOp::Exact => v == &self.version
+            CompOp::Gt => v > &self.version
+            CompOp::Gte => v >= &self.version
+            CompOp::Lt => v < &self.version
+            CompOp::Lte => v <= &self.version
+            CompOp::Tilde =>
+                // ~1.2.3 means >=1.2.3 and <1.3.0
+                v >= &self.version and v.major == self.version.major
+                    and v.minor == self.version.minor
+            CompOp::Caret =>
+                // ^1.2.3 means >=1.2.3 and <2.0.0
+                // ^0.2.3 means >=0.2.3 and <0.3.0
+                // ^0.0.3 means >=0.0.3 and <0.0.4
+                if self.version.major > 0:
+                    v >= &self.version and v.major == self.version.major
+                elif self.version.minor > 0:
+                    v >= &self.version and v.major == 0 and v.minor == self.version.minor
+                else:
+                    v == &self.version
+
+enum CompOp:
+    Exact   // =
+    Gt      // >
+    Gte     // >=
+    Lt      // <
+    Lte     // <=
+    Tilde   // ~
+    Caret   // ^
+
+// ============================================================================
+// Lock File
+// ============================================================================
+
+struct LockFile:
+    packages: Vector<LockedPackage>
+
+    fn new() -> own LockFile:
+        return LockFile { packages: Vector::new() }
+
+    fn parse(source: &str) -> Result<LockFile, String>:
+        let mut packages = Vector::new()
+        let mut current: Option<LockedPackage> = None
+
+        let lines = source.split('\n')
+        for raw_line in lines:
+            let line = raw_line.trim()
+
+            if line == "[[package]]":
+                if let Some(pkg) = current.take():
+                    packages.push(pkg)
+                current = Some(LockedPackage {
+                    name: String::new(),
+                    version: String::new(),
+                    source: None,
+                    checksum: None,
+                    dependencies: Vector::new(),
+                })
+                continue
+
+            if let Some(ref mut pkg) = current:
+                if let Some(eq) = line.find('='):
+                    let key = line[0..eq].trim()
+                    let value = strip_toml_quotes(line[eq+1..].trim())
+                    match key:
+                        "name" => pkg.name = String::from(value)
+                        "version" => pkg.version = String::from(value)
+                        "source" => pkg.source = Some(String::from(value))
+                        "checksum" => pkg.checksum = Some(String::from(value))
+                        _ => pass
+
+        if let Some(pkg) = current.take():
+            packages.push(pkg)
+
+        return Ok(LockFile { packages })
+
+    fn serialize(&self) -> String:
+        let mut out = String::from("# This file is auto-generated by opm. Do not edit.\n\n")
+        for pkg in self.packages.iter():
+            out.push_str("[[package]]\n")
+            out.push_str(&format!("name = \"{}\"\n", pkg.name))
+            out.push_str(&format!("version = \"{}\"\n", pkg.version))
+            if let Some(ref src) = pkg.source:
+                out.push_str(&format!("source = \"{}\"\n", src))
+            if let Some(ref cs) = pkg.checksum:
+                out.push_str(&format!("checksum = \"{}\"\n", cs))
+            if not pkg.dependencies.is_empty():
+                out.push_str("dependencies = [\n")
+                for dep in pkg.dependencies.iter():
+                    out.push_str(&format!("  \"{}\",\n", dep))
+                out.push_str("]\n")
+            out.push('\n')
+        return out
+
+    fn find(&self, name: &str) -> Option<&LockedPackage>:
+        for pkg in self.packages.iter():
+            if pkg.name == name:
+                return Some(pkg)
+        return None
+
+struct LockedPackage:
+    name: String
+    version: String
+    source: Option<String>
+    checksum: Option<String>
+    dependencies: Vector<String>
+
+fn strip_toml_quotes(s: &str) -> &str:
+    if s.len() >= 2 and s.starts_with('"') and s.ends_with('"'):
+        return &s[1..s.len()-1]
+    return s
+
+// ============================================================================
+// Package Registry
+// ============================================================================
+
+struct Registry:
+    url: String
+    cache_dir: String
+
+    fn default() -> own Registry:
+        let home = env_get("HOME")
+            .or_else(|| env_get("USERPROFILE"))
+            .unwrap_or(String::from("."))
+        return Registry {
+            url: String::from("https://registry.omni-lang.org"),
+            cache_dir: format!("{}/.opm/cache", home),
+        }
+
+    fn search(&self, query: &str) -> Result<Vector<PackageInfo>, String>:
+        // In a real implementation, this would HTTP GET the registry API
+        // For now, return empty
+        println!("  Searching for '{}' on {}", query, self.url)
+        return Ok(Vector::new())
+
+    fn fetch(&self, name: &str, version: &SemVer) -> Result<String, String>:
+        let cache_path = format!("{}/{}-{}", self.cache_dir, name, version.to_string())
+        if path_exists(&cache_path):
+            return Ok(cache_path)
+
+        create_dir_all(&self.cache_dir).map_err(|e| format!("{}", e))?
+
+        // Download package tarball
+        let url = format!("{}/api/v1/packages/{}/{}/download",
+            self.url, name, version.to_string())
+        println!("  Downloading {} v{}", name, version.to_string())
+
+        // HTTP download (would use std::net or curl FFI)
+        // Placeholder — in production this calls HTTP client
+        return Err(format!("network download not yet implemented for {}", url))
+
+    fn get_versions(&self, name: &str) -> Result<Vector<SemVer>, String>:
+        // Query registry for available versions
+        // Placeholder
+        return Ok(Vector::new())
+
+struct PackageInfo:
+    name: String
+    version: SemVer
+    description: String
+    authors: Vector<String>
+    license: String
+    repository: Option<String>
+    downloads: u64
+
+// ============================================================================
+// Dependency Resolution
+// ============================================================================
+
+struct Resolver:
+    registry: Registry
+    lock_file: Option<LockFile>
+    resolved: HashMap<String, ResolvedDep>
+    errors: Vector<String>
+
+    fn new(registry: Registry) -> own Resolver:
+        return Resolver {
+            registry,
+            lock_file: None,
+            resolved: HashMap::new(),
+            errors: Vector::new(),
+        }
+
+    fn with_lock_file(mut self, lock: LockFile) -> own Resolver:
+        self.lock_file = Some(lock)
+        return self
+
+    fn resolve(&mut self, manifest: &Manifest) -> Result<Vector<ResolvedDep>, String>:
+        // Process each dependency
+        for dep in manifest.dependencies.iter():
+            self.resolve_dep(dep, 0)?
+
+        // Collect results
+        let mut result = Vector::new()
+        for (_, resolved) in self.resolved.iter():
+            result.push(resolved.clone())
+
+        // Sort by name for deterministic output
+        result.sort_by(|a, b| a.name.cmp(&b.name))
+        return Ok(result)
+
+    fn resolve_dep(&mut self, dep: &Dependency, depth: usize) -> Result<(), String>:
+        if depth > 100:
+            return Err(format!("dependency cycle detected involving {}", dep.name))
+
+        if self.resolved.contains_key(&dep.name):
+            return Ok(())
+
+        // Check lock file first
+        if let Some(ref lock) = self.lock_file:
+            if let Some(locked) = lock.find(&dep.name):
+                let ver = SemVer::parse(&locked.version)?
+                self.resolved.insert(dep.name.clone(), ResolvedDep {
+                    name: dep.name.clone(),
+                    version: ver,
+                    source: locked.source.clone()
+                        .unwrap_or(String::from("registry")),
+                    path: None,
+                })
+                return Ok(())
+
+        // Local path dependency
+        if let Some(ref path) = dep.path:
+            let manifest_path = format!("{}/omni.toml", path)
+            if path_exists(&manifest_path):
+                let src = read_to_string(&manifest_path)
+                    .map_err(|e| format!("{}", e))?
+                let sub_manifest = parse_manifest(&src)?
+                let ver = SemVer::parse(&sub_manifest.version)?
+
+                self.resolved.insert(dep.name.clone(), ResolvedDep {
+                    name: dep.name.clone(),
+                    version: ver,
+                    source: String::from("local"),
+                    path: Some(String::from(path.as_str())),
+                })
+
+                // Recursively resolve sub-dependencies
+                for sub_dep in sub_manifest.dependencies.iter():
+                    self.resolve_dep(sub_dep, depth + 1)?
+
+                return Ok(())
+            else:
+                return Err(format!("path dependency not found: {}", path))
+
+        // Registry dependency
+        let req = VersionReq::parse(&dep.version)?
+        let versions = self.registry.get_versions(&dep.name)?
+
+        let best = versions.iter()
+            .filter(|v| req.matches(v))
+            .max_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
+
+        match best:
+            Some(ver) =>
+                self.resolved.insert(dep.name.clone(), ResolvedDep {
+                    name: dep.name.clone(),
+                    version: ver.clone(),
+                    source: String::from("registry"),
+                    path: None,
+                })
+                Ok(())
+            None =>
+                Err(format!("no matching version found for {} {}", dep.name, dep.version))
+
+struct ResolvedDep:
+    name: String
+    version: SemVer
+    source: String
+    path: Option<String>
+
+impl Clone for ResolvedDep:
+    fn clone(&self) -> own ResolvedDep:
+        return ResolvedDep {
+            name: self.name.clone(),
+            version: self.version.clone(),
+            source: self.source.clone(),
+            path: self.path.clone(),
+        }
+
+// ============================================================================
+// Package Publishing
+// ============================================================================
+
+fn publish(project_root: &str) -> Result<(), String>:
+    let manifest_path = format!("{}/omni.toml", project_root)
+    let manifest_src = read_to_string(&manifest_path)
+        .map_err(|e| format!("{}", e))?
+    let manifest = parse_manifest(&manifest_src)?
+
+    println!("  Publishing {} v{}", manifest.name, manifest.version)
+
+    // Verify package
+    if manifest.name.is_empty():
+        return Err(String::from("package name is required"))
+    if manifest.description.is_empty():
+        println!("  warning: no description set")
+
+    // Create tarball of source files
+    let tarball_path = format!("{}/target/{}-{}.tar.gz",
+        project_root, manifest.name, manifest.version)
+    create_tarball(project_root, &tarball_path)?
+
+    // Upload to registry
+    let registry = Registry::default()
+    println!("  Uploading to {}", registry.url)
+    // HTTP POST to registry — placeholder
+    println!("  Published {} v{}", manifest.name, manifest.version)
+
+    return Ok(())
+
+fn create_tarball(root: &str, output: &str) -> Result<(), String>:
+    // Create a gzipped tar archive of the project source
+    // In production, would use tar/gzip libraries
+    extern "C":
+        fn system(cmd: *const c_char) -> c_int
+
+    let cmd = format!("tar czf {} -C {} --exclude=target .", output, root)
+    let c_cmd = CString::new(&cmd).map_err(|e| String::from(e))?
+
+    create_dir_all(&format!("{}/target", root)).map_err(|e| format!("{}", e))?
+
+    let ret = system(c_cmd.as_ptr())
+    if ret != 0:
+        return Err(String::from("tar command failed"))
+    return Ok(())
+
+// ============================================================================
+// CLI
+// ============================================================================
+
+fn main(argv: Vector<String>) -> i32:
+    if argv.len() < 2:
+        print_usage()
+        return 1
+
+    let command = &argv[1]
+    let cwd = current_dir().unwrap_or(String::from("."))
+
+    let result = match command.as_str():
+        "install" | "add" =>
+            if argv.len() < 3:
+                Err(String::from("usage: opm install <package>"))
+            else:
+                install_package(&cwd, &argv[2],
+                    if argv.len() > 3 { Some(&argv[3]) } else { None })
+
+        "remove" | "rm" =>
+            if argv.len() < 3:
+                Err(String::from("usage: opm remove <package>"))
+            else:
+                remove_package(&cwd, &argv[2])
+
+        "update" =>
+            update_packages(&cwd)
+
+        "search" =>
+            if argv.len() < 3:
+                Err(String::from("usage: opm search <query>"))
+            else:
+                search_packages(&argv[2])
+
+        "publish" =>
+            publish(&cwd)
+
+        "list" | "ls" =>
+            list_packages(&cwd)
+
+        "lock" =>
+            generate_lock_file(&cwd)
+
+        "help" | "--help" | "-h" =>
+            print_usage()
+            Ok(())
+
+        "version" | "--version" | "-V" =>
+            println!("opm 0.1.0")
+            Ok(())
+
+        _ =>
+            eprintln!("unknown command: {}", command)
+            print_usage()
+            Err(String::from("unknown command"))
+
+    match result:
+        Ok(_) => return 0
+        Err(msg) =>
+            eprintln!("error: {}", msg)
+            return 1
+
+fn install_package(root: &str, name: &str, version: Option<&String>) -> Result<(), String>:
+    let manifest_path = format!("{}/omni.toml", root)
+    let manifest_src = read_to_string(&manifest_path)
+        .map_err(|e| format!("{}", e))?
+
+    let ver_str = version.map(|v| v.as_str()).unwrap_or("*")
+    println!("  Installing {} {}", name, ver_str)
+
+    // Add to manifest [dependencies] section
+    let new_line = format!("{} = \"{}\"\n", name, ver_str)
+    let mut new_manifest = manifest_src.clone()
+
+    if new_manifest.contains("[dependencies]"):
+        // Insert after [dependencies] line
+        let pos = new_manifest.find("[dependencies]").unwrap()
+        let end_of_line = new_manifest[pos..].find('\n').map(|p| pos + p + 1).unwrap_or(new_manifest.len())
+        new_manifest = format!("{}{}{}", &new_manifest[0..end_of_line], new_line, &new_manifest[end_of_line..])
+    else:
+        new_manifest.push_str(&format!("\n[dependencies]\n{}", new_line))
+
+    write_string(&manifest_path, &new_manifest)
+        .map_err(|e| format!("{}", e))?
+
+    // Resolve and fetch
+    let manifest = parse_manifest(&new_manifest)?
+    let registry = Registry::default()
+    let mut resolver = Resolver::new(registry)
+    let resolved = resolver.resolve(&manifest)?
+
+    // Generate lock file
+    generate_lock_file(root)?
+
+    println!("  Added {} to dependencies", name)
+    return Ok(())
+
+fn remove_package(root: &str, name: &str) -> Result<(), String>:
+    let manifest_path = format!("{}/omni.toml", root)
+    let manifest_src = read_to_string(&manifest_path)
+        .map_err(|e| format!("{}", e))?
+
+    // Remove line matching 'name = ...' from [dependencies]
+    let mut new_lines = Vector::new()
+    let mut in_deps = false
+    for line in manifest_src.split('\n'):
+        if line.trim() == "[dependencies]":
+            in_deps = true
+            new_lines.push(String::from(line))
+            continue
+        if line.trim().starts_with('['):
+            in_deps = false
+        if in_deps and line.trim().starts_with(name):
+            println!("  Removing {} from dependencies", name)
+            continue
+        new_lines.push(String::from(line))
+
+    write_string(&manifest_path, &new_lines.join("\n"))
+        .map_err(|e| format!("{}", e))?
+
+    generate_lock_file(root)?
+    return Ok(())
+
+fn update_packages(root: &str) -> Result<(), String>:
+    println!("  Updating packages...")
+    let manifest_path = format!("{}/omni.toml", root)
+    let manifest_src = read_to_string(&manifest_path)
+        .map_err(|e| format!("{}", e))?
+    let manifest = parse_manifest(&manifest_src)?
+
+    let registry = Registry::default()
+    let mut resolver = Resolver::new(registry)
+    let resolved = resolver.resolve(&manifest)?
+
+    for dep in resolved.iter():
+        println!("  {} v{}", dep.name, dep.version.to_string())
+
+    generate_lock_file(root)?
+    println!("  Updated {} packages", resolved.len())
+    return Ok(())
+
+fn search_packages(query: &str) -> Result<(), String>:
+    let registry = Registry::default()
+    let results = registry.search(query)?
+
+    if results.is_empty():
+        println!("  No packages found for '{}'", query)
+    else:
+        for pkg in results.iter():
+            println!("  {} v{} — {}", pkg.name, pkg.version.to_string(), pkg.description)
+
+    return Ok(())
+
+fn list_packages(root: &str) -> Result<(), String>:
+    let manifest_path = format!("{}/omni.toml", root)
+    let manifest_src = read_to_string(&manifest_path)
+        .map_err(|e| format!("{}", e))?
+    let manifest = parse_manifest(&manifest_src)?
+
+    if manifest.dependencies.is_empty():
+        println!("  No dependencies")
+    else:
+        println!("  Dependencies:")
+        for dep in manifest.dependencies.iter():
+            let source = if dep.path.is_some():
+                " (local)"
+            elif dep.git.is_some():
+                " (git)"
+            else:
+                ""
+            println!("    {} {}{}", dep.name, dep.version, source)
+
+    return Ok(())
+
+fn generate_lock_file(root: &str) -> Result<(), String>:
+    let manifest_path = format!("{}/omni.toml", root)
+    let manifest_src = read_to_string(&manifest_path)
+        .map_err(|e| format!("{}", e))?
+    let manifest = parse_manifest(&manifest_src)?
+
+    let registry = Registry::default()
+    let mut resolver = Resolver::new(registry)
+    let resolved = resolver.resolve(&manifest)?
+
+    let mut lock = LockFile::new()
+    for dep in resolved.iter():
+        lock.packages.push(LockedPackage {
+            name: dep.name.clone(),
+            version: dep.version.to_string(),
+            source: Some(dep.source.clone()),
+            checksum: None,
+            dependencies: Vector::new(),
+        })
+
+    let lock_path = format!("{}/omni.lock", root)
+    write_string(&lock_path, &lock.serialize())
+        .map_err(|e| format!("{}", e))?
+
+    return Ok(())
+
+fn print_usage():
+    println!("Usage: opm <command> [options]")
+    println!("")
+    println!("Commands:")
+    println!("  install <pkg> [version]  Add a dependency")
+    println!("  remove <pkg>             Remove a dependency")
+    println!("  update                   Update all dependencies")
+    println!("  search <query>           Search the package registry")
+    println!("  publish                  Publish the current package")
+    println!("  list                     List current dependencies")
+    println!("  lock                     Generate/update lock file")
+    println!("  help                     Show this message")
+    println!("  version                  Show version info")
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[test]
+fn test_semver_parse():
+    let v = SemVer::parse("1.2.3").unwrap()
+    assert(v.major == 1, "major = 1")
+    assert(v.minor == 2, "minor = 2")
+    assert(v.patch == 3, "patch = 3")
+
+#[test]
+fn test_semver_parse_prerelease():
+    let v = SemVer::parse("1.0.0-alpha.1").unwrap()
+    assert(v.major == 1, "major = 1")
+    assert(v.pre_release == "alpha.1", "pre-release = alpha.1")
+
+#[test]
+fn test_semver_parse_build():
+    let v = SemVer::parse("1.0.0+build.123").unwrap()
+    assert(v.build_metadata == "build.123", "build = build.123")
+
+#[test]
+fn test_semver_ordering():
+    let a = SemVer::parse("1.0.0").unwrap()
+    let b = SemVer::parse("1.0.1").unwrap()
+    let c = SemVer::parse("1.1.0").unwrap()
+    let d = SemVer::parse("2.0.0").unwrap()
+    assert(a < b, "1.0.0 < 1.0.1")
+    assert(b < c, "1.0.1 < 1.1.0")
+    assert(c < d, "1.1.0 < 2.0.0")
+
+#[test]
+fn test_semver_prerelease_ordering():
+    let a = SemVer::parse("1.0.0-alpha").unwrap()
+    let b = SemVer::parse("1.0.0-beta").unwrap()
+    let c = SemVer::parse("1.0.0").unwrap()
+    assert(a < b, "alpha < beta")
+    assert(b < c, "beta < release")
+
+#[test]
+fn test_semver_equality():
+    let a = SemVer::parse("1.2.3").unwrap()
+    let b = SemVer::parse("1.2.3").unwrap()
+    assert(a == b, "equal versions")
+
+#[test]
+fn test_semver_to_string():
+    let v = SemVer::new(1, 2, 3)
+    assert(v.to_string() == "1.2.3", "to_string should be 1.2.3")
+
+#[test]
+fn test_version_req_caret():
+    let req = VersionReq::parse("^1.2.0").unwrap()
+    assert(req.matches(&SemVer::new(1, 2, 0)), "^1.2.0 matches 1.2.0")
+    assert(req.matches(&SemVer::new(1, 3, 0)), "^1.2.0 matches 1.3.0")
+    assert(req.matches(&SemVer::new(1, 9, 9)), "^1.2.0 matches 1.9.9")
+    assert(not req.matches(&SemVer::new(2, 0, 0)), "^1.2.0 does not match 2.0.0")
+    assert(not req.matches(&SemVer::new(1, 1, 0)), "^1.2.0 does not match 1.1.0")
+
+#[test]
+fn test_version_req_tilde():
+    let req = VersionReq::parse("~1.2.3").unwrap()
+    assert(req.matches(&SemVer::new(1, 2, 3)), "~1.2.3 matches 1.2.3")
+    assert(req.matches(&SemVer::new(1, 2, 9)), "~1.2.3 matches 1.2.9")
+    assert(not req.matches(&SemVer::new(1, 3, 0)), "~1.2.3 does not match 1.3.0")
+
+#[test]
+fn test_version_req_exact():
+    let req = VersionReq::parse("=1.0.0").unwrap()
+    assert(req.matches(&SemVer::new(1, 0, 0)), "exact match")
+    assert(not req.matches(&SemVer::new(1, 0, 1)), "exact doesn't match 1.0.1")
+
+#[test]
+fn test_version_req_range():
+    let req = VersionReq::parse(">=1.0.0, <2.0.0").unwrap()
+    assert(req.matches(&SemVer::new(1, 0, 0)), ">=1,<2 matches 1.0.0")
+    assert(req.matches(&SemVer::new(1, 5, 0)), ">=1,<2 matches 1.5.0")
+    assert(not req.matches(&SemVer::new(2, 0, 0)), ">=1,<2 does not match 2.0.0")
+    assert(not req.matches(&SemVer::new(0, 9, 0)), ">=1,<2 does not match 0.9.0")
+
+#[test]
+fn test_version_req_wildcard():
+    let req = VersionReq::parse("*").unwrap()
+    assert(req.matches(&SemVer::new(0, 0, 1)), "wildcard matches anything")
+    assert(req.matches(&SemVer::new(99, 99, 99)), "wildcard matches anything")
+
+#[test]
+fn test_lock_file_serialize():
+    let mut lock = LockFile::new()
+    lock.packages.push(LockedPackage {
+        name: String::from("serde"),
+        version: String::from("1.0.0"),
+        source: Some(String::from("registry")),
+        checksum: None,
+        dependencies: Vector::new(),
+    })
+    let serialized = lock.serialize()
+    assert(serialized.contains("serde"), "should contain package name")
+    assert(serialized.contains("1.0.0"), "should contain version")
+
+#[test]
+fn test_lock_file_round_trip():
+    let mut lock = LockFile::new()
+    lock.packages.push(LockedPackage {
+        name: String::from("test-pkg"),
+        version: String::from("2.1.0"),
+        source: Some(String::from("registry")),
+        checksum: None,
+        dependencies: Vector::new(),
+    })
+    let s = lock.serialize()
+    let lock2 = LockFile::parse(&s).unwrap()
+    assert(lock2.packages.len() == 1, "should have 1 package")
+    assert(lock2.packages[0].name == "test-pkg", "name should match")
+    assert(lock2.packages[0].version == "2.1.0", "version should match")
+
+#[test]
+fn test_is_compatible():
+    let v1 = SemVer::new(1, 2, 3)
+    let v2 = SemVer::new(1, 5, 0)
+    let v3 = SemVer::new(2, 0, 0)
+    assert(v1.is_compatible(&v2), "1.2.3 compatible with 1.5.0")
+    assert(not v1.is_compatible(&v3), "1.2.3 not compatible with 2.0.0")

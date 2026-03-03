@@ -1,0 +1,983 @@
+module compiler::codegen::llvm
+
+// ============================================================================
+// LLVM Code Generation Backend
+// ============================================================================
+// Translates Omni IR to LLVM IR via the LLVM-C API (version 17).
+// Uses FFI bindings to libLLVM for module creation, IR building,
+// optimization, and object code emission.
+
+import compiler::ir::{
+    IrModule, IrFunction, IrInst, IrConst, IrType, IrGlobal, IrStruct,
+    BasicBlock, VarId, BlockId, FuncId,
+}
+
+// ============================================================================
+// LLVM-C FFI Declarations
+// ============================================================================
+
+extern "C":
+    // Core types (opaque pointers)
+    type LLVMContextRef = *mut u8
+    type LLVMModuleRef = *mut u8
+    type LLVMBuilderRef = *mut u8
+    type LLVMTypeRef = *mut u8
+    type LLVMValueRef = *mut u8
+    type LLVMBasicBlockRef = *mut u8
+    type LLVMTargetRef = *mut u8
+    type LLVMTargetMachineRef = *mut u8
+    type LLVMTargetDataRef = *mut u8
+    type LLVMPassManagerRef = *mut u8
+
+    // Context
+    fn LLVMContextCreate() -> LLVMContextRef
+    fn LLVMContextDispose(ctx: LLVMContextRef)
+
+    // Module
+    fn LLVMModuleCreateWithNameInContext(name: *const u8, ctx: LLVMContextRef) -> LLVMModuleRef
+    fn LLVMDisposeModule(module: LLVMModuleRef)
+    fn LLVMSetTarget(module: LLVMModuleRef, triple: *const u8)
+    fn LLVMSetDataLayout(module: LLVMModuleRef, layout: *const u8)
+    fn LLVMPrintModuleToString(module: LLVMModuleRef) -> *const u8
+    fn LLVMWriteBitcodeToFile(module: LLVMModuleRef, path: *const u8) -> i32
+    fn LLVMVerifyModule(module: LLVMModuleRef, action: i32, msg: *mut *const u8) -> i32
+    fn LLVMDisposeMessage(msg: *const u8)
+
+    // Builder
+    fn LLVMCreateBuilderInContext(ctx: LLVMContextRef) -> LLVMBuilderRef
+    fn LLVMDisposeBuilder(builder: LLVMBuilderRef)
+    fn LLVMPositionBuilderAtEnd(builder: LLVMBuilderRef, block: LLVMBasicBlockRef)
+
+    // Types
+    fn LLVMVoidTypeInContext(ctx: LLVMContextRef) -> LLVMTypeRef
+    fn LLVMInt1TypeInContext(ctx: LLVMContextRef) -> LLVMTypeRef
+    fn LLVMInt8TypeInContext(ctx: LLVMContextRef) -> LLVMTypeRef
+    fn LLVMInt16TypeInContext(ctx: LLVMContextRef) -> LLVMTypeRef
+    fn LLVMInt32TypeInContext(ctx: LLVMContextRef) -> LLVMTypeRef
+    fn LLVMInt64TypeInContext(ctx: LLVMContextRef) -> LLVMTypeRef
+    fn LLVMInt128TypeInContext(ctx: LLVMContextRef) -> LLVMTypeRef
+    fn LLVMFloatTypeInContext(ctx: LLVMContextRef) -> LLVMTypeRef
+    fn LLVMDoubleTypeInContext(ctx: LLVMContextRef) -> LLVMTypeRef
+    fn LLVMPointerType(elem: LLVMTypeRef, addr_space: u32) -> LLVMTypeRef
+    fn LLVMArrayType(elem: LLVMTypeRef, len: u32) -> LLVMTypeRef
+    fn LLVMStructTypeInContext(ctx: LLVMContextRef, elems: *const LLVMTypeRef, count: u32, packed: i32) -> LLVMTypeRef
+    fn LLVMFunctionType(ret: LLVMTypeRef, params: *const LLVMTypeRef, count: u32, is_vararg: i32) -> LLVMTypeRef
+
+    // Constants
+    fn LLVMConstInt(ty: LLVMTypeRef, val: u64, sign_extend: i32) -> LLVMValueRef
+    fn LLVMConstReal(ty: LLVMTypeRef, val: f64) -> LLVMValueRef
+    fn LLVMConstNull(ty: LLVMTypeRef) -> LLVMValueRef
+    fn LLVMConstStringInContext(ctx: LLVMContextRef, s: *const u8, len: u32, no_null: i32) -> LLVMValueRef
+    fn LLVMConstStruct(vals: *const LLVMValueRef, count: u32, packed: i32) -> LLVMValueRef
+
+    // Functions
+    fn LLVMAddFunction(module: LLVMModuleRef, name: *const u8, ty: LLVMTypeRef) -> LLVMValueRef
+    fn LLVMGetParam(func: LLVMValueRef, index: u32) -> LLVMValueRef
+    fn LLVMSetLinkage(val: LLVMValueRef, linkage: u32)
+    fn LLVMAppendBasicBlockInContext(ctx: LLVMContextRef, func: LLVMValueRef, name: *const u8) -> LLVMBasicBlockRef
+
+    // Instructions — Arithmetic
+    fn LLVMBuildAdd(b: LLVMBuilderRef, lhs: LLVMValueRef, rhs: LLVMValueRef, name: *const u8) -> LLVMValueRef
+    fn LLVMBuildSub(b: LLVMBuilderRef, lhs: LLVMValueRef, rhs: LLVMValueRef, name: *const u8) -> LLVMValueRef
+    fn LLVMBuildMul(b: LLVMBuilderRef, lhs: LLVMValueRef, rhs: LLVMValueRef, name: *const u8) -> LLVMValueRef
+    fn LLVMBuildSDiv(b: LLVMBuilderRef, lhs: LLVMValueRef, rhs: LLVMValueRef, name: *const u8) -> LLVMValueRef
+    fn LLVMBuildUDiv(b: LLVMBuilderRef, lhs: LLVMValueRef, rhs: LLVMValueRef, name: *const u8) -> LLVMValueRef
+    fn LLVMBuildSRem(b: LLVMBuilderRef, lhs: LLVMValueRef, rhs: LLVMValueRef, name: *const u8) -> LLVMValueRef
+    fn LLVMBuildNeg(b: LLVMBuilderRef, val: LLVMValueRef, name: *const u8) -> LLVMValueRef
+    fn LLVMBuildFAdd(b: LLVMBuilderRef, lhs: LLVMValueRef, rhs: LLVMValueRef, name: *const u8) -> LLVMValueRef
+    fn LLVMBuildFSub(b: LLVMBuilderRef, lhs: LLVMValueRef, rhs: LLVMValueRef, name: *const u8) -> LLVMValueRef
+    fn LLVMBuildFMul(b: LLVMBuilderRef, lhs: LLVMValueRef, rhs: LLVMValueRef, name: *const u8) -> LLVMValueRef
+    fn LLVMBuildFDiv(b: LLVMBuilderRef, lhs: LLVMValueRef, rhs: LLVMValueRef, name: *const u8) -> LLVMValueRef
+    fn LLVMBuildFNeg(b: LLVMBuilderRef, val: LLVMValueRef, name: *const u8) -> LLVMValueRef
+
+    // Instructions — Bitwise
+    fn LLVMBuildAnd(b: LLVMBuilderRef, lhs: LLVMValueRef, rhs: LLVMValueRef, name: *const u8) -> LLVMValueRef
+    fn LLVMBuildOr(b: LLVMBuilderRef, lhs: LLVMValueRef, rhs: LLVMValueRef, name: *const u8) -> LLVMValueRef
+    fn LLVMBuildXor(b: LLVMBuilderRef, lhs: LLVMValueRef, rhs: LLVMValueRef, name: *const u8) -> LLVMValueRef
+    fn LLVMBuildNot(b: LLVMBuilderRef, val: LLVMValueRef, name: *const u8) -> LLVMValueRef
+    fn LLVMBuildShl(b: LLVMBuilderRef, lhs: LLVMValueRef, rhs: LLVMValueRef, name: *const u8) -> LLVMValueRef
+    fn LLVMBuildAShr(b: LLVMBuilderRef, lhs: LLVMValueRef, rhs: LLVMValueRef, name: *const u8) -> LLVMValueRef
+
+    // Instructions — Comparison
+    fn LLVMBuildICmp(b: LLVMBuilderRef, op: u32, lhs: LLVMValueRef, rhs: LLVMValueRef, name: *const u8) -> LLVMValueRef
+    fn LLVMBuildFCmp(b: LLVMBuilderRef, op: u32, lhs: LLVMValueRef, rhs: LLVMValueRef, name: *const u8) -> LLVMValueRef
+
+    // Instructions — Memory
+    fn LLVMBuildAlloca(b: LLVMBuilderRef, ty: LLVMTypeRef, name: *const u8) -> LLVMValueRef
+    fn LLVMBuildLoad2(b: LLVMBuilderRef, ty: LLVMTypeRef, ptr: LLVMValueRef, name: *const u8) -> LLVMValueRef
+    fn LLVMBuildStore(b: LLVMBuilderRef, val: LLVMValueRef, ptr: LLVMValueRef) -> LLVMValueRef
+    fn LLVMBuildGEP2(b: LLVMBuilderRef, ty: LLVMTypeRef, ptr: LLVMValueRef, indices: *const LLVMValueRef, count: u32, name: *const u8) -> LLVMValueRef
+    fn LLVMBuildMalloc(b: LLVMBuilderRef, ty: LLVMTypeRef, name: *const u8) -> LLVMValueRef
+    fn LLVMBuildFree(b: LLVMBuilderRef, ptr: LLVMValueRef) -> LLVMValueRef
+
+    // Instructions — Control flow
+    fn LLVMBuildRet(b: LLVMBuilderRef, val: LLVMValueRef) -> LLVMValueRef
+    fn LLVMBuildRetVoid(b: LLVMBuilderRef) -> LLVMValueRef
+    fn LLVMBuildBr(b: LLVMBuilderRef, dest: LLVMBasicBlockRef) -> LLVMValueRef
+    fn LLVMBuildCondBr(b: LLVMBuilderRef, cond: LLVMValueRef, then_bb: LLVMBasicBlockRef, else_bb: LLVMBasicBlockRef) -> LLVMValueRef
+    fn LLVMBuildSwitch(b: LLVMBuilderRef, val: LLVMValueRef, default: LLVMBasicBlockRef, count: u32) -> LLVMValueRef
+    fn LLVMAddCase(switch_val: LLVMValueRef, on_val: LLVMValueRef, dest: LLVMBasicBlockRef)
+    fn LLVMBuildUnreachable(b: LLVMBuilderRef) -> LLVMValueRef
+    fn LLVMBuildPhi(b: LLVMBuilderRef, ty: LLVMTypeRef, name: *const u8) -> LLVMValueRef
+    fn LLVMAddIncoming(phi: LLVMValueRef, vals: *const LLVMValueRef, blocks: *const LLVMBasicBlockRef, count: u32)
+    fn LLVMBuildCall2(b: LLVMBuilderRef, ty: LLVMTypeRef, func: LLVMValueRef, args: *const LLVMValueRef, count: u32, name: *const u8) -> LLVMValueRef
+
+    // Instructions — Casts
+    fn LLVMBuildBitCast(b: LLVMBuilderRef, val: LLVMValueRef, ty: LLVMTypeRef, name: *const u8) -> LLVMValueRef
+    fn LLVMBuildZExt(b: LLVMBuilderRef, val: LLVMValueRef, ty: LLVMTypeRef, name: *const u8) -> LLVMValueRef
+    fn LLVMBuildSExt(b: LLVMBuilderRef, val: LLVMValueRef, ty: LLVMTypeRef, name: *const u8) -> LLVMValueRef
+    fn LLVMBuildTrunc(b: LLVMBuilderRef, val: LLVMValueRef, ty: LLVMTypeRef, name: *const u8) -> LLVMValueRef
+    fn LLVMBuildSIToFP(b: LLVMBuilderRef, val: LLVMValueRef, ty: LLVMTypeRef, name: *const u8) -> LLVMValueRef
+    fn LLVMBuildFPToSI(b: LLVMBuilderRef, val: LLVMValueRef, ty: LLVMTypeRef, name: *const u8) -> LLVMValueRef
+
+    // Instructions — Aggregate
+    fn LLVMBuildExtractValue(b: LLVMBuilderRef, agg: LLVMValueRef, idx: u32, name: *const u8) -> LLVMValueRef
+    fn LLVMBuildInsertValue(b: LLVMBuilderRef, agg: LLVMValueRef, val: LLVMValueRef, idx: u32, name: *const u8) -> LLVMValueRef
+
+    // Global variables
+    fn LLVMAddGlobal(module: LLVMModuleRef, ty: LLVMTypeRef, name: *const u8) -> LLVMValueRef
+    fn LLVMSetInitializer(global: LLVMValueRef, val: LLVMValueRef)
+    fn LLVMSetGlobalConstant(global: LLVMValueRef, is_const: i32)
+    fn LLVMBuildGlobalStringPtr(b: LLVMBuilderRef, s: *const u8, name: *const u8) -> LLVMValueRef
+
+    // Target
+    fn LLVMInitializeAllTargetInfos()
+    fn LLVMInitializeAllTargets()
+    fn LLVMInitializeAllTargetMCs()
+    fn LLVMInitializeAllAsmPrinters()
+    fn LLVMInitializeAllAsmParsers()
+    fn LLVMGetDefaultTargetTriple() -> *const u8
+    fn LLVMGetTargetFromTriple(triple: *const u8, target: *mut LLVMTargetRef, err: *mut *const u8) -> i32
+    fn LLVMCreateTargetMachine(target: LLVMTargetRef, triple: *const u8, cpu: *const u8, features: *const u8, opt: i32, reloc: i32, code_model: i32) -> LLVMTargetMachineRef
+    fn LLVMDisposeTargetMachine(tm: LLVMTargetMachineRef)
+    fn LLVMTargetMachineEmitToFile(tm: LLVMTargetMachineRef, module: LLVMModuleRef, filename: *const u8, codegen: i32, err: *mut *const u8) -> i32
+
+    // Pass Manager
+    fn LLVMCreatePassManager() -> LLVMPassManagerRef
+    fn LLVMRunPassManager(pm: LLVMPassManagerRef, module: LLVMModuleRef) -> i32
+    fn LLVMDisposePassManager(pm: LLVMPassManagerRef)
+
+// LLVM integer comparison predicates
+const LLVM_INT_EQ: u32 = 32
+const LLVM_INT_NE: u32 = 33
+const LLVM_INT_UGT: u32 = 34
+const LLVM_INT_UGE: u32 = 35
+const LLVM_INT_ULT: u32 = 36
+const LLVM_INT_ULE: u32 = 37
+const LLVM_INT_SGT: u32 = 38
+const LLVM_INT_SGE: u32 = 39
+const LLVM_INT_SLT: u32 = 40
+const LLVM_INT_SLE: u32 = 41
+
+// LLVM float comparison predicates
+const LLVM_REAL_OEQ: u32 = 1
+const LLVM_REAL_ONE: u32 = 6
+const LLVM_REAL_OLT: u32 = 4
+const LLVM_REAL_OLE: u32 = 5
+const LLVM_REAL_OGT: u32 = 2
+const LLVM_REAL_OGE: u32 = 3
+
+// LLVM code gen file types
+const LLVM_ASM_FILE: i32 = 0
+const LLVM_OBJ_FILE: i32 = 1
+
+// LLVM optimization levels
+const LLVM_OPT_NONE: i32 = 0
+const LLVM_OPT_LESS: i32 = 1
+const LLVM_OPT_DEFAULT: i32 = 2
+const LLVM_OPT_AGGRESSIVE: i32 = 3
+
+// LLVM relocation models
+const LLVM_RELOC_DEFAULT: i32 = 0
+const LLVM_RELOC_STATIC: i32 = 1
+const LLVM_RELOC_PIC: i32 = 2
+
+// LLVM code models
+const LLVM_CODE_MODEL_DEFAULT: i32 = 0
+
+// LLVM linkage types
+const LLVM_EXTERNAL_LINKAGE: u32 = 0
+const LLVM_INTERNAL_LINKAGE: u32 = 8
+
+// ============================================================================
+// LLVM Code Generator
+// ============================================================================
+
+struct LlvmCodegen:
+    context: LLVMContextRef
+    module: LLVMModuleRef
+    builder: LLVMBuilderRef
+    target_triple: str
+
+    // Value maps
+    var_map: HashMap<VarId, LLVMValueRef>
+    func_map: HashMap<str, LLVMValueRef>
+    block_map: HashMap<BlockId, LLVMBasicBlockRef>
+    global_map: HashMap<str, LLVMValueRef>
+    struct_map: HashMap<str, LLVMTypeRef>
+
+    // String table
+    string_globals: Vector<LLVMValueRef>
+
+    errors: Vector<str>
+
+    fn new(module_name: str) -> own Self:
+        LLVMInitializeAllTargetInfos()
+        LLVMInitializeAllTargets()
+        LLVMInitializeAllTargetMCs()
+        LLVMInitializeAllAsmPrinters()
+        LLVMInitializeAllAsmParsers()
+
+        let ctx = LLVMContextCreate()
+        let llvm_mod = LLVMModuleCreateWithNameInContext(module_name.as_ptr(), ctx)
+        let builder = LLVMCreateBuilderInContext(ctx)
+        let triple = LLVMGetDefaultTargetTriple()
+        let triple_str = str::from_c_str(triple)
+        LLVMSetTarget(llvm_mod, triple)
+
+        return LlvmCodegen {
+            context: ctx,
+            module: llvm_mod,
+            builder: builder,
+            target_triple: triple_str,
+            var_map: HashMap::new(),
+            func_map: HashMap::new(),
+            block_map: HashMap::new(),
+            global_map: HashMap::new(),
+            struct_map: HashMap::new(),
+            string_globals: Vector::new(),
+            errors: Vector::new(),
+        }
+
+    fn dispose(&mut self):
+        LLVMDisposeBuilder(self.builder)
+        LLVMDisposeModule(self.module)
+        LLVMContextDispose(self.context)
+
+    // ====================================================================
+    // Type Mapping
+    // ====================================================================
+
+    fn ir_type_to_llvm(&self, ty: &IrType) -> LLVMTypeRef:
+        match ty:
+            IrType::Void => LLVMVoidTypeInContext(self.context)
+            IrType::I1 => LLVMInt1TypeInContext(self.context)
+            IrType::I8 => LLVMInt8TypeInContext(self.context)
+            IrType::I16 => LLVMInt16TypeInContext(self.context)
+            IrType::I32 => LLVMInt32TypeInContext(self.context)
+            IrType::I64 => LLVMInt64TypeInContext(self.context)
+            IrType::I128 => LLVMInt128TypeInContext(self.context)
+            IrType::F32 => LLVMFloatTypeInContext(self.context)
+            IrType::F64 => LLVMDoubleTypeInContext(self.context)
+            IrType::Ptr(inner) =>
+                let elem = self.ir_type_to_llvm(inner)
+                LLVMPointerType(elem, 0)
+            IrType::Array(elem, len) =>
+                let elem_ty = self.ir_type_to_llvm(elem)
+                LLVMArrayType(elem_ty, *len as u32)
+            IrType::Struct(fields) =>
+                let mut field_types = Vector::new()
+                for f in fields:
+                    field_types.push(self.ir_type_to_llvm(f))
+                LLVMStructTypeInContext(
+                    self.context,
+                    field_types.as_ptr(),
+                    field_types.len() as u32,
+                    0,
+                )
+            IrType::Function(params, ret) =>
+                let mut param_types = Vector::new()
+                for p in params:
+                    param_types.push(self.ir_type_to_llvm(p))
+                let ret_ty = self.ir_type_to_llvm(ret)
+                LLVMFunctionType(
+                    ret_ty,
+                    param_types.as_ptr(),
+                    param_types.len() as u32,
+                    0,
+                )
+            IrType::Opaque(_) =>
+                LLVMPointerType(LLVMInt8TypeInContext(self.context), 0)
+
+    // ====================================================================
+    // Module Generation
+    // ====================================================================
+
+    fn generate(&mut self, ir_module: &IrModule):
+        // Step 1: Emit struct types
+        for st in &ir_module.structs:
+            self.emit_struct_type(st)
+
+        // Step 2: Emit global variables
+        for global in &ir_module.globals:
+            self.emit_global(global)
+
+        // Step 3: Declare all functions (forward declarations)
+        for func in &ir_module.functions:
+            self.declare_function(func)
+
+        // Step 4: Emit string literals
+        for (i, s) in ir_module.string_literals.iter().enumerate():
+            let name = format("__str_{}", i)
+            let val = LLVMConstStringInContext(
+                self.context, s.as_ptr(), s.len() as u32, 0,
+            )
+            let global = LLVMAddGlobal(self.module, LLVMArrayType(LLVMInt8TypeInContext(self.context), (s.len() + 1) as u32), name.as_ptr())
+            LLVMSetInitializer(global, val)
+            LLVMSetGlobalConstant(global, 1)
+            LLVMSetLinkage(global, LLVM_INTERNAL_LINKAGE)
+            self.string_globals.push(global)
+
+        // Step 5: Emit function bodies
+        for func in &ir_module.functions:
+            if not func.is_extern:
+                self.emit_function_body(func)
+
+    fn emit_struct_type(&mut self, st: &IrStruct):
+        let mut field_types = Vector::new()
+        for (_, ft) in &st.fields:
+            field_types.push(self.ir_type_to_llvm(ft))
+        let llvm_ty = LLVMStructTypeInContext(
+            self.context,
+            field_types.as_ptr(),
+            field_types.len() as u32,
+            0,
+        )
+        self.struct_map.insert(st.name.clone(), llvm_ty)
+
+    fn emit_global(&mut self, global: &IrGlobal):
+        let ty = self.ir_type_to_llvm(&global.ty)
+        let llvm_global = LLVMAddGlobal(self.module, ty, global.name.as_ptr())
+
+        match &global.initializer:
+            Some(init) =>
+                let val = self.emit_const(init, &global.ty)
+                LLVMSetInitializer(llvm_global, val)
+            None =>
+                LLVMSetInitializer(llvm_global, LLVMConstNull(ty))
+
+        if global.is_const:
+            LLVMSetGlobalConstant(llvm_global, 1)
+
+        self.global_map.insert(global.name.clone(), llvm_global)
+
+    fn declare_function(&mut self, func: &IrFunction):
+        let mut param_types = Vector::new()
+        for (_, pt) in &func.params:
+            param_types.push(self.ir_type_to_llvm(pt))
+        let ret_ty = self.ir_type_to_llvm(&func.return_type)
+        let func_ty = LLVMFunctionType(
+            ret_ty,
+            param_types.as_ptr(),
+            param_types.len() as u32,
+            0,
+        )
+        let llvm_func = LLVMAddFunction(self.module, func.name.as_ptr(), func_ty)
+        if func.is_extern:
+            LLVMSetLinkage(llvm_func, LLVM_EXTERNAL_LINKAGE)
+        self.func_map.insert(func.name.clone(), llvm_func)
+
+    // ====================================================================
+    // Function Body Emission
+    // ====================================================================
+
+    fn emit_function_body(&mut self, func: &IrFunction):
+        let llvm_func = match self.func_map.get(&func.name):
+            Some(f) => *f
+            None =>
+                self.errors.push(format("function not declared: {}", func.name))
+                return
+
+        // Clear state
+        self.var_map.clear()
+        self.block_map.clear()
+
+        // Map parameters
+        for (i, (var_id, _)) in func.params.iter().enumerate():
+            let param_val = LLVMGetParam(llvm_func, i as u32)
+            self.var_map.insert(*var_id, param_val)
+
+        // Create basic blocks
+        for block in &func.blocks:
+            let bb = LLVMAppendBasicBlockInContext(
+                self.context, llvm_func, block.label.as_ptr(),
+            )
+            self.block_map.insert(block.id, bb)
+
+        // Emit instructions for each block
+        for block in &func.blocks:
+            let llvm_bb = self.block_map[&block.id]
+            LLVMPositionBuilderAtEnd(self.builder, llvm_bb)
+
+            for inst in &block.instructions:
+                self.emit_instruction(inst, func)
+
+    fn emit_instruction(&mut self, inst: &IrInst, func: &IrFunction):
+        match inst:
+            // Constants
+            IrInst::Const(dest, val, ty) =>
+                let llvm_val = self.emit_const(val, ty)
+                self.var_map.insert(*dest, llvm_val)
+
+            // Arithmetic
+            IrInst::Add(dest, lhs, rhs, _) =>
+                let l = self.get_var(*lhs)
+                let r = self.get_var(*rhs)
+                let result = LLVMBuildAdd(self.builder, l, r, "add\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::Sub(dest, lhs, rhs, _) =>
+                let l = self.get_var(*lhs)
+                let r = self.get_var(*rhs)
+                let result = LLVMBuildSub(self.builder, l, r, "sub\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::Mul(dest, lhs, rhs, _) =>
+                let l = self.get_var(*lhs)
+                let r = self.get_var(*rhs)
+                let result = LLVMBuildMul(self.builder, l, r, "mul\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::Div(dest, lhs, rhs, _) =>
+                let l = self.get_var(*lhs)
+                let r = self.get_var(*rhs)
+                let result = LLVMBuildSDiv(self.builder, l, r, "div\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::Mod(dest, lhs, rhs, _) =>
+                let l = self.get_var(*lhs)
+                let r = self.get_var(*rhs)
+                let result = LLVMBuildSRem(self.builder, l, r, "mod\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::Neg(dest, src, _) =>
+                let v = self.get_var(*src)
+                let result = LLVMBuildNeg(self.builder, v, "neg\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            // Float arithmetic
+            IrInst::FAdd(dest, lhs, rhs) =>
+                let l = self.get_var(*lhs)
+                let r = self.get_var(*rhs)
+                let result = LLVMBuildFAdd(self.builder, l, r, "fadd\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::FSub(dest, lhs, rhs) =>
+                let l = self.get_var(*lhs)
+                let r = self.get_var(*rhs)
+                let result = LLVMBuildFSub(self.builder, l, r, "fsub\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::FMul(dest, lhs, rhs) =>
+                let l = self.get_var(*lhs)
+                let r = self.get_var(*rhs)
+                let result = LLVMBuildFMul(self.builder, l, r, "fmul\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::FDiv(dest, lhs, rhs) =>
+                let l = self.get_var(*lhs)
+                let r = self.get_var(*rhs)
+                let result = LLVMBuildFDiv(self.builder, l, r, "fdiv\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::FNeg(dest, src) =>
+                let v = self.get_var(*src)
+                let result = LLVMBuildFNeg(self.builder, v, "fneg\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            // Bitwise
+            IrInst::BitAnd(dest, lhs, rhs) =>
+                let l = self.get_var(*lhs)
+                let r = self.get_var(*rhs)
+                let result = LLVMBuildAnd(self.builder, l, r, "and\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::BitOr(dest, lhs, rhs) =>
+                let l = self.get_var(*lhs)
+                let r = self.get_var(*rhs)
+                let result = LLVMBuildOr(self.builder, l, r, "or\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::BitXor(dest, lhs, rhs) =>
+                let l = self.get_var(*lhs)
+                let r = self.get_var(*rhs)
+                let result = LLVMBuildXor(self.builder, l, r, "xor\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::BitNot(dest, src) =>
+                let v = self.get_var(*src)
+                let result = LLVMBuildNot(self.builder, v, "not\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::Shl(dest, lhs, rhs) =>
+                let l = self.get_var(*lhs)
+                let r = self.get_var(*rhs)
+                let result = LLVMBuildShl(self.builder, l, r, "shl\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::Shr(dest, lhs, rhs) =>
+                let l = self.get_var(*lhs)
+                let r = self.get_var(*rhs)
+                let result = LLVMBuildAShr(self.builder, l, r, "shr\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            // Comparisons
+            IrInst::Eq(dest, lhs, rhs) =>
+                let l = self.get_var(*lhs)
+                let r = self.get_var(*rhs)
+                let result = LLVMBuildICmp(self.builder, LLVM_INT_EQ, l, r, "eq\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::Neq(dest, lhs, rhs) =>
+                let l = self.get_var(*lhs)
+                let r = self.get_var(*rhs)
+                let result = LLVMBuildICmp(self.builder, LLVM_INT_NE, l, r, "neq\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::Lt(dest, lhs, rhs) =>
+                let l = self.get_var(*lhs)
+                let r = self.get_var(*rhs)
+                let result = LLVMBuildICmp(self.builder, LLVM_INT_SLT, l, r, "lt\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::Gt(dest, lhs, rhs) =>
+                let l = self.get_var(*lhs)
+                let r = self.get_var(*rhs)
+                let result = LLVMBuildICmp(self.builder, LLVM_INT_SGT, l, r, "gt\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::LtEq(dest, lhs, rhs) =>
+                let l = self.get_var(*lhs)
+                let r = self.get_var(*rhs)
+                let result = LLVMBuildICmp(self.builder, LLVM_INT_SLE, l, r, "lte\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::GtEq(dest, lhs, rhs) =>
+                let l = self.get_var(*lhs)
+                let r = self.get_var(*rhs)
+                let result = LLVMBuildICmp(self.builder, LLVM_INT_SGE, l, r, "gte\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            // Logical
+            IrInst::LogicAnd(dest, lhs, rhs) =>
+                let l = self.get_var(*lhs)
+                let r = self.get_var(*rhs)
+                let result = LLVMBuildAnd(self.builder, l, r, "land\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::LogicOr(dest, lhs, rhs) =>
+                let l = self.get_var(*lhs)
+                let r = self.get_var(*rhs)
+                let result = LLVMBuildOr(self.builder, l, r, "lor\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::LogicNot(dest, src) =>
+                let v = self.get_var(*src)
+                let result = LLVMBuildNot(self.builder, v, "lnot\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            // Memory
+            IrInst::Alloca(dest, ty) =>
+                let llvm_ty = self.ir_type_to_llvm(ty)
+                let result = LLVMBuildAlloca(self.builder, llvm_ty, "alloca\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::Load(dest, ptr, ty) =>
+                let p = self.get_var(*ptr)
+                let llvm_ty = self.ir_type_to_llvm(ty)
+                let result = LLVMBuildLoad2(self.builder, llvm_ty, p, "load\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::Store(ptr, val) =>
+                let p = self.get_var(*ptr)
+                let v = self.get_var(*val)
+                LLVMBuildStore(self.builder, v, p)
+
+            IrInst::GetElementPtr(dest, base, indices, ty) =>
+                let b = self.get_var(*base)
+                let llvm_ty = self.ir_type_to_llvm(ty)
+                let mut idx_vals = Vector::new()
+                for idx in indices:
+                    idx_vals.push(self.get_var(*idx))
+                let result = LLVMBuildGEP2(
+                    self.builder, llvm_ty, b,
+                    idx_vals.as_ptr(), idx_vals.len() as u32,
+                    "gep\0".as_ptr(),
+                )
+                self.var_map.insert(*dest, result)
+
+            IrInst::HeapAlloc(dest, ty, _) =>
+                let llvm_ty = self.ir_type_to_llvm(ty)
+                let result = LLVMBuildMalloc(self.builder, llvm_ty, "malloc\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::HeapFree(ptr) =>
+                let p = self.get_var(*ptr)
+                LLVMBuildFree(self.builder, p)
+
+            // Control flow
+            IrInst::Call(dest, name, args) =>
+                let llvm_func = match self.func_map.get(name):
+                    Some(f) => *f
+                    None =>
+                        self.errors.push(format("undefined function: {}", name))
+                        return
+
+                let mut arg_vals = Vector::new()
+                for a in args:
+                    arg_vals.push(self.get_var(*a))
+
+                let func_ty = self.get_function_type(name, func)
+                let result = LLVMBuildCall2(
+                    self.builder, func_ty, llvm_func,
+                    arg_vals.as_ptr(), arg_vals.len() as u32,
+                    "call\0".as_ptr(),
+                )
+                self.var_map.insert(*dest, result)
+
+            IrInst::CallIndirect(dest, callee, args) =>
+                let callee_val = self.get_var(*callee)
+                let mut arg_vals = Vector::new()
+                for a in args:
+                    arg_vals.push(self.get_var(*a))
+                // Build generic function type
+                let mut param_types = Vector::new()
+                for _ in args:
+                    param_types.push(LLVMInt64TypeInContext(self.context))
+                let ret_ty = LLVMInt64TypeInContext(self.context)
+                let func_ty = LLVMFunctionType(ret_ty, param_types.as_ptr(), param_types.len() as u32, 0)
+                let result = LLVMBuildCall2(
+                    self.builder, func_ty, callee_val,
+                    arg_vals.as_ptr(), arg_vals.len() as u32,
+                    "icall\0".as_ptr(),
+                )
+                self.var_map.insert(*dest, result)
+
+            IrInst::Return(val) =>
+                match val:
+                    Some(v) =>
+                        let ret_val = self.get_var(*v)
+                        LLVMBuildRet(self.builder, ret_val)
+                    None =>
+                        LLVMBuildRetVoid(self.builder)
+
+            IrInst::Branch(target) =>
+                let bb = self.block_map[target]
+                LLVMBuildBr(self.builder, bb)
+
+            IrInst::CondBranch(cond, then_block, else_block) =>
+                let c = self.get_var(*cond)
+                let then_bb = self.block_map[then_block]
+                let else_bb = self.block_map[else_block]
+                LLVMBuildCondBr(self.builder, c, then_bb, else_bb)
+
+            IrInst::Switch(val, cases, default) =>
+                let v = self.get_var(*val)
+                let default_bb = self.block_map[default]
+                let switch_inst = LLVMBuildSwitch(self.builder, v, default_bb, cases.len() as u32)
+                for (case_val, target) in cases:
+                    let cv = self.emit_const(case_val, &IrType::I64)
+                    let target_bb = self.block_map[target]
+                    LLVMAddCase(switch_inst, cv, target_bb)
+
+            IrInst::Unreachable =>
+                LLVMBuildUnreachable(self.builder)
+
+            // Cast operations
+            IrInst::Cast(dest, src, from_ty, to_ty) =>
+                let v = self.get_var(*src)
+                let target = self.ir_type_to_llvm(to_ty)
+                let result = if from_ty.is_integer() and to_ty.is_integer():
+                    if from_ty.size() < to_ty.size():
+                        LLVMBuildSExt(self.builder, v, target, "sext\0".as_ptr())
+                    elif from_ty.size() > to_ty.size():
+                        LLVMBuildTrunc(self.builder, v, target, "trunc\0".as_ptr())
+                    else:
+                        LLVMBuildBitCast(self.builder, v, target, "cast\0".as_ptr())
+                else:
+                    LLVMBuildBitCast(self.builder, v, target, "cast\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::Bitcast(dest, src, ty) =>
+                let v = self.get_var(*src)
+                let target = self.ir_type_to_llvm(ty)
+                let result = LLVMBuildBitCast(self.builder, v, target, "bitcast\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::ZeroExtend(dest, src, ty) =>
+                let v = self.get_var(*src)
+                let target = self.ir_type_to_llvm(ty)
+                let result = LLVMBuildZExt(self.builder, v, target, "zext\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::SignExtend(dest, src, ty) =>
+                let v = self.get_var(*src)
+                let target = self.ir_type_to_llvm(ty)
+                let result = LLVMBuildSExt(self.builder, v, target, "sext\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::Truncate(dest, src, ty) =>
+                let v = self.get_var(*src)
+                let target = self.ir_type_to_llvm(ty)
+                let result = LLVMBuildTrunc(self.builder, v, target, "trunc\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::IntToFloat(dest, src, ty) =>
+                let v = self.get_var(*src)
+                let target = self.ir_type_to_llvm(ty)
+                let result = LLVMBuildSIToFP(self.builder, v, target, "itof\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::FloatToInt(dest, src, ty) =>
+                let v = self.get_var(*src)
+                let target = self.ir_type_to_llvm(ty)
+                let result = LLVMBuildFPToSI(self.builder, v, target, "ftoi\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            // Aggregate operations
+            IrInst::ExtractValue(dest, agg, idx) =>
+                let a = self.get_var(*agg)
+                let result = LLVMBuildExtractValue(self.builder, a, *idx, "extract\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            IrInst::InsertValue(dest, agg, val, idx) =>
+                let a = self.get_var(*agg)
+                let v = self.get_var(*val)
+                let result = LLVMBuildInsertValue(self.builder, a, v, *idx, "insert\0".as_ptr())
+                self.var_map.insert(*dest, result)
+
+            // Phi nodes
+            IrInst::Phi(dest, incoming, ty) =>
+                let llvm_ty = self.ir_type_to_llvm(ty)
+                let phi = LLVMBuildPhi(self.builder, llvm_ty, "phi\0".as_ptr())
+                let mut vals = Vector::new()
+                let mut blocks = Vector::new()
+                for (v, b) in incoming:
+                    vals.push(self.get_var(*v))
+                    blocks.push(self.block_map[b])
+                LLVMAddIncoming(phi, vals.as_ptr(), blocks.as_ptr(), incoming.len() as u32)
+                self.var_map.insert(*dest, phi)
+
+            IrInst::Nop | IrInst::Comment(_) =>
+                pass
+
+            _ => pass
+
+    // ====================================================================
+    // Helpers
+    // ====================================================================
+
+    fn get_var(&self, var: VarId) -> LLVMValueRef:
+        match self.var_map.get(&var):
+            Some(v) => *v
+            None =>
+                // Return zero constant as fallback
+                LLVMConstInt(LLVMInt64TypeInContext(self.context), 0, 0)
+
+    fn emit_const(&self, val: &IrConst, ty: &IrType) -> LLVMValueRef:
+        match val:
+            IrConst::Int(n) =>
+                let llvm_ty = self.ir_type_to_llvm(ty)
+                LLVMConstInt(llvm_ty, *n as u64, 1)
+            IrConst::Float(f) =>
+                let llvm_ty = self.ir_type_to_llvm(ty)
+                LLVMConstReal(llvm_ty, *f)
+            IrConst::Bool(b) =>
+                let i1 = LLVMInt1TypeInContext(self.context)
+                LLVMConstInt(i1, if *b: 1 else: 0, 0)
+            IrConst::Char(c) =>
+                let i32_ty = LLVMInt32TypeInContext(self.context)
+                LLVMConstInt(i32_ty, *c as u64, 0)
+            IrConst::Str(s) =>
+                LLVMConstStringInContext(self.context, s.as_ptr(), s.len() as u32, 0)
+            IrConst::Null =>
+                let llvm_ty = self.ir_type_to_llvm(ty)
+                LLVMConstNull(llvm_ty)
+            IrConst::Unit =>
+                LLVMConstNull(LLVMVoidTypeInContext(self.context))
+
+    fn get_function_type(&self, name: &str, current_func: &IrFunction) -> LLVMTypeRef:
+        // Build function type from known signature
+        let mut param_types = Vector::new()
+        for _ in 0..8:  // Max 8 params estimated
+            param_types.push(LLVMInt64TypeInContext(self.context))
+        let ret_ty = LLVMInt64TypeInContext(self.context)
+        return LLVMFunctionType(ret_ty, param_types.as_ptr(), 0, 0)
+
+    // ====================================================================
+    // Output Methods
+    // ====================================================================
+
+    fn verify(&self) -> Result<(), str>:
+        let mut err_msg: *const u8 = null
+        let result = LLVMVerifyModule(self.module, 2, &mut err_msg)
+        if result != 0:
+            let msg = str::from_c_str(err_msg)
+            LLVMDisposeMessage(err_msg)
+            return Err(msg)
+        return Ok(())
+
+    fn print_ir(&self) -> str:
+        let raw = LLVMPrintModuleToString(self.module)
+        let result = str::from_c_str(raw)
+        LLVMDisposeMessage(raw)
+        return result
+
+    fn write_bitcode(&self, path: str) -> Result<(), str>:
+        let result = LLVMWriteBitcodeToFile(self.module, path.as_ptr())
+        if result != 0:
+            return Err("failed to write bitcode")
+        return Ok(())
+
+    fn emit_object_file(&self, path: str, opt_level: i32) -> Result<(), str>:
+        let mut target: LLVMTargetRef = null
+        let mut err_msg: *const u8 = null
+
+        let triple = LLVMGetDefaultTargetTriple()
+        let result = LLVMGetTargetFromTriple(triple, &mut target, &mut err_msg)
+        if result != 0:
+            let msg = str::from_c_str(err_msg)
+            LLVMDisposeMessage(err_msg)
+            return Err(format("target lookup failed: {}", msg))
+
+        let machine = LLVMCreateTargetMachine(
+            target, triple,
+            "generic\0".as_ptr(),
+            "\0".as_ptr(),
+            opt_level,
+            LLVM_RELOC_DEFAULT,
+            LLVM_CODE_MODEL_DEFAULT,
+        )
+
+        let emit_result = LLVMTargetMachineEmitToFile(
+            machine, self.module,
+            path.as_ptr(),
+            LLVM_OBJ_FILE,
+            &mut err_msg,
+        )
+
+        LLVMDisposeTargetMachine(machine)
+
+        if emit_result != 0:
+            let msg = str::from_c_str(err_msg)
+            LLVMDisposeMessage(err_msg)
+            return Err(format("emit failed: {}", msg))
+
+        return Ok(())
+
+    fn emit_assembly(&self, path: str) -> Result<(), str>:
+        let mut target: LLVMTargetRef = null
+        let mut err_msg: *const u8 = null
+
+        let triple = LLVMGetDefaultTargetTriple()
+        let result = LLVMGetTargetFromTriple(triple, &mut target, &mut err_msg)
+        if result != 0:
+            let msg = str::from_c_str(err_msg)
+            LLVMDisposeMessage(err_msg)
+            return Err(format("target lookup failed: {}", msg))
+
+        let machine = LLVMCreateTargetMachine(
+            target, triple,
+            "generic\0".as_ptr(),
+            "\0".as_ptr(),
+            LLVM_OPT_DEFAULT,
+            LLVM_RELOC_DEFAULT,
+            LLVM_CODE_MODEL_DEFAULT,
+        )
+
+        let emit_result = LLVMTargetMachineEmitToFile(
+            machine, self.module,
+            path.as_ptr(),
+            LLVM_ASM_FILE,
+            &mut err_msg,
+        )
+
+        LLVMDisposeTargetMachine(machine)
+
+        if emit_result != 0:
+            let msg = str::from_c_str(err_msg)
+            LLVMDisposeMessage(err_msg)
+            return Err(format("emit failed: {}", msg))
+
+        return Ok(())
+
+// ============================================================================
+// Public API
+// ============================================================================
+
+fn generate_llvm(ir_module: &IrModule, output_path: str, opt_level: i32) -> Result<(), str>:
+    let mut codegen = LlvmCodegen::new(ir_module.name.clone())
+    codegen.generate(ir_module)
+
+    // Verify
+    codegen.verify()?
+
+    // Emit object file
+    codegen.emit_object_file(output_path, opt_level)?
+
+    codegen.dispose()
+    return Ok(())
+
+fn generate_llvm_ir(ir_module: &IrModule) -> str:
+    let mut codegen = LlvmCodegen::new(ir_module.name.clone())
+    codegen.generate(ir_module)
+    let ir = codegen.print_ir()
+    codegen.dispose()
+    return ir
+
+fn generate_llvm_bitcode(ir_module: &IrModule, path: str) -> Result<(), str>:
+    let mut codegen = LlvmCodegen::new(ir_module.name.clone())
+    codegen.generate(ir_module)
+    codegen.verify()?
+    codegen.write_bitcode(path)?
+    codegen.dispose()
+    return Ok(())
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[test]
+fn test_type_mapping():
+    let codegen = LlvmCodegen::new("test")
+    let i32_ty = codegen.ir_type_to_llvm(&IrType::I32)
+    let f64_ty = codegen.ir_type_to_llvm(&IrType::F64)
+    let ptr_ty = codegen.ir_type_to_llvm(&IrType::Ptr(Box::new(IrType::I8)))
+    assert(i32_ty != null, "i32 type should not be null")
+    assert(f64_ty != null, "f64 type should not be null")
+    assert(ptr_ty != null, "ptr type should not be null")
+    codegen.dispose()
+
+#[test]
+fn test_simple_function():
+    let mut ir_module = IrModule::new("test")
+    let func = ir_module.add_function("add", IrType::I64)
+    let a = func.add_param(IrType::I64)
+    let b = func.add_param(IrType::I64)
+    let result = func.fresh_var(IrType::I64)
+    func.emit(IrInst::Add(result, a, b, IrType::I64))
+    func.emit_return(Some(result))
+
+    let mut codegen = LlvmCodegen::new("test")
+    codegen.generate(&ir_module)
+    let ir_str = codegen.print_ir()
+    assert(ir_str.contains("define"), "should contain function definition")
+    codegen.dispose()
+
+#[test]
+fn test_control_flow():
+    let mut ir_module = IrModule::new("test")
+    let func = ir_module.add_function("branch_test", IrType::I64)
+    let cond = func.add_param(IrType::I1)
+    let then_block = func.create_block("then")
+    let else_block = func.create_block("else")
+    func.emit_cond_branch(cond, then_block, else_block)
+    func.switch_to_block(then_block)
+    let v1 = func.emit_const_int(1, IrType::I64)
+    func.emit_return(Some(v1))
+    func.switch_to_block(else_block)
+    let v2 = func.emit_const_int(0, IrType::I64)
+    func.emit_return(Some(v2))
+
+    let ir_str = generate_llvm_ir(&ir_module)
+    assert(ir_str.contains("br"), "should contain branch instruction")

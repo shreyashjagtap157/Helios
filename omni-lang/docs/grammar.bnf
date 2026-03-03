@@ -1,0 +1,451 @@
+// Omni Language — Formal Grammar (BNF)
+//
+// This file defines the complete grammar for the Omni language.
+// Canonical syntax reference for the parser, lexer, and AST.
+//
+// Conventions:
+//   UPPER_CASE  = terminal tokens produced by the lexer
+//   lower_case  = non-terminal rules
+//   "literal"   = keyword or operator token
+//   ?           = optional
+//   *           = zero or more
+//   +           = one or more
+//   |           = alternation
+//   ( )         = grouping
+
+// ============================================================
+// COMMENTS
+// ============================================================
+//
+// Single-line:  // comment text
+// Block:        /* comment text */
+//
+// Comments are stripped by the lexer and do not appear in the AST.
+// The '#' character is NOT a comment delimiter; it introduces attributes.
+
+// ============================================================
+// TOP LEVEL
+// ============================================================
+
+program             ::= NEWLINE* (item NEWLINE*)*
+
+item                ::= module_decl
+                      | struct_def
+                      | enum_def
+                      | fn_def
+                      | trait_def
+                      | impl_block
+                      | import_decl
+                      | const_def
+                      | type_alias
+                      | extern_block
+                      | comptime_block
+                      | macro_def
+
+// ============================================================
+// ATTRIBUTES
+// ============================================================
+//
+// Attributes use the #[name] syntax (NOT @name).
+// They precede the item they annotate.
+
+attrs               ::= attr+
+attr                ::= "#" "[" IDENT attr_args? "]" NEWLINE
+attr_args           ::= "(" attr_arg ("," attr_arg)* ")"
+attr_arg            ::= IDENT ":" attr_value
+                      | IDENT
+                      | literal
+attr_value          ::= literal
+                      | IDENT
+                      | "[" attr_value ("," attr_value)* "]"
+
+// ============================================================
+// MODULE DECLARATION
+// ============================================================
+//
+// File-scope (no body):   module path::to::module
+// Inline (with body):     module name:
+//                             <indented items>
+
+module_decl         ::= attrs? "module" module_path (":" NEWLINE INDENT item* DEDENT | NEWLINE)
+module_path         ::= IDENT ("::" IDENT)*
+
+// ============================================================
+// IMPORTS
+// ============================================================
+//
+// import module::path
+// import module::path as alias
+// import module::path::{Item1, Item2}
+
+import_decl         ::= "import" import_path ("as" IDENT)? NEWLINE
+import_path         ::= IDENT ("::" IDENT)*
+                      | IDENT ("::" IDENT)* "::" "{" IDENT ("," IDENT)* "}"
+
+// ============================================================
+// STRUCT DEFINITION
+// ============================================================
+
+struct_def          ::= attrs? "struct" IDENT ("implements" IDENT)? ":" NEWLINE
+                        INDENT struct_member* DEDENT
+struct_member       ::= field
+                      | method
+field               ::= IDENT ":" type NEWLINE
+method              ::= fn_def
+
+// ============================================================
+// ENUM DEFINITION
+// ============================================================
+
+enum_def            ::= attrs? "enum" IDENT ":" NEWLINE
+                        INDENT enum_variant* DEDENT
+enum_variant        ::= IDENT enum_fields? NEWLINE
+enum_fields         ::= "(" type ("," type)* ")"           /* tuple variant  */
+                      | "{" field ("," field)* "}"          /* struct variant */
+
+// ============================================================
+// FUNCTION DEFINITION
+// ============================================================
+//
+// fn name(params) -> ReturnType:
+//     <indented body>
+
+fn_def              ::= attrs? "async"? "fn" IDENT "(" params? ")" return_type? ":" NEWLINE block
+return_type         ::= "->" type
+
+params              ::= param ("," param)*
+param               ::= self_param
+                      | regular_param
+self_param          ::= "&" "mut"? "self"
+                      | "self"
+regular_param       ::= IDENT ":" type
+
+// ============================================================
+// TRAIT DEFINITION
+// ============================================================
+
+trait_def           ::= attrs? "trait" IDENT ":" NEWLINE
+                        INDENT method* DEDENT
+
+// ============================================================
+// IMPL BLOCK
+// ============================================================
+
+impl_block          ::= attrs? "impl" IDENT "for" IDENT ":" NEWLINE
+                        INDENT method* DEDENT
+
+// ============================================================
+// CONST DECLARATION
+// ============================================================
+
+const_def           ::= attrs? "const" IDENT ":" type "=" expr NEWLINE
+
+// ============================================================
+// TYPE ALIAS
+// ============================================================
+
+type_alias          ::= "type" IDENT "=" type NEWLINE
+
+// ============================================================
+// EXTERN BLOCK
+// ============================================================
+//
+// extern "ABI" { fn signatures... }
+
+extern_block        ::= "extern" STRING? "{" extern_fn* "}"
+extern_fn           ::= "async"? "fn" IDENT "(" params? ")" return_type?
+
+// ============================================================
+// COMPTIME BLOCK
+// ============================================================
+
+comptime_block      ::= "comptime" block
+
+// ============================================================
+// MACRO DEFINITION
+// ============================================================
+
+macro_def           ::= "macro" IDENT ":" NEWLINE block
+
+// ============================================================
+// TYPES
+// ============================================================
+
+type                ::= ownership_mod? base_type
+
+ownership_mod       ::= "own"                               /* owned value (own T)         */
+                      | "shared"                             /* shared/Arc (shared T)       */
+                      | "&" "mut"?                           /* borrow (&T or &mut T)       */
+                      | "unsafe" "*"                         /* raw pointer (unsafe *T)     */
+
+base_type           ::= primitive_type
+                      | named_type
+                      | generic_type
+                      | array_type
+                      | slice_type
+                      | fn_type
+                      | tuple_type
+                      | self_type
+
+// --- Primitive types ---
+primitive_type      ::= "u8" | "u16" | "u32" | "u64" | "usize"
+                      | "i8" | "i16" | "i32" | "i64" | "isize"
+                      | "f32" | "f64"
+                      | "bool"
+                      | "str"
+
+// --- Named / generic types ---
+// Covers: String, HashMap<K,V>, Option<T>, Result<T,E>, user-defined, etc.
+named_type          ::= IDENT
+generic_type        ::= IDENT "<" type ("," type)* ">"
+
+// --- Compound types ---
+array_type          ::= "[" type ";" expr "]"               /* fixed-size array [T; N]     */
+slice_type          ::= "[" type "]"                         /* dynamic slice [T]           */
+fn_type             ::= "fn" "(" type_list? ")" return_type?
+type_list           ::= type ("," type)*
+tuple_type          ::= "(" type ("," type)+ ")"
+
+// --- Self types (in method signatures) ---
+self_type           ::= "Self"
+
+// ============================================================
+// BLOCKS (Indentation-based)
+// ============================================================
+//
+// Blocks are delimited by INDENT/DEDENT tokens produced by the
+// lexer.  A colon terminates the header of any block-introducing
+// construct (fn, if, for, while, match, struct, trait, impl, …).
+
+block               ::= INDENT statement+ DEDENT
+
+// ============================================================
+// STATEMENTS
+// ============================================================
+
+statement           ::= let_stmt
+                      | var_stmt
+                      | return_stmt
+                      | if_stmt
+                      | for_stmt
+                      | while_stmt
+                      | loop_stmt
+                      | match_stmt
+                      | defer_stmt
+                      | yield_stmt
+                      | spawn_stmt
+                      | select_stmt
+                      | break_stmt
+                      | continue_stmt
+                      | pass_stmt
+                      | expr_stmt
+
+// --- Variable declarations ---
+let_stmt            ::= "let" "mut"? IDENT type_annotation? "=" expr NEWLINE
+var_stmt            ::= "var" IDENT type_annotation? ("=" expr)? NEWLINE
+type_annotation     ::= ":" type
+
+// --- Control flow ---
+return_stmt         ::= "return" expr? NEWLINE
+
+if_stmt             ::= "if" expr ":" NEWLINE block
+                        elif_clause*
+                        else_clause?
+elif_clause         ::= "elif" expr ":" NEWLINE block
+else_clause         ::= "else" ":" NEWLINE block
+
+for_stmt            ::= "for" IDENT "in" expr ":" NEWLINE block
+while_stmt          ::= "while" expr ":" NEWLINE block
+loop_stmt           ::= "loop" ":" NEWLINE block
+
+match_stmt          ::= "match" expr ":" NEWLINE INDENT match_arm+ DEDENT
+match_arm           ::= pattern ":" arm_body
+arm_body            ::= expr NEWLINE
+                      | NEWLINE block
+
+break_stmt          ::= "break" NEWLINE
+continue_stmt       ::= "continue" NEWLINE
+pass_stmt           ::= "pass" NEWLINE
+
+// --- Error handling ---
+// try/catch/finally (canonical keywords, parser support planned)
+try_stmt            ::= "try" ":" NEWLINE block
+                        catch_clause+
+                        finally_clause?
+catch_clause        ::= "catch" pattern ":" NEWLINE block
+finally_clause      ::= "finally" ":" NEWLINE block
+
+// --- Defer ---
+defer_stmt          ::= "defer" statement
+
+// --- Concurrency ---
+yield_stmt          ::= "yield" expr? NEWLINE
+spawn_stmt          ::= "spawn" expr NEWLINE
+select_stmt         ::= "select" ":" NEWLINE INDENT select_arm+ DEDENT
+select_arm          ::= pattern "=>" expr ":" NEWLINE block
+
+// --- Assignments (parsed as expression-statements) ---
+assignment          ::= expr assign_op expr NEWLINE
+assign_op           ::= "=" | "+=" | "-=" | "*=" | "/="
+
+// --- Expression statement ---
+expr_stmt           ::= expr NEWLINE
+
+// ============================================================
+// EXPRESSIONS
+// ============================================================
+
+expr                ::= or_expr (assign_op or_expr)?
+
+// --- Binary operators (by ascending precedence) ---
+or_expr             ::= and_expr  ("||" and_expr)*          /* logical or  */
+and_expr            ::= equality_expr ("&&" equality_expr)*  /* logical and */
+equality_expr       ::= comparison_expr (("==" | "!=") comparison_expr)*
+comparison_expr     ::= range_expr (("<" | ">" | "<=" | ">=") range_expr)*
+range_expr          ::= additive_expr ((".." | "..=") additive_expr)?
+additive_expr       ::= multiplicative_expr (("+" | "-") multiplicative_expr)*
+multiplicative_expr ::= unary_expr (("*" | "/" | "%") unary_expr)*
+
+// --- Unary operators ---
+unary_expr          ::= "-" unary_expr                      /* negation           */
+                      | "!" unary_expr                      /* logical not        */
+                      | "&" "mut"? unary_expr               /* borrow / borrow mut */
+                      | "*" unary_expr                      /* dereference        */
+                      | postfix_expr
+
+// --- Postfix operators ---
+postfix_expr        ::= primary_expr postfix_op*
+postfix_op          ::= call
+                      | index
+                      | field_access
+                      | method_call
+                      | path_access
+                      | await_expr
+call                ::= "(" arg_list? ")"
+index               ::= "[" expr "]"
+field_access        ::= "." IDENT
+method_call         ::= "." IDENT "(" arg_list? ")"
+path_access         ::= "::" IDENT
+await_expr          ::= "." "await"
+arg_list            ::= expr ("," expr)*
+
+// --- Primary expressions ---
+primary_expr        ::= literal
+                      | IDENT
+                      | "self"
+                      | "Self"
+                      | grouped_expr
+                      | tuple_expr
+                      | array_expr
+                      | struct_literal
+                      | lambda
+                      | list_comprehension
+                      | option_result_expr
+
+// Grouping / Tuples
+grouped_expr        ::= "(" expr ")"
+tuple_expr          ::= "(" ")"
+                      | "(" expr ("," expr)+ ","? ")"
+
+// Array literal
+array_expr          ::= "[" "]"
+                      | "[" expr ("," expr)* ","? "]"
+
+// List comprehension
+list_comprehension  ::= "[" expr "for" IDENT "in" expr ("if" expr)? "]"
+
+// Struct literal
+struct_literal      ::= IDENT "{" field_init ("," field_init)* ","? "}"
+field_init          ::= IDENT ":" expr
+
+// Lambda (closure)
+lambda              ::= "|" lambda_params? "|" expr
+lambda_params       ::= lambda_param ("," lambda_param)*
+lambda_param        ::= IDENT (":" type)?
+
+// Option / Result constructors
+option_result_expr  ::= "None"
+                      | "Some" "(" expr ")"
+                      | "Ok" "(" expr ")"
+                      | "Err" "(" expr ")"
+
+// String interpolation (lexer-level feature)
+// f"text {expr} more text"
+// Produces a StringLiteral token with embedded expressions.
+
+// ============================================================
+// PATTERNS
+// ============================================================
+
+pattern             ::= literal_pattern
+                      | binding_pattern
+                      | constructor_pattern
+                      | wildcard_pattern
+
+literal_pattern     ::= INT | FLOAT | STRING | "true" | "false"
+binding_pattern     ::= IDENT
+constructor_pattern ::= IDENT ("(" pattern_list ")")?
+wildcard_pattern    ::= "_"
+pattern_list        ::= pattern ("," pattern)*
+
+// ============================================================
+// LITERALS
+// ============================================================
+
+literal             ::= INT
+                      | FLOAT
+                      | STRING
+                      | CHAR
+                      | "true"
+                      | "false"
+                      | "None"
+
+// ============================================================
+// LEXICAL TOKENS
+// ============================================================
+//
+// Produced by the lexer before parsing.
+
+// --- Identifiers ---
+// IDENT       = [a-zA-Z_][a-zA-Z0-9_]*
+
+// --- Numeric literals ---
+// INT         = [0-9]+
+// FLOAT       = [0-9]+ "." [0-9]+
+
+// --- String / Char literals ---
+// STRING      = '"' ( [^"\\] | '\\' . )* '"'
+// CHAR        = "'" ( [^'\\] | '\\' . ) "'"
+
+// --- Keywords ---
+//   module  struct  enum  fn  trait  impl  import  from  as
+//   let  var  mut  const  type  extern  comptime  macro  pub
+//   if  elif  else  for  while  loop  in  match  case
+//   return  break  continue  pass
+//   try  catch  finally  defer
+//   async  await  spawn  select  yield
+//   own  shared  unsafe
+//   self  super  Self
+//   true  false  None  Some  Ok  Err
+//   dyn  where  implements
+
+// --- Operators ---
+//   +   -   *   /   %
+//   ==  !=  <   >   <=  >=
+//   &&  ||  !
+//   =   +=  -=  *=  /=
+//   ->  =>  ::  ..  ..=
+//   &   |   ?   ~   ^
+
+// --- Delimiters ---
+//   (  )  [  ]  {  }
+//   ,  :  ;  .  #
+
+// --- Indentation tokens ---
+//   INDENT    emitted when indentation increases
+//   DEDENT    emitted when indentation decreases
+//   NEWLINE   emitted at end of each line
+
+// --- Comments (stripped by lexer) ---
+//   // single-line comment
+//   /* block comment */

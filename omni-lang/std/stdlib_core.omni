@@ -1,0 +1,455 @@
+// Standard Library Core Module
+// Fundamental types and functions used across all stdlib modules
+// Date: Feb 11, 2026, 16:00 UTC
+
+// ============================================================================
+// ERROR HANDLING & RESULT TYPES
+// ============================================================================
+
+// Standard Result type for operations that can fail
+struct Result<T, E> {
+    ok: bool,
+    value: T,
+    error: E,
+}
+
+impl<T, E> Result<T, E> {
+    // Unwrap the result, panic if error
+    fn unwrap(self) -> T {
+        if self.ok {
+            return self.value
+        }
+        panic("Called unwrap on error result")
+    }
+
+    // Get value or return default
+    fn unwrap_or(self, default: T) -> T {
+        if self.ok {
+            return self.value
+        }
+        return default
+    }
+
+    // Check if result is ok
+    fn is_ok(self) -> bool {
+        return self.ok
+    }
+
+    // Check if result is error
+    fn is_err(self) -> bool {
+        return !self.ok
+    }
+
+    // Map result value
+    fn map<U>(self, fn_map: fn(T) -> U) -> Result<U, E> {
+        if self.ok {
+            return Result {
+                ok: true,
+                value: fn_map(self.value),
+                error: null,
+            }
+        }
+        return Result {
+            ok: false,
+            value: null,
+            error: self.error,
+        }
+    }
+}
+
+// Standard Option type for nullable values
+enum Option<T> {
+    Some(T),
+    None,
+}
+
+impl<T> Option<T> {
+    fn is_some(self) -> bool {
+        match self {
+            Some(_) => true,
+            None => false,
+        }
+    }
+
+    fn is_none(self) -> bool {
+        match self {
+            Some(_) => false,
+            None => true,
+        }
+    }
+
+    fn unwrap(self) -> T {
+        match self {
+            Some(val) => val,
+            None => panic("Called unwrap on None"),
+        }
+    }
+
+    fn unwrap_or(self, default: T) -> T {
+        match self {
+            Some(val) => val,
+            None => default,
+        }
+    }
+
+    fn map<U>(self, fn_map: fn(T) -> U) -> Option<U> {
+        match self {
+            Some(val) => Some(fn_map(val)),
+            None => None,
+        }
+    }
+}
+
+// ============================================================================
+// COMMON TRAITS & INTERFACES
+// ============================================================================
+
+// Copyable trait for types that can be safely copied
+trait Copy {
+    fn copy(self) -> Self
+}
+
+// Eq trait for equality
+trait Eq {
+    fn eq(self, other: Self) -> bool
+    fn ne(self, other: Self) -> bool {
+        return !self.eq(other)
+    }
+}
+
+// Ord trait for ordering
+trait Ord {
+    fn cmp(self, other: Self) -> Ordering
+    fn lt(self, other: Self) -> bool
+    fn le(self, other: Self) -> bool
+    fn gt(self, other: Self) -> bool
+    fn ge(self, other: Self) -> bool
+}
+
+// Ordering enum for comparison
+enum Ordering {
+    Less,
+    Equal,
+    Greater,
+}
+
+// Iterator trait
+trait Iterator<T> {
+    fn next(self) -> Option<T>
+    fn has_next(self) -> bool
+}
+
+// ============================================================================
+// STRING & MEMORY UTILITIES
+// ============================================================================
+
+// String type for text manipulation
+struct String {
+    data: Array<u8>,
+    len: usize,
+}
+
+impl String {
+    // Create empty string
+    fn new() -> String {
+        return String {
+            data: Array::new(0),
+            len: 0,
+        }
+    }
+
+    // Get length
+    fn len(self) -> usize {
+        return self.len
+    }
+
+    // Is empty
+    fn is_empty(self) -> bool {
+        return self.len == 0
+    }
+
+    // Push character
+    fn push(mut self, ch: u8) {
+        self.data[self.len] = ch
+        self.len = self.len + 1
+    }
+
+    // Convert to lower case
+    fn to_lower(self) -> String {
+        let mut result = String::new()
+        for i in 0..self.len {
+            let ch = self.data[i]
+            if ch >= 65 && ch <= 90 {  // A-Z
+                result.push(ch + 32)
+            } else {
+                result.push(ch)
+            }
+        }
+        return result
+    }
+
+    // Convert to upper case
+    fn to_upper(self) -> String {
+        let mut result = String::new()
+        for i in 0..self.len {
+            let ch = self.data[i]
+            if ch >= 97 && ch <= 122 {  // a-z
+                result.push(ch - 32)
+            } else {
+                result.push(ch)
+            }
+        }
+        return result
+    }
+
+    // Trim whitespace
+    fn trim(self) -> String {
+        let mut start = 0
+        let mut end = self.len
+        
+        while start < end && (self.data[start] == 32 || self.data[start] == 9) {
+            start = start + 1
+        }
+        
+        while end > start && (self.data[end - 1] == 32 || self.data[end - 1] == 9) {
+            end = end - 1
+        }
+        
+        let mut result = String::new()
+        for i in start..end {
+            result.push(self.data[i])
+        }
+        return result
+    }
+
+    // Contains substring
+    fn contains(self, needle: String) -> bool {
+        if needle.len() == 0 {
+            return true
+        }
+        if needle.len() > self.len {
+            return false
+        }
+        
+        for i in 0..(self.len - needle.len() + 1) {
+            let mut matches = true
+            for j in 0..needle.len() {
+                if self.data[i + j] != needle.data[j] {
+                    matches = false
+                    break
+                }
+            }
+            if matches {
+                return true
+            }
+        }
+        return false
+    }
+
+    // Split string by delimiter
+    fn split(self, delimiter: u8) -> Array<String> {
+        let mut result = Array::new(10)
+        let mut current = String::new()
+        let mut count = 0
+
+        for i in 0..self.len {
+            if self.data[i] == delimiter {
+                result[count] = current
+                current = String::new()
+                count = count + 1
+            } else {
+                current.push(self.data[i])
+            }
+        }
+        
+        if !current.is_empty() {
+            result[count] = current
+            count = count + 1
+        }
+        
+        return result
+    }
+}
+
+// ============================================================================
+// ARRAY / VECTOR SUPPORT
+// ============================================================================
+
+// Generic Array type
+struct Array<T> {
+    data: *T,
+    capacity: usize,
+}
+
+impl<T> Array<T> {
+    // Create new array with capacity
+    fn new(capacity: usize) -> Array<T> {
+        return Array {
+            data: malloc(capacity),
+            capacity: capacity,
+        }
+    }
+
+    // Get element
+    fn get(self, index: usize) -> Option<T> {
+        if index < self.capacity {
+            return Some(self.data[index])
+        }
+        return None
+    }
+
+    // Set element
+    fn set(mut self, index: usize, value: T) -> bool {
+        if index < self.capacity {
+            self.data[index] = value
+            return true
+        }
+        return false
+    }
+
+    // Get capacity
+    fn capacity(self) -> usize {
+        return self.capacity
+    }
+}
+
+// Memory allocation primitives
+extern fn malloc(size: usize) -> *u8
+extern fn free(ptr: *u8)
+extern fn memcpy(dest: *u8, src: *u8, size: usize)
+extern fn memset(ptr: *u8, val: u8, size: usize)
+
+// ============================================================================
+// NUMERIC UTILITIES
+// ============================================================================
+
+// Integer parsing
+fn parse_i32(s: String) -> Result<i32, String> {
+    let mut result = 0
+    let mut sign = 1
+    let mut start = 0
+
+    if s.len() == 0 {
+        return Result { ok: false, value: 0, error: "Empty string" }
+    }
+
+    if s.data[0] == 45 {  // '-' sign
+        sign = -1
+        start = 1
+    }
+
+    for i in start..s.len() {
+        let ch = s.data[i]
+        if ch >= 48 && ch <= 57 {  // '0'-'9'
+            result = result * 10 + (ch - 48) as i32
+        } else {
+            return Result { ok: false, value: 0, error: "Invalid character" }
+        }
+    }
+
+    return Result {
+        ok: true,
+        value: sign * result,
+        error: "",
+    }
+}
+
+// Float parsing
+fn parse_f64(s: String) -> Result<f64, String> {
+    let mut result = 0.0
+    let mut decimal_part = 0.0
+    let mut decimal_places = 0.0
+    let mut in_decimal = false
+
+    for i in 0..s.len() {
+        let ch = s.data[i]
+        if ch == 46 {  // '.'
+            in_decimal = true
+        } else if ch >= 48 && ch <= 57 {  // '0'-'9'
+            let digit = (ch - 48) as f64
+            if in_decimal {
+                decimal_places = decimal_places + 1.0
+                decimal_part = decimal_part + digit / (10.0 ^ decimal_places)
+            } else {
+                result = result * 10.0 + digit
+            }
+        }
+    }
+
+    return Result {
+        ok: true,
+        value: result + decimal_part,
+        error: "",
+    }
+}
+
+// ============================================================================
+// TIME UTILITIES
+// ============================================================================
+
+// Duration type
+struct Duration {
+    seconds: i64,
+    nanos: i32,
+}
+
+impl Duration {
+    // Create duration from seconds
+    fn from_secs(secs: i64) -> Duration {
+        return Duration {
+            seconds: secs,
+            nanos: 0,
+        }
+    }
+
+    // Create duration from millis
+    fn from_millis(millis: i64) -> Duration {
+        let secs = millis / 1000
+        let nanos = ((millis % 1000) * 1000000) as i32
+        return Duration {
+            seconds: secs,
+            nanos: nanos,
+        }
+    }
+
+    // Get total seconds
+    fn as_secs(self) -> i64 {
+        return self.seconds
+    }
+
+    // Get total millis
+    fn as_millis(self) -> i64 {
+        return self.seconds * 1000 + (self.nanos / 1000000) as i64
+    }
+}
+
+// ============================================================================
+// TYPE CONVERSIONS
+// ============================================================================
+
+trait Into<T> {
+    fn into(self) -> T
+}
+
+trait From<T> {
+    fn from(val: T) -> Self
+}
+
+// Numeric conversions
+impl Into<i64> for i32 {
+    fn into(self) -> i64 {
+        return self as i64
+    }
+}
+
+impl Into<f64> for i32 {
+    fn into(self) -> f64 {
+        return self as f64
+    }
+}
+
+impl Into<f64> for i64 {
+    fn into(self) -> f64 {
+        return self as f64
+    }
+}

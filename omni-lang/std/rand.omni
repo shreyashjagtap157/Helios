@@ -1,0 +1,459 @@
+module std::rand:
+
+// Cryptographically Secure Pseudo-Random Number Generator
+
+extern "C" {
+    fn getrandom(buf: *u8, len: usize, flags: u32) -> i64;
+    fn BCryptGenRandom(algorithm: *u8, buf: *u8, len: u32, flags: u32) -> i32;
+}
+
+// ChaCha20-based CSPRNG
+struct ChaChaRng:
+    state: [u32; 16]
+    buffer: [u8; 64]
+    buffer_pos: usize
+
+impl ChaChaRng:
+    fn new() -> ChaChaRng:
+        let mut seed = [0u8; 32]
+        fill_entropy(&mut seed)
+        ChaChaRng::from_seed(seed)
+
+    fn from_seed(seed: [u8; 32]) -> ChaChaRng:
+        let mut state = [0u32; 16]
+        // ChaCha constants
+        state[0] = 0x61707865
+        state[1] = 0x3320646e
+        state[2] = 0x79622d32
+        state[3] = 0x6b206574
+        // Key (8 words)
+        for i in 0..8:
+            state[4 + i] = u32::from_le_bytes([
+                seed[i*4], seed[i*4+1], seed[i*4+2], seed[i*4+3]
+            ])
+        // Counter + Nonce
+        state[12] = 0
+        state[13] = 0
+        state[14] = 0
+        state[15] = 0
+        
+        ChaChaRng { state, buffer: [0u8; 64], buffer_pos: 64 }
+
+    fn next_u32(self) -> u32:
+        if self.buffer_pos >= 64:
+            self.refill_buffer()
+        let result = u32::from_le_bytes([
+            self.buffer[self.buffer_pos],
+            self.buffer[self.buffer_pos+1],
+            self.buffer[self.buffer_pos+2],
+            self.buffer[self.buffer_pos+3],
+        ])
+        self.buffer_pos += 4
+        result
+
+    fn next_u64(self) -> u64:
+        (self.next_u32() as u64) << 32 | (self.next_u32() as u64)
+
+    fn next_f32(self) -> f32:
+        (self.next_u32() >> 8) as f32 / (1 << 24) as f32
+
+    fn next_f64(self) -> f64:
+        (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
+
+    fn fill_bytes(self, buf: &mut [u8]):
+        for i in 0..buf.len():
+            if self.buffer_pos >= 64:
+                self.refill_buffer()
+            buf[i] = self.buffer[self.buffer_pos]
+            self.buffer_pos += 1
+
+    fn refill_buffer(self):
+        // ChaCha20 block function
+        self.state[12] += 1  // Increment counter
+        self.buffer = chacha_block(&self.state)
+        self.buffer_pos = 0
+
+fn chacha_block(state: &[u32; 16]) -> [u8; 64]:
+    // ChaCha20 quarter-round operations
+    let mut working = state.clone()
+    
+    // Inline quarter round function
+    fn quarter_round(a: &mut u32, b: &mut u32, c: &mut u32, d: &mut u32):
+        *a = a.wrapping_add(*b); *d ^= *a; *d = d.rotate_left(16)
+        *c = c.wrapping_add(*d); *b ^= *c; *b = b.rotate_left(12)
+        *a = a.wrapping_add(*b); *d ^= *a; *d = d.rotate_left(8)
+        *c = c.wrapping_add(*d); *b ^= *c; *b = b.rotate_left(7)
+    
+    // 20 rounds (10 column rounds + 10 diagonal rounds)
+    for _ in 0..10:
+        // Column rounds
+        quarter_round(&mut working[0], &mut working[4], &mut working[8], &mut working[12])
+        quarter_round(&mut working[1], &mut working[5], &mut working[9], &mut working[13])
+        quarter_round(&mut working[2], &mut working[6], &mut working[10], &mut working[14])
+        quarter_round(&mut working[3], &mut working[7], &mut working[11], &mut working[15])
+        
+        // Diagonal rounds
+        quarter_round(&mut working[0], &mut working[5], &mut working[10], &mut working[15])
+        quarter_round(&mut working[1], &mut working[6], &mut working[11], &mut working[12])
+        quarter_round(&mut working[2], &mut working[7], &mut working[8], &mut working[13])
+        quarter_round(&mut working[3], &mut working[4], &mut working[9], &mut working[14])
+    
+    // Add original state
+    for i in 0..16:
+        working[i] = working[i].wrapping_add(state[i])
+    
+    // Serialize to bytes (little-endian)
+    let mut output = [0u8; 64]
+    for i in 0..16:
+        let bytes = working[i].to_le_bytes()
+        output[i*4] = bytes[0]
+        output[i*4 + 1] = bytes[1]
+        output[i*4 + 2] = bytes[2]
+        output[i*4 + 3] = bytes[3]
+    
+    output
+
+// Seeding from OS entropy
+fn fill_entropy(buf: &mut [u8]):
+    let len = buf.len()
+    
+    if cfg!(target_os = "windows"):
+        // Windows: BCryptGenRandom
+        // BCRYPT_USE_SYSTEM_PREFERRED_RNG = 0x00000002
+        let result = BCryptGenRandom(null(), buf.as_mut_ptr(), len as u32, 2)
+        if result != 0:
+            // Fallback to time-based seed
+            fallback_entropy(buf)
+    else:
+        // Linux/macOS: getrandom()
+        let result = getrandom(buf.as_mut_ptr(), len, 0)
+        if result < 0:
+            // Try /dev/urandom fallback
+            if let Ok(mut file) = std::fs::File::open("/dev/urandom"):
+                file.read(buf).ok()
+            else:
+                fallback_entropy(buf)
+
+fn fallback_entropy(buf: &mut [u8]):
+    // Emergency fallback using time and memory addresses
+    // NOT cryptographically secure!
+    let time = std::time::Instant::now()
+    let addr = buf.as_ptr() as u64
+    let mut state = time.elapsed().as_nanos() as u64 ^ addr
+    
+    for i in 0..buf.len():
+        // Simple xorshift64
+        state ^= state << 13
+        state ^= state >> 7
+        state ^= state << 17
+        buf[i] = (state & 0xFF) as u8
+
+// ===========================================================
+// Rng Trait for extensibility
+// ===========================================================
+
+trait Rng:
+    fn next_u32(&mut self) -> u32
+    fn next_u64(&mut self) -> u64
+    fn fill_bytes(&mut self, buf: &mut [u8])
+
+impl Rng for ChaChaRng:
+    fn next_u32(&mut self) -> u32:
+        self.next_u32()
+    
+    fn next_u64(&mut self) -> u64:
+        self.next_u64()
+    
+    fn fill_bytes(&mut self, buf: &mut [u8]):
+        self.fill_bytes(buf)
+
+// ===========================================================
+// Xorshift128+ (Fast, non-cryptographic)
+// ===========================================================
+
+struct Xorshift128:
+    s0: u64
+    s1: u64
+
+impl Xorshift128:
+    fn new() -> Xorshift128:
+        let mut seed = [0u8; 16]
+        fill_entropy(&mut seed)
+        Xorshift128::from_seed(seed)
+    
+    fn from_seed(seed: [u8; 16]) -> Xorshift128:
+        let s0 = u64::from_le_bytes([
+            seed[0], seed[1], seed[2], seed[3],
+            seed[4], seed[5], seed[6], seed[7]
+        ])
+        let s1 = u64::from_le_bytes([
+            seed[8], seed[9], seed[10], seed[11],
+            seed[12], seed[13], seed[14], seed[15]
+        ])
+        
+        // Ensure non-zero state
+        let s0 = if s0 == 0 { 0xdeadbeefcafebabe } else { s0 }
+        let s1 = if s1 == 0 { 0x8badf00dcafed00d } else { s1 }
+        
+        Xorshift128 { s0, s1 }
+    
+    fn from_u64(seed: u64) -> Xorshift128:
+        // Use splitmix64 to initialize state
+        let mut s = seed
+        
+        fn splitmix(x: &mut u64) -> u64:
+            *x = x.wrapping_add(0x9e3779b97f4a7c15)
+            let mut z = *x
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9)
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb)
+            z ^ (z >> 31)
+        
+        Xorshift128 {
+            s0: splitmix(&mut s),
+            s1: splitmix(&mut s),
+        }
+    
+    fn next_u64(&mut self) -> u64:
+        let s0 = self.s0
+        let mut s1 = self.s1
+        let result = s0.wrapping_add(s1)
+        
+        s1 ^= s0
+        self.s0 = s0.rotate_left(24) ^ s1 ^ (s1 << 16)
+        self.s1 = s1.rotate_left(37)
+        
+        result
+    
+    fn next_u32(&mut self) -> u32:
+        (self.next_u64() >> 32) as u32
+    
+    fn next_f64(&mut self) -> f64:
+        (self.next_u64() >> 11) as f64 * (1.0 / (1u64 << 53) as f64)
+    
+    fn next_f32(&mut self) -> f32:
+        (self.next_u32() >> 8) as f32 * (1.0 / (1u32 << 24) as f32)
+
+impl Rng for Xorshift128:
+    fn next_u32(&mut self) -> u32:
+        self.next_u32()
+    
+    fn next_u64(&mut self) -> u64:
+        self.next_u64()
+    
+    fn fill_bytes(&mut self, buf: &mut [u8]):
+        let mut i: usize = 0
+        while i + 8 <= buf.len():
+            let val = self.next_u64().to_le_bytes()
+            buf[i..i+8].copy_from_slice(&val)
+            i += 8
+        while i < buf.len():
+            buf[i] = (self.next_u64() & 0xFF) as u8
+            i += 1
+
+// ===========================================================
+// PCG (Permuted Congruential Generator)
+// ===========================================================
+
+struct Pcg32:
+    state: u64
+    inc: u64
+
+impl Pcg32:
+    fn new() -> Pcg32:
+        let mut seed = [0u8; 16]
+        fill_entropy(&mut seed)
+        Pcg32::from_seed(seed)
+    
+    fn from_seed(seed: [u8; 16]) -> Pcg32:
+        let state = u64::from_le_bytes([
+            seed[0], seed[1], seed[2], seed[3],
+            seed[4], seed[5], seed[6], seed[7]
+        ])
+        let inc = u64::from_le_bytes([
+            seed[8], seed[9], seed[10], seed[11],
+            seed[12], seed[13], seed[14], seed[15]
+        ]) | 1  // Inc must be odd
+        
+        let mut rng = Pcg32 { state: 0, inc }
+        rng.state = state.wrapping_add(inc)
+        rng.next_u32()  // Discard first value
+        rng
+    
+    fn next_u32(&mut self) -> u32:
+        let old_state = self.state
+        
+        // Advance internal state
+        self.state = old_state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(self.inc)
+        
+        // Calculate output (XSH-RR)
+        let xorshifted = (((old_state >> 18) ^ old_state) >> 27) as u32
+        let rot = (old_state >> 59) as u32
+        xorshifted.rotate_right(rot)
+    
+    fn next_u64(&mut self) -> u64:
+        (self.next_u32() as u64) << 32 | (self.next_u32() as u64)
+    
+    fn next_f64(&mut self) -> f64:
+        (self.next_u64() >> 11) as f64 * (1.0 / (1u64 << 53) as f64)
+
+// ===========================================================
+// Distributions
+// ===========================================================
+
+struct Uniform:
+    min: f64
+    max: f64
+
+impl Uniform:
+    fn new(min: f64, max: f64) -> Uniform:
+        Uniform { min, max }
+    
+    fn sample(&self, rng: &mut impl Rng) -> f64:
+        let u = rng.next_u64() as f64 / u64::MAX as f64
+        self.min + (self.max - self.min) * u
+
+struct UniformInt:
+    min: i64
+    max: i64
+
+impl UniformInt:
+    fn new(min: i64, max: i64) -> UniformInt:
+        UniformInt { min, max }
+    
+    fn sample(&self, rng: &mut impl Rng) -> i64:
+        let range = (self.max - self.min) as u64 + 1
+        if range == 0:
+            return rng.next_u64() as i64
+        
+        // Avoid modulo bias
+        let threshold = (u64::MAX - range + 1) % range
+        loop:
+            let r = rng.next_u64()
+            if r >= threshold:
+                return self.min + (r % range) as i64
+
+struct Normal:
+    mean: f64
+    std_dev: f64
+
+impl Normal:
+    fn new(mean: f64, std_dev: f64) -> Normal:
+        Normal { mean, std_dev }
+    
+    fn standard() -> Normal:
+        Normal { mean: 0.0, std_dev: 1.0 }
+    
+    fn sample(&self, rng: &mut impl Rng) -> f64:
+        // Box-Muller transform
+        let u1 = loop:
+            let u = rng.next_f64()
+            if u > 0.0:
+                break u
+        let u2 = rng.next_f64()
+        
+        let z = (-2.0 * u1.ln()).sqrt() * (2.0 * std::math::PI * u2).cos()
+        self.mean + z * self.std_dev
+
+struct Exponential:
+    lambda: f64
+
+impl Exponential:
+    fn new(lambda: f64) -> Exponential:
+        assert!(lambda > 0.0)
+        Exponential { lambda }
+    
+    fn sample(&self, rng: &mut impl Rng) -> f64:
+        let u = loop:
+            let u = rng.next_f64()
+            if u > 0.0:
+                break u
+        -u.ln() / self.lambda
+
+struct Bernoulli:
+    p: f64
+
+impl Bernoulli:
+    fn new(p: f64) -> Bernoulli:
+        assert!(p >= 0.0 and p <= 1.0)
+        Bernoulli { p }
+    
+    fn sample(&self, rng: &mut impl Rng) -> bool:
+        rng.next_f64() < self.p
+
+struct Binomial:
+    n: u64
+    p: f64
+
+impl Binomial:
+    fn new(n: u64, p: f64) -> Binomial:
+        Binomial { n, p }
+    
+    fn sample(&self, rng: &mut impl Rng) -> u64:
+        let mut count: u64 = 0
+        for _ in 0..self.n:
+            if rng.next_f64() < self.p:
+                count += 1
+        count
+
+struct Poisson:
+    lambda: f64
+
+impl Poisson:
+    fn new(lambda: f64) -> Poisson:
+        Poisson { lambda }
+    
+    fn sample(&self, rng: &mut impl Rng) -> u64:
+        // Knuth's algorithm
+        let l = (-self.lambda).exp()
+        let mut k: u64 = 0
+        let mut p = 1.0
+        
+        loop:
+            k += 1
+            p *= rng.next_f64()
+            if p <= l:
+                break
+        
+        k - 1
+
+// Thread-local RNG
+thread_local static RNG: ChaChaRng = ChaChaRng::new()
+
+fn random() -> f64:
+    RNG.next_f64()
+
+fn random_range(min: i64, max: i64) -> i64:
+    let range = (max - min) as u64
+    let r = RNG.next_u64() % range
+    min + r as i64
+
+fn random_bool() -> bool:
+    RNG.next_u32() & 1 == 1
+
+fn shuffle<T>(slice: &mut [T]):
+    // Fisher-Yates shuffle
+    for i in (1..slice.len()).rev():
+        let j = random_range(0, i as i64 + 1) as usize
+        slice.swap(i, j)
+
+fn choice<T>(slice: &[T]) -> Option<&T>:
+    if slice.is_empty():
+        None
+    else:
+        Some(&slice[random_range(0, slice.len() as i64) as usize])
+
+// Normal distribution (Box-Muller)
+fn normal(mean: f64, std: f64) -> f64:
+    let u1 = random()
+    let u2 = random()
+    let z = (-2.0 * u1.ln()).sqrt() * (2.0 * std::math::PI * u2).cos()
+    mean + z * std
+
+// Reproducible seeding for training
+fn set_seed(seed: u64):
+    let bytes = seed.to_le_bytes()
+    let mut full_seed = [0u8; 32]
+    full_seed[..8].copy_from_slice(&bytes)
+    RNG = ChaChaRng::from_seed(full_seed)

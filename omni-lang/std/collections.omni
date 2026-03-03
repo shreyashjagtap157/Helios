@@ -1,0 +1,565 @@
+// Omni Standard Library: Collections
+// Common data structures and algorithms (Full Implementation)
+
+module std::collections
+
+import std::core
+
+// ============================================
+// Sequential Collections
+// ============================================
+
+// Dynamic growable array
+struct Vector<T>:
+    data: Box<[T]>  // Native managed array
+    len: usize
+    cap: usize
+    
+    fn new() -> Vector<T>:
+        Vector { 
+            data: Box::new_array(0),
+            len: 0, 
+            cap: 0 
+        }
+        
+    fn with_capacity(cap: usize) -> Vector<T>:
+        Vector {
+            data: Box::new_array(cap),
+            len: 0,
+            cap: cap
+        }
+        
+    fn push(&mut self, value: T):
+        if self.len == self.cap:
+            self._grow()
+        
+        self.data[self.len] = value
+        self.len += 1
+        
+    fn pop(&mut self) -> Option<T>:
+        if self.len == 0:
+            return Option::None
+            
+        self.len -= 1
+        // Extract value (move semantics assumed)
+        let val = self.data[self.len].clone() 
+        return Option::Some(val)
+        
+    fn get(&self, index: usize) -> Option<&T>:
+        if index >= self.len:
+            return Option::None
+        return Option::Some(&self.data[index])
+    
+    fn get_mut(&mut self, index: usize) -> Option<&mut T>:
+        if index >= self.len:
+            return Option::None
+        return Option::Some(&mut self.data[index])
+
+    fn set(&mut self, index: usize, value: T):
+        if index < self.len:
+            self.data[index] = value
+        else:
+            panic("Index out of bounds")
+
+    fn swap(&mut self, i: usize, j: usize):
+        if i >= self.len || j >= self.len:
+            panic("Index out of bounds")
+        let temp = self.data[i].clone()
+        self.data[i] = self.data[j].clone()
+        self.data[j] = temp
+
+    fn len(&self) -> usize:
+        self.len
+        
+    fn is_empty(&self) -> bool:
+        self.len == 0
+
+    fn clear(&mut self):
+        self.len = 0
+
+    fn _grow(&mut self):
+        let new_cap = if self.cap == 0 { 4 } else { self.cap * 2 }
+        let mut new_data = Box::new_array(new_cap)
+        
+        // Copy elements
+        for i in 0..self.len:
+            new_data[i] = self.data[i].clone() // Assuming ownership transfer optimization
+            
+        self.data = new_data
+        self.cap = new_cap
+        
+    // Iterator support
+    fn iter(&self) -> VectorIterator<T>:
+        VectorIterator { vec: self, index: 0 }
+
+struct VectorIterator<'a, T>:
+    vec: &'a Vector<T>
+    index: usize
+    
+    fn next(&mut self) -> Option<&'a T>:
+        if self.index < self.vec.len():
+            let ret = self.vec.get(self.index)
+            self.index += 1
+            return ret
+        return Option::None
+
+
+// ============================================
+// Associative Collections
+// ============================================
+
+// Hash Map (Key-Value store) - using simple chaining
+struct HashMap<K: Hash + PartialEq, V>:
+    buckets: Vector<Vector<Entry<K, V>>>
+    len: usize
+    
+    fn new() -> HashMap<K, V>:
+        let mut buckets = Vector::with_capacity(16)
+        for _ in 0..16:
+            buckets.push(Vector::new())
+        HashMap { buckets, len: 0 }
+        
+    fn insert(&mut self, key: K, value: V) -> Option<V>:
+        if self.len >= self.buckets.len() * 3 / 4:
+            self._resize()
+            
+        let hash = key.hash()
+        let idx = hash % self.buckets.len()
+        let bucket = self.buckets.get_mut(idx).unwrap()
+        
+        // Check for update
+        for i in 0..bucket.len():
+            let entry = bucket.get_mut(i).unwrap()
+            if entry.key == key:
+                let old = entry.value.clone()
+                entry.value = value
+                return Option::Some(old)
+        
+        // Insert new
+        bucket.push(Entry { key, value })
+        self.len += 1
+        return Option::None
+        
+    fn get(&self, key: &K) -> Option<&V>:
+        let hash = key.hash()
+        let idx = hash % self.buckets.len()
+        let bucket = self.buckets.get(idx).unwrap()
+        
+        for entry in bucket.iter() {
+            if &entry.key == key:
+                return Option::Some(&entry.value)
+        }
+        return Option::None
+        
+    fn contains_key(&self, key: &K) -> bool:
+        self.get(key).is_some()
+
+    fn len(&self) -> usize:
+        self.len
+
+    fn _resize(&mut self):
+        let new_size = self.buckets.len() * 2
+        let mut new_buckets = Vector::with_capacity(new_size)
+        for _ in 0..new_size:
+            new_buckets.push(Vector::new())
+            
+        // Rehash all items
+        for old_bucket in self.buckets.iter():
+            for entry in old_bucket.iter():
+                let hash = entry.key.hash()
+                let idx = hash % new_size
+                new_buckets.get_mut(idx).unwrap().push(entry.clone())
+        
+        self.buckets = new_buckets
+
+struct Entry<K, V>:
+    key: K
+    value: V
+
+trait Hash:
+    fn hash(&self) -> usize
+
+// Hash Set (Unique items)
+struct HashSet<T: Hash + PartialEq>:
+    map: HashMap<T, ()>
+    
+    fn new() -> HashSet<T>:
+        HashSet { map: HashMap::new() }
+        
+    fn insert(&mut self, value: T) -> bool:
+        if self.map.contains_key(&value):
+            return false
+        self.map.insert(value, ())
+        return true
+        
+    fn contains(&self, value: &T) -> bool:
+        self.map.contains_key(value)
+
+// ============================================
+// Concurrent Collections
+// ============================================
+
+// Double-ended queue (Ring buffer impl)
+struct Deque<T>:
+    buf: Vector<Option<T>>
+    head: usize
+    tail: usize
+    len: usize
+    cap: usize
+    
+    fn new() -> Deque<T>:
+        let mut buf = Vector::with_capacity(8)
+        for _ in 0..8:
+            buf.push(Option::None)
+        Deque { buf, head: 0, tail: 0, len: 0, cap: 8 }
+    
+    fn push_back(&mut self, val: T):
+        if self.len == self.cap:
+            self._grow()
+        self.buf.set(self.tail, Option::Some(val))
+        self.tail = (self.tail + 1) % self.cap
+        self.len += 1
+        
+    fn push_front(&mut self, val: T):
+        if self.len == self.cap:
+            self._grow()
+        self.head = (self.head + self.cap - 1) % self.cap
+        self.buf.set(self.head, Option::Some(val))
+        self.len += 1
+        
+    fn pop_back(&mut self) -> Option<T>:
+        if self.len == 0:
+            return Option::None
+        self.tail = (self.tail + self.cap - 1) % self.cap
+        let val = self.buf.get(self.tail).unwrap().take()
+        self.len -= 1
+        val
+        
+    fn pop_front(&mut self) -> Option<T>:
+        if self.len == 0:
+            return Option::None
+        let val = self.buf.get(self.head).unwrap().take()
+        self.head = (self.head + 1) % self.cap
+        self.len -= 1
+        val
+        
+    fn front(&self) -> Option<&T>:
+        if self.len == 0: return Option::None
+        match self.buf.get(self.head).unwrap():
+            Option::Some(ref v) => Option::Some(v)
+            Option::None => Option::None
+            
+    fn back(&self) -> Option<&T>:
+        if self.len == 0: return Option::None
+        let idx = (self.tail + self.cap - 1) % self.cap
+        match self.buf.get(idx).unwrap():
+            Option::Some(ref v) => Option::Some(v)
+            Option::None => Option::None
+
+    fn is_empty(&self) -> bool:
+        self.len == 0
+        
+    fn len(&self) -> usize:
+        self.len
+
+    fn _grow(&mut self):
+        let new_cap = self.cap * 2
+        let mut new_buf = Vector::with_capacity(new_cap)
+        // Copy in logical order from head to tail
+        let mut curr = self.head
+        for _ in 0..self.len:
+            new_buf.push(self.buf.get(curr).unwrap().take())
+            curr = (curr + 1) % self.cap
+        for _ in self.len..new_cap:
+            new_buf.push(Option::None)
+        
+        self.buf = new_buf
+        self.head = 0
+        self.tail = self.len
+        self.cap = new_cap
+
+// ============================================
+// Binary Heap (Priority Queue)
+// ============================================
+
+struct BinaryHeap<T: Ord>:
+    data: Vector<T>
+    
+    fn new() -> BinaryHeap<T>:
+        BinaryHeap { data: Vector::new() }
+        
+    fn push(&mut self, value: T):
+        self.data.push(value)
+        self._sift_up(self.data.len() - 1)
+        
+    fn pop(&mut self) -> Option<T>:
+        if self.data.is_empty():
+            return Option::None
+        let n = self.data.len()
+        self.data.swap(0, n - 1)
+        let result = self.data.pop()
+        if !self.data.is_empty():
+            self._sift_down(0)
+        result
+        
+    fn peek(&self) -> Option<&T>:
+        self.data.get(0)
+        
+    fn len(&self) -> usize:
+        self.data.len()
+        
+    fn is_empty(&self) -> bool:
+        self.data.is_empty()
+        
+    fn _sift_up(&mut self, mut idx: usize):
+        while idx > 0:
+            let parent = (idx - 1) / 2
+            if self.data.get(idx).unwrap() > self.data.get(parent).unwrap():
+                self.data.swap(idx, parent)
+                idx = parent
+            else:
+                break
+                
+    fn _sift_down(&mut self, mut idx: usize):
+        let len = self.data.len()
+        loop:
+            let left = 2 * idx + 1
+            let right = 2 * idx + 2
+            let mut largest = idx
+            
+            if left < len && self.data.get(left).unwrap() > self.data.get(largest).unwrap():
+                largest = left
+            if right < len && self.data.get(right).unwrap() > self.data.get(largest).unwrap():
+                largest = right
+                
+            if largest != idx:
+                self.data.swap(idx, largest)
+                idx = largest
+            else:
+                break
+
+// ============================================
+// B-Tree Map (Balanced tree for sorted access)
+// ============================================
+
+const BTREE_B: usize = 6  // Minimum degree
+
+struct BTreeMap<K: Ord, V>:
+    root: Option<Box<BTreeNode<K, V>>>
+    len: usize
+    
+    fn new() -> BTreeMap<K, V>:
+        BTreeMap { root: Option::None, len: 0 }
+        
+    fn insert(&mut self, key: K, value: V) -> Option<V>:
+        match &mut self.root:
+            Option::None =>
+                let mut node = BTreeNode::new_leaf()
+                node.keys.push(key)
+                node.values.push(value)
+                self.root = Option::Some(Box::new(node))
+                self.len += 1
+                Option::None
+            Option::Some(root) =>
+                if root.keys.len() == 2 * BTREE_B - 1:
+                    // Root is full, split it
+                    let mut new_root = BTreeNode::new_internal()
+                    new_root.children.push(self.root.take().unwrap())
+                    self._split_child(&mut new_root, 0)
+                    self.root = Option::Some(Box::new(new_root))
+                self._insert_non_full(self.root.as_mut().unwrap(), key, value)
+                
+    fn get(&self, key: &K) -> Option<&V>:
+        self._search(&self.root, key)
+        
+    fn contains_key(&self, key: &K) -> bool:
+        self.get(key).is_some()
+        
+    fn len(&self) -> usize:
+        self.len
+        
+    fn _search(&self, node: &Option<Box<BTreeNode<K, V>>>, key: &K) -> Option<&V>:
+        match node:
+            Option::None => Option::None
+            Option::Some(n) =>
+                let mut i = 0
+                while i < n.keys.len() && key > n.keys.get(i).unwrap():
+                    i += 1
+                if i < n.keys.len() && key == n.keys.get(i).unwrap():
+                    return Option::Some(n.values.get(i).unwrap())
+                if n.is_leaf:
+                    return Option::None
+                self._search(n.children.get(i), key)
+                
+    fn _split_child(&mut self, parent: &mut BTreeNode<K, V>, idx: usize):
+        let child = parent.children.get_mut(idx).unwrap()
+        let mut sibling = BTreeNode::new_with_leaf(child.is_leaf)
+        
+        // Move second half to sibling
+        let mid = BTREE_B - 1
+        for i in mid+1..child.keys.len():
+            sibling.keys.push(child.keys.get(i).unwrap().clone())
+            sibling.values.push(child.values.get(i).unwrap().clone())
+            
+        if !child.is_leaf:
+            for i in mid+1..child.children.len():
+                sibling.children.push(child.children.get(i).unwrap().clone())
+                
+        let mid_key = child.keys.get(mid).unwrap().clone()
+        let mid_val = child.values.get(mid).unwrap().clone()
+        
+        child.keys.truncate(mid)
+        child.values.truncate(mid)
+        if !child.is_leaf:
+            child.children.truncate(mid + 1)
+            
+        parent.keys.insert(idx, mid_key)
+        parent.values.insert(idx, mid_val)
+        parent.children.insert(idx + 1, Box::new(sibling))
+        
+    fn _insert_non_full(&mut self, node: &mut Box<BTreeNode<K, V>>, key: K, value: V) -> Option<V>:
+        let mut i = node.keys.len()
+        if node.is_leaf:
+            // Find insert position
+            while i > 0 && key < *node.keys.get(i-1).unwrap():
+                i -= 1
+            if i < node.keys.len() && key == *node.keys.get(i).unwrap():
+                // Update existing
+                let old = node.values.get(i).unwrap().clone()
+                node.values.set(i, value)
+                return Option::Some(old)
+            node.keys.insert(i, key)
+            node.values.insert(i, value)
+            self.len += 1
+            Option::None
+        else:
+            while i > 0 && key < *node.keys.get(i-1).unwrap():
+                i -= 1
+            if node.children.get(i).unwrap().keys.len() == 2 * BTREE_B - 1:
+                self._split_child(node.as_mut(), i)
+                if key > *node.keys.get(i).unwrap():
+                    i += 1
+            self._insert_non_full(node.children.get_mut(i).unwrap(), key, value)
+
+struct BTreeNode<K, V>:
+    keys: Vector<K>
+    values: Vector<V>
+    children: Vector<Box<BTreeNode<K, V>>>
+    is_leaf: bool
+    
+    fn new_leaf() -> BTreeNode<K, V>:
+        BTreeNode {
+            keys: Vector::new(),
+            values: Vector::new(),
+            children: Vector::new(),
+            is_leaf: true
+        }
+        
+    fn new_internal() -> BTreeNode<K, V>:
+        BTreeNode {
+            keys: Vector::new(),
+            values: Vector::new(),
+            children: Vector::new(),
+            is_leaf: false
+        }
+        
+    fn new_with_leaf(is_leaf: bool) -> BTreeNode<K, V>:
+        BTreeNode {
+            keys: Vector::new(),
+            values: Vector::new(),
+            children: Vector::new(),
+            is_leaf
+        }
+
+// ============================================
+// Linked List
+// ============================================
+
+struct LinkedList<T>:
+    head: Option<Box<ListNode<T>>>
+    tail: *mut ListNode<T>  // Raw pointer for O(1) tail access
+    len: usize
+    
+    fn new() -> LinkedList<T>:
+        LinkedList { head: Option::None, tail: null_mut(), len: 0 }
+        
+    fn push_front(&mut self, value: T):
+        let mut node = Box::new(ListNode { value, next: self.head.take() })
+        if self.tail.is_null():
+            self.tail = node.as_mut() as *mut ListNode<T>
+        self.head = Option::Some(node)
+        self.len += 1
+        
+    fn push_back(&mut self, value: T):
+        let node = Box::new(ListNode { value, next: Option::None })
+        let raw = Box::into_raw(node)
+        if self.tail.is_null():
+            self.head = Option::Some(unsafe { Box::from_raw(raw) })
+        else:
+            unsafe { (*self.tail).next = Option::Some(Box::from_raw(raw)) }
+        self.tail = raw
+        self.len += 1
+        
+    fn pop_front(&mut self) -> Option<T>:
+        match self.head.take():
+            Option::None => Option::None
+            Option::Some(mut node) =>
+                self.head = node.next.take()
+                if self.head.is_none():
+                    self.tail = null_mut()
+                self.len -= 1
+                Option::Some(node.value)
+                
+    fn front(&self) -> Option<&T>:
+        self.head.as_ref().map(|n| &n.value)
+        
+    fn len(&self) -> usize:
+        self.len
+        
+    fn is_empty(&self) -> bool:
+        self.len == 0
+        
+    fn iter(&self) -> LinkedListIter<T>:
+        LinkedListIter { current: self.head.as_ref().map(|n| n.as_ref()) }
+
+struct ListNode<T>:
+    value: T
+    next: Option<Box<ListNode<T>>>
+
+struct LinkedListIter<'a, T>:
+    current: Option<&'a ListNode<T>>
+    
+impl<'a, T> Iterator for LinkedListIter<'a, T>:
+    type Item = &'a T
+    
+    fn next(&mut self) -> Option<&'a T>:
+        match self.current.take():
+            Option::None => Option::None
+            Option::Some(node) =>
+                self.current = node.next.as_ref().map(|n| n.as_ref())
+                Option::Some(&node.value)
+
+// ============================================
+// Range
+// ============================================
+
+struct Range<T: Ord + Add<Output=T> + Clone>:
+    start: T
+    end: T
+    
+    fn new(start: T, end: T) -> Range<T>:
+        Range { start, end }
+        
+    fn contains(&self, value: &T) -> bool:
+        value >= &self.start && value < &self.end
+
+impl<T: Ord + Add<Output=T> + Clone> Iterator for Range<T>:
+    type Item = T
+    
+    fn next(&mut self) -> Option<T>:
+        if self.start >= self.end:
+            Option::None
+        else:
+            let current = self.start.clone()
+            self.start = self.start.clone() + T::one()
+            Option::Some(current)

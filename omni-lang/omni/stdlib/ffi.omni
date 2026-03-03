@@ -1,0 +1,763 @@
+module std::ffi
+
+// ============================================================================
+// Omni Standard Library — Foreign Function Interface
+// ============================================================================
+// CStr/CString types, dynamic library loading, C type definitions,
+// function pointers, and layout helpers for safe C interop.
+
+import std::core::{Option, Some, None, Result, Ok, Err, String, Clone, Drop, Debug, Display, PartialEq, Formatter, Iterator}
+import std::collections::{Vector}
+import std::mem::{alloc, dealloc, size_of, align_of, Box}
+
+// ============================================================================
+// C Type Aliases
+// ============================================================================
+
+type c_void = u8
+type c_char = i8
+type c_uchar = u8
+type c_short = i16
+type c_ushort = u16
+type c_int = i32
+type c_uint = u32
+type c_long = i64       // 64-bit on LP64, but i32 on Windows LLP64
+type c_ulong = u64
+type c_longlong = i64
+type c_ulonglong = u64
+type c_float = f32
+type c_double = f64
+type c_size_t = usize
+type c_ssize_t = isize
+type c_ptrdiff_t = isize
+type c_intptr_t = isize
+type c_uintptr_t = usize
+
+// ============================================================================
+// CStr — Borrowed null-terminated string (does NOT own memory)
+// ============================================================================
+
+struct CStr:
+    ptr: *const c_char
+    len: usize          // cached length, NOT including null
+
+    // Create from raw pointer. UNSAFE: pointer must be valid and null-terminated.
+    fn from_ptr(ptr: *const c_char) -> own CStr:
+        let length = c_strlen(ptr)
+        return CStr { ptr, len: length }
+
+    // Create from a byte slice that already contains a null terminator
+    fn from_bytes_with_nul(bytes: &[u8]) -> Result<CStr, str>:
+        if bytes.len() == 0:
+            return Err("empty slice")
+        if bytes[bytes.len() - 1] != 0:
+            return Err("missing null terminator")
+        // Check for interior nulls
+        for i in 0..(bytes.len() - 1):
+            if bytes[i] == 0:
+                return Err("interior null byte")
+        return Ok(CStr {
+            ptr: bytes.as_ptr() as *const c_char,
+            len: bytes.len() - 1,
+        })
+
+    fn as_ptr(&self) -> *const c_char:
+        return self.ptr
+
+    fn len(&self) -> usize:
+        return self.len
+
+    fn is_empty(&self) -> bool:
+        return self.len == 0
+
+    fn to_bytes(&self) -> &[u8]:
+        return unsafe { std::mem::slice_from_raw_parts(self.ptr as *const u8, self.len) }
+
+    fn to_bytes_with_nul(&self) -> &[u8]:
+        return unsafe { std::mem::slice_from_raw_parts(self.ptr as *const u8, self.len + 1) }
+
+    fn to_str(&self) -> Result<&str, str>:
+        let bytes = self.to_bytes()
+        if std::core::is_valid_utf8(bytes):
+            return Ok(unsafe { std::core::str_from_utf8_unchecked(bytes) })
+        return Err("invalid UTF-8 in CStr")
+
+    fn to_string_lossy(&self) -> String:
+        let bytes = self.to_bytes()
+        let mut s = String::with_capacity(self.len)
+        for i in 0..self.len:
+            let b = bytes[i]
+            if b < 128:
+                s.push(b as char)
+            else:
+                s.push('\u{FFFD}')  // replacement character
+        return s
+
+impl PartialEq for CStr:
+    fn eq(&self, other: &CStr) -> bool:
+        if self.len != other.len:
+            return false
+        let a = self.to_bytes()
+        let b = other.to_bytes()
+        for i in 0..self.len:
+            if a[i] != b[i]:
+                return false
+        return true
+
+impl Display for CStr:
+    fn fmt(&self, f: &mut Formatter) -> Result<(), str>:
+        match self.to_str():
+            Ok(s) => f.write_str(s)
+            Err(_) => f.write_str(&self.to_string_lossy())
+
+// ============================================================================
+// CString — Owned null-terminated string (heap-allocated)
+// ============================================================================
+
+struct CString:
+    data: Vector<u8>    // includes null terminator
+
+    fn new(s: &str) -> Result<CString, str>:
+        // Check for interior nulls
+        let bytes = s.as_bytes()
+        for i in 0..bytes.len():
+            if bytes[i] == 0:
+                return Err("interior null byte in CString::new")
+        let mut data = Vector::with_capacity(bytes.len() + 1)
+        data.extend_from_slice(bytes)
+        data.push(0)  // null terminator
+        return Ok(CString { data })
+
+    fn from_vec(mut bytes: Vector<u8>) -> Result<CString, str>:
+        for i in 0..bytes.len():
+            if bytes[i] == 0:
+                return Err("interior null byte")
+        bytes.push(0)
+        return Ok(CString { data: bytes })
+
+    // UNSAFE: create from raw parts
+    fn from_raw(ptr: *mut c_char) -> own CString:
+        let len = c_strlen(ptr as *const c_char)
+        let mut data = Vector::with_capacity(len + 1)
+        unsafe:
+            for i in 0..=len:
+                data.push(*(ptr as *const u8).offset(i as isize))
+        return CString { data }
+
+    fn as_c_str(&self) -> CStr:
+        return CStr {
+            ptr: self.data.as_ptr() as *const c_char,
+            len: self.data.len() - 1,
+        }
+
+    fn as_ptr(&self) -> *const c_char:
+        return self.data.as_ptr() as *const c_char
+
+    fn as_mut_ptr(&mut self) -> *mut c_char:
+        return self.data.as_mut_ptr() as *mut c_char
+
+    fn len(&self) -> usize:
+        return self.data.len() - 1  // exclude null
+
+    fn is_empty(&self) -> bool:
+        return self.len() == 0
+
+    fn to_str(&self) -> Result<&str, str>:
+        return self.as_c_str().to_str()
+
+    fn into_string(self) -> Result<String, str>:
+        let mut s = String::with_capacity(self.len())
+        match self.to_str():
+            Ok(str_ref) =>
+                s.push_str(str_ref)
+                Ok(s)
+            Err(e) => Err(e)
+
+    fn into_raw(self) -> *mut c_char:
+        let ptr = self.data.as_mut_ptr() as *mut c_char
+        std::mem::forget(self)
+        return ptr
+
+    fn into_bytes(self) -> Vector<u8>:
+        let mut v = self.data
+        v.pop()  // remove null
+        return v
+
+impl Clone for CString:
+    fn clone(&self) -> own CString:
+        return CString { data: self.data.clone() }
+
+impl Display for CString:
+    fn fmt(&self, f: &mut Formatter) -> Result<(), str>:
+        self.as_c_str().fmt(f)
+
+impl PartialEq for CString:
+    fn eq(&self, other: &CString) -> bool:
+        return self.data == other.data
+
+// ============================================================================
+// C String Utilities
+// ============================================================================
+
+fn c_strlen(ptr: *const c_char) -> usize:
+    if ptr.is_null():
+        return 0
+    let mut len: usize = 0
+    unsafe:
+        while *(ptr.offset(len as isize)) != 0:
+            len += 1
+    return len
+
+fn c_strcmp(a: *const c_char, b: *const c_char) -> i32:
+    let mut i: usize = 0
+    unsafe:
+        loop:
+            let ca = *(a.offset(i as isize)) as u8
+            let cb = *(b.offset(i as isize)) as u8
+            if ca != cb:
+                return (ca as i32) - (cb as i32)
+            if ca == 0:
+                return 0
+            i += 1
+
+fn c_strncmp(a: *const c_char, b: *const c_char, n: usize) -> i32:
+    let mut i: usize = 0
+    unsafe:
+        while i < n:
+            let ca = *(a.offset(i as isize)) as u8
+            let cb = *(b.offset(i as isize)) as u8
+            if ca != cb:
+                return (ca as i32) - (cb as i32)
+            if ca == 0:
+                return 0
+            i += 1
+    return 0
+
+fn c_strcpy(dst: *mut c_char, src: *const c_char) -> *mut c_char:
+    let mut i: usize = 0
+    unsafe:
+        loop:
+            let ch = *(src.offset(i as isize))
+            *(dst.offset(i as isize)) = ch
+            if ch == 0:
+                break
+            i += 1
+    return dst
+
+fn c_strncpy(dst: *mut c_char, src: *const c_char, n: usize) -> *mut c_char:
+    let mut i: usize = 0
+    unsafe:
+        while i < n:
+            let ch = *(src.offset(i as isize))
+            *(dst.offset(i as isize)) = ch
+            if ch == 0:
+                break
+            i += 1
+        while i < n:
+            *(dst.offset(i as isize)) = 0
+            i += 1
+    return dst
+
+fn c_strdup(src: *const c_char) -> *mut c_char:
+    let len = c_strlen(src)
+    let ptr = alloc(len + 1, 1) as *mut c_char
+    c_strcpy(ptr, src)
+    return ptr
+
+// Helper: Omni string -> C string on stack (must not outlive scope)
+fn with_c_str<T, F: FnOnce(*const c_char) -> T>(s: &str, f: F) -> T:
+    let cstr = CString::new(s).expect("string contains null byte")
+    return f(cstr.as_ptr())
+
+// ============================================================================
+// Dynamic Library Loading
+// ============================================================================
+
+extern "C":
+    #[cfg(unix)]
+    fn dlopen(filename: *const c_char, flags: c_int) -> *mut c_void
+    #[cfg(unix)]
+    fn dlclose(handle: *mut c_void) -> c_int
+    #[cfg(unix)]
+    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void
+    #[cfg(unix)]
+    fn dlerror() -> *const c_char
+
+    #[cfg(windows)]
+    fn LoadLibraryA(lpLibFileName: *const c_char) -> *mut c_void
+    #[cfg(windows)]
+    fn FreeLibrary(hLibModule: *mut c_void) -> c_int
+    #[cfg(windows)]
+    fn GetProcAddress(hModule: *mut c_void, lpProcName: *const c_char) -> *mut c_void
+    #[cfg(windows)]
+    fn GetLastError() -> u32
+
+// dlopen flags
+#[cfg(unix)]
+const RTLD_LAZY: c_int = 0x0001
+#[cfg(unix)]
+const RTLD_NOW: c_int = 0x0002
+#[cfg(unix)]
+const RTLD_GLOBAL: c_int = 0x0100
+#[cfg(unix)]
+const RTLD_LOCAL: c_int = 0x0000
+
+struct Library:
+    handle: *mut c_void
+    name: String
+
+    fn open(path: &str) -> Result<Library, String>:
+        let c_path = CString::new(path).map_err(|e| String::from(e))?
+
+        #[cfg(unix)]
+        {
+            let handle = dlopen(c_path.as_ptr(), RTLD_NOW)
+            if handle.is_null():
+                let err = dlerror()
+                if err.is_null():
+                    return Err(String::from("dlopen failed: unknown error"))
+                let msg = CStr::from_ptr(err).to_string_lossy()
+                return Err(msg)
+            return Ok(Library { handle, name: String::from(path) })
+        }
+
+        #[cfg(windows)]
+        {
+            let handle = LoadLibraryA(c_path.as_ptr())
+            if handle.is_null():
+                let code = GetLastError()
+                return Err(format!("LoadLibrary failed: error code {}", code))
+            return Ok(Library { handle, name: String::from(path) })
+        }
+
+    fn get_symbol(&self, name: &str) -> Result<*mut c_void, String>:
+        let c_name = CString::new(name).map_err(|e| String::from(e))?
+
+        #[cfg(unix)]
+        {
+            // Clear error
+            dlerror()
+            let sym = dlsym(self.handle, c_name.as_ptr())
+            let err = dlerror()
+            if not err.is_null():
+                let msg = CStr::from_ptr(err).to_string_lossy()
+                return Err(msg)
+            return Ok(sym)
+        }
+
+        #[cfg(windows)]
+        {
+            let sym = GetProcAddress(self.handle, c_name.as_ptr())
+            if sym.is_null():
+                let code = GetLastError()
+                return Err(format!("GetProcAddress failed for '{}': error {}", name, code))
+            return Ok(sym)
+        }
+
+    fn get_function<F>(&self, name: &str) -> Result<F, String>:
+        let sym = self.get_symbol(name)?
+        // UNSAFE: transmute pointer to function type
+        return Ok(unsafe { std::mem::transmute::<*mut c_void, F>(sym) })
+
+    fn name(&self) -> &str:
+        return &self.name
+
+impl Drop for Library:
+    fn drop(&mut self):
+        if not self.handle.is_null():
+            #[cfg(unix)]
+            dlclose(self.handle)
+            #[cfg(windows)]
+            FreeLibrary(self.handle)
+
+// ============================================================================
+// Layout & Alignment Helpers
+// ============================================================================
+
+struct Layout:
+    size: usize
+    align: usize
+
+    fn new(size: usize, align: usize) -> Result<Layout, str>:
+        if align == 0 or not is_power_of_two(align):
+            return Err("alignment must be non-zero power of two")
+        if size > usize::MAX - (align - 1):
+            return Err("size overflow when aligning")
+        return Ok(Layout { size, align })
+
+    fn for_type<T>() -> own Layout:
+        return Layout {
+            size: size_of::<T>(),
+            align: align_of::<T>(),
+        }
+
+    fn size(&self) -> usize:
+        return self.size
+
+    fn align(&self) -> usize:
+        return self.align
+
+    fn pad_to_align(&self) -> own Layout:
+        let padded = align_up(self.size, self.align)
+        return Layout { size: padded, align: self.align }
+
+    fn repeat(&self, n: usize) -> Result<(Layout, usize), str>:
+        let padded = self.pad_to_align()
+        let total_size = padded.size * n
+        if n != 0 and total_size / n != padded.size:
+            return Err("repeat size overflow")
+        return Ok((Layout { size: total_size, align: self.align }, padded.size))
+
+    fn extend(&self, next: &Layout) -> Result<(Layout, usize), str>:
+        let offset = align_up(self.size, next.align)
+        let new_size = offset + next.size
+        let new_align = max_usize(self.align, next.align)
+        return Ok((
+            Layout { size: new_size, align: new_align },
+            offset,
+        ))
+
+fn is_power_of_two(n: usize) -> bool:
+    return n != 0 and (n & (n - 1)) == 0
+
+fn align_up(size: usize, align: usize) -> usize:
+    return (size + align - 1) & !(align - 1)
+
+fn max_usize(a: usize, b: usize) -> usize:
+    if a >= b { a } else { b }
+
+// ============================================================================
+// VaList — Variadic argument list (opaque wrapper)
+// ============================================================================
+
+struct VaList:
+    inner: *mut c_void
+
+    fn arg<T>(&mut self) -> T:
+        // Platform-specific va_arg extraction — must be compiler intrinsic
+        unsafe:
+            let ptr = self.inner as *const T
+            let val = std::mem::read(ptr)
+            self.inner = (self.inner as *mut u8).offset(align_up(size_of::<T>(), 8) as isize) as *mut c_void
+            return val
+
+// ============================================================================
+// Errno
+// ============================================================================
+
+fn errno() -> c_int:
+    #[cfg(unix)]
+    {
+        extern "C":
+            fn __errno_location() -> *mut c_int
+        return unsafe { *__errno_location() }
+    }
+    #[cfg(windows)]
+    {
+        extern "C":
+            fn _errno() -> *mut c_int
+        return unsafe { *_errno() }
+    }
+
+fn set_errno(val: c_int):
+    #[cfg(unix)]
+    {
+        extern "C":
+            fn __errno_location() -> *mut c_int
+        unsafe:
+            *__errno_location() = val
+    }
+    #[cfg(windows)]
+    {
+        extern "C":
+            fn _errno() -> *mut c_int
+        unsafe:
+            *_errno() = val
+    }
+
+extern "C":
+    fn strerror(errnum: c_int) -> *const c_char
+
+fn errno_string(errnum: c_int) -> String:
+    let ptr = strerror(errnum)
+    if ptr.is_null():
+        return String::from("Unknown error")
+    return CStr::from_ptr(ptr).to_string_lossy()
+
+// ============================================================================
+// OsString — Platform-native string
+// ============================================================================
+
+struct OsString:
+    inner: Vector<u8>
+
+    fn new() -> own OsString:
+        return OsString { inner: Vector::new() }
+
+    fn from_str(s: &str) -> own OsString:
+        let mut inner = Vector::with_capacity(s.len())
+        inner.extend_from_slice(s.as_bytes())
+        return OsString { inner }
+
+    fn from_bytes(bytes: &[u8]) -> own OsString:
+        let mut inner = Vector::with_capacity(bytes.len())
+        inner.extend_from_slice(bytes)
+        return OsString { inner }
+
+    fn as_bytes(&self) -> &[u8]:
+        return self.inner.as_slice()
+
+    fn len(&self) -> usize:
+        return self.inner.len()
+
+    fn is_empty(&self) -> bool:
+        return self.inner.is_empty()
+
+    fn push(&mut self, s: &str):
+        self.inner.extend_from_slice(s.as_bytes())
+
+    fn to_str(&self) -> Option<&str>:
+        if std::core::is_valid_utf8(self.inner.as_slice()):
+            return Some(unsafe { std::core::str_from_utf8_unchecked(self.inner.as_slice()) })
+        return None
+
+    fn to_string_lossy(&self) -> String:
+        let mut s = String::with_capacity(self.inner.len())
+        for i in 0..self.inner.len():
+            let b = self.inner[i]
+            if b < 128:
+                s.push(b as char)
+            else:
+                s.push('\u{FFFD}')
+        return s
+
+    fn to_c_string(&self) -> Result<CString, str>:
+        let mut data = self.inner.clone()
+        for i in 0..data.len():
+            if data[i] == 0:
+                return Err("interior null byte")
+        data.push(0)
+        return Ok(CString { data })
+
+impl Clone for OsString:
+    fn clone(&self) -> own OsString:
+        return OsString { inner: self.inner.clone() }
+
+impl PartialEq for OsString:
+    fn eq(&self, other: &OsString) -> bool:
+        return self.inner == other.inner
+
+impl Display for OsString:
+    fn fmt(&self, f: &mut Formatter) -> Result<(), str>:
+        f.write_str(&self.to_string_lossy())
+
+// ============================================================================
+// Environment Variables
+// ============================================================================
+
+extern "C":
+    #[cfg(unix)]
+    fn getenv(name: *const c_char) -> *const c_char
+    #[cfg(unix)]
+    fn setenv(name: *const c_char, value: *const c_char, overwrite: c_int) -> c_int
+    #[cfg(unix)]
+    fn unsetenv(name: *const c_char) -> c_int
+
+    #[cfg(windows)]
+    fn GetEnvironmentVariableA(name: *const c_char, buf: *mut c_char, size: u32) -> u32
+    #[cfg(windows)]
+    fn SetEnvironmentVariableA(name: *const c_char, value: *const c_char) -> c_int
+
+fn env_get(name: &str) -> Option<String>:
+    let c_name = CString::new(name).ok()?
+
+    #[cfg(unix)]
+    {
+        let val = getenv(c_name.as_ptr())
+        if val.is_null():
+            return None
+        return Some(CStr::from_ptr(val).to_string_lossy())
+    }
+
+    #[cfg(windows)]
+    {
+        let mut buf = [0i8; 32768]
+        let len = GetEnvironmentVariableA(c_name.as_ptr(), buf.as_mut_ptr(), 32768)
+        if len == 0:
+            return None
+        let cstr = CStr::from_ptr(buf.as_ptr())
+        return Some(cstr.to_string_lossy())
+    }
+
+fn env_set(name: &str, value: &str) -> Result<(), String>:
+    let c_name = CString::new(name).map_err(|e| String::from(e))?
+    let c_value = CString::new(value).map_err(|e| String::from(e))?
+
+    #[cfg(unix)]
+    {
+        if setenv(c_name.as_ptr(), c_value.as_ptr(), 1) != 0:
+            return Err(String::from("setenv failed"))
+        return Ok(())
+    }
+
+    #[cfg(windows)]
+    {
+        if SetEnvironmentVariableA(c_name.as_ptr(), c_value.as_ptr()) == 0:
+            return Err(String::from("SetEnvironmentVariableA failed"))
+        return Ok(())
+    }
+
+fn env_remove(name: &str) -> Result<(), String>:
+    let c_name = CString::new(name).map_err(|e| String::from(e))?
+
+    #[cfg(unix)]
+    {
+        if unsetenv(c_name.as_ptr()) != 0:
+            return Err(String::from("unsetenv failed"))
+        return Ok(())
+    }
+
+    #[cfg(windows)]
+    {
+        if SetEnvironmentVariableA(c_name.as_ptr(), std::mem::null()) == 0:
+            return Err(String::from("SetEnvironmentVariableA failed"))
+        return Ok(())
+    }
+
+// ============================================================================
+// Process Arguments
+// ============================================================================
+
+extern "C":
+    #[cfg(unix)]
+    static __argc: c_int
+    #[cfg(unix)]
+    static __argv: *const *const c_char
+
+fn args() -> Vector<String>:
+    let mut result = Vector::new()
+
+    #[cfg(unix)]
+    {
+        unsafe:
+            for i in 0..__argc as usize:
+                let arg_ptr = *(__argv.offset(i as isize))
+                result.push(CStr::from_ptr(arg_ptr).to_string_lossy())
+    }
+
+    #[cfg(windows)]
+    {
+        extern "C":
+            fn GetCommandLineA() -> *const c_char
+            fn CommandLineToArgvW(lpCmdLine: *const u16, pNumArgs: *mut c_int) -> *const *const u16
+        // Simplified: parse GetCommandLineA
+        let cmdline = GetCommandLineA()
+        if not cmdline.is_null():
+            // Simple space-based split for ASCII command lines
+            let s = CStr::from_ptr(cmdline).to_string_lossy()
+            let parts = s.split(' ')
+            for part in parts:
+                if not part.is_empty():
+                    result.push(String::from(part))
+    }
+
+    return result
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[test]
+fn test_cstring_new():
+    let cs = CString::new("hello").unwrap()
+    assert(cs.len() == 5, "CString len should be 5")
+    assert(cs.as_ptr() != std::mem::null(), "ptr should not be null")
+
+#[test]
+fn test_cstring_null_byte():
+    let result = CString::new("hel\0lo")
+    assert(result.is_err(), "interior null should fail")
+
+#[test]
+fn test_cstr_from_bytes():
+    let bytes = [104u8, 105, 0]  // "hi\0"
+    let cs = CStr::from_bytes_with_nul(&bytes).unwrap()
+    assert(cs.len() == 2, "CStr len should be 2")
+
+#[test]
+fn test_cstr_equality():
+    let a = CString::new("test").unwrap()
+    let b = CString::new("test").unwrap()
+    assert(a == b, "equal CStrings should be equal")
+
+#[test]
+fn test_cstring_clone():
+    let a = CString::new("clone me").unwrap()
+    let b = a.clone()
+    assert(a == b, "cloned CString should equal original")
+    assert(a.len() == b.len(), "lengths should match")
+
+#[test]
+fn test_c_strlen():
+    let cs = CString::new("hello world").unwrap()
+    let len = c_strlen(cs.as_ptr())
+    assert(len == 11, "strlen should be 11")
+
+#[test]
+fn test_c_strcmp():
+    let a = CString::new("abc").unwrap()
+    let b = CString::new("abc").unwrap()
+    let c = CString::new("abd").unwrap()
+    assert(c_strcmp(a.as_ptr(), b.as_ptr()) == 0, "equal strings should return 0")
+    assert(c_strcmp(a.as_ptr(), c.as_ptr()) < 0, "abc < abd")
+
+#[test]
+fn test_layout():
+    let l = Layout::new(16, 8).unwrap()
+    assert(l.size() == 16, "size should be 16")
+    assert(l.align() == 8, "align should be 8")
+
+#[test]
+fn test_layout_invalid_align():
+    let result = Layout::new(16, 3)
+    assert(result.is_err(), "non-power-of-two alignment should fail")
+
+#[test]
+fn test_layout_pad():
+    let l = Layout::new(10, 8).unwrap()
+    let padded = l.pad_to_align()
+    assert(padded.size() == 16, "10 padded to align 8 = 16")
+
+#[test]
+fn test_layout_extend():
+    let a = Layout::new(4, 4).unwrap()
+    let b = Layout::new(8, 8).unwrap()
+    let (combined, offset) = a.extend(&b).unwrap()
+    assert(offset == 8, "offset should be 8 (4 padded to align 8)")
+    assert(combined.size() == 16, "total size should be 16")
+    assert(combined.align() == 8, "max alignment should be 8")
+
+#[test]
+fn test_os_string():
+    let s = OsString::from_str("hello")
+    assert(s.len() == 5, "OsString len should be 5")
+    assert(s.to_str() == Some("hello"), "should convert to str")
+
+#[test]
+fn test_os_string_push():
+    let mut s = OsString::from_str("hello")
+    s.push(" world")
+    assert(s.len() == 11, "pushed OsString len should be 11")
+
+#[test]
+fn test_align_up():
+    assert(align_up(0, 8) == 0, "0 aligned to 8 = 0")
+    assert(align_up(1, 8) == 8, "1 aligned to 8 = 8")
+    assert(align_up(8, 8) == 8, "8 aligned to 8 = 8")
+    assert(align_up(9, 8) == 16, "9 aligned to 8 = 16")
+    assert(align_up(16, 16) == 16, "16 aligned to 16 = 16")
+
+#[test]
+fn test_errno():
+    set_errno(0)
+    assert(errno() == 0, "errno should be 0 after setting")

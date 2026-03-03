@@ -1,0 +1,558 @@
+module std::core
+
+// Re-exporting Critical AI Functionality as Prelude
+pub use std::tensor
+pub use std::async
+pub use std::serde
+
+// ============================================
+// Primitive Types & Traits
+// ============================================
+
+trait Clone:
+    fn clone(&self) -> Self
+
+trait Copy: Clone
+
+trait Display:
+    fn to_string(&self) -> String
+
+trait Debug:
+    fn fmt(&self) -> String
+
+// ============================================
+// V2.0 Safety Traits
+// ============================================
+
+// Types safe to move across thread boundaries
+trait Send
+
+// Types safe to share references across thread boundaries
+trait Sync
+
+trait PartialEq:
+    fn eq(&self, other: &Self) -> bool
+    fn ne(&self, other: &Self) -> bool: !self.eq(other)
+
+trait Comparable:
+    fn cmp(&self, other: &Self) -> Ordering
+    
+    fn lt(&self, other: &Self) -> bool: self.cmp(other) == Ordering::Less
+    fn le(&self, other: &Self) -> bool: self.cmp(other) != Ordering::Greater
+    fn gt(&self, other: &Self) -> bool: self.cmp(other) == Ordering::Greater
+    fn ge(&self, other: &Self) -> bool: self.cmp(other) != Ordering::Less
+
+enum Ordering:
+    Less
+    Equal
+    Greater
+
+// ============================================
+// Option & Result
+// ============================================
+
+enum Option<T>:
+    Some(T)
+    None
+
+    fn is_some(&self) -> bool:
+        match self:
+            Option::Some(_) => true
+            Option::None => false
+
+    fn is_none(&self) -> bool:
+        !self.is_some()
+
+    fn unwrap(self) -> T:
+        match self:
+            Option::Some(v) => v
+            Option::None => panic("Option::unwrap called on None")
+            
+    fn unwrap_or(self, default: T) -> T:
+        match self:
+            Option::Some(v) => v
+            Option::None => default
+
+    fn map<U, F: Fn(T) -> U>(self, f: F) -> Option<U>:
+        match self:
+            Option::Some(v) => Option::Some(f(v))
+            Option::None => Option::None
+
+enum Result<T, E>:
+    Ok(T)
+    Err(E)
+
+    fn is_ok(&self) -> bool:
+        match self:
+            Result::Ok(_) => true
+            Result::Err(_) => false
+
+    fn unwrap(self) -> T:
+        match self:
+            Result::Ok(v) => v
+            Result::Err(e) => panic("Result::unwrap called on Err") // simple panic for now
+
+// ============================================
+// String
+// ============================================
+
+struct String:
+    buffer: Vec<u8> // Using dynamic array
+    len: usize
+
+    fn new() -> String:
+        String { buffer: Vec::new(), len: 0 }
+
+    fn from(s: &str) -> String:
+        let mut buf = Vec::new()
+        for b in s.bytes():
+            buf.push(b)
+        String { buffer: buf, len: s.len() }
+        
+    fn from_utf8(bytes: Vec<u8>) -> Result<String, Error>:
+        // Validate UTF-8 and create string
+        let mut i = 0
+        while i < bytes.len():
+            let b = bytes[i]
+            if b & 0x80 == 0:
+                i += 1  // ASCII
+            else if b & 0xE0 == 0xC0:
+                if i + 1 >= bytes.len(): return Result::Err("Invalid UTF-8")
+                i += 2
+            else if b & 0xF0 == 0xE0:
+                if i + 2 >= bytes.len(): return Result::Err("Invalid UTF-8")
+                i += 3
+            else if b & 0xF8 == 0xF0:
+                if i + 3 >= bytes.len(): return Result::Err("Invalid UTF-8")
+                i += 4
+            else:
+                return Result::Err("Invalid UTF-8 byte")
+        Result::Ok(String { buffer: bytes, len: bytes.len() })
+
+    fn len(&self) -> usize:
+        self.len
+
+    fn is_empty(&self) -> bool:
+        self.len == 0
+        
+    fn push(&mut self, c: char):
+        // UTF-8 encoding
+        let code = c as u32
+        if code < 0x80:
+            self.buffer.push(code as u8)
+        else if code < 0x800:
+            self.buffer.push((0xC0 | (code >> 6)) as u8)
+            self.buffer.push((0x80 | (code & 0x3F)) as u8)
+        else if code < 0x10000:
+            self.buffer.push((0xE0 | (code >> 12)) as u8)
+            self.buffer.push((0x80 | ((code >> 6) & 0x3F)) as u8)
+            self.buffer.push((0x80 | (code & 0x3F)) as u8)
+        else:
+            self.buffer.push((0xF0 | (code >> 18)) as u8)
+            self.buffer.push((0x80 | ((code >> 12) & 0x3F)) as u8)
+            self.buffer.push((0x80 | ((code >> 6) & 0x3F)) as u8)
+            self.buffer.push((0x80 | (code & 0x3F)) as u8)
+        self.len = self.buffer.len()
+        
+    fn push_str(&mut self, s: &str):
+        for c in s.chars():
+            self.push(c)
+        
+    fn pop(&mut self) -> Option<char>:
+        if self.len == 0: return Option::None
+        // Find last character start (UTF-8 can be multi-byte)
+        let mut i = self.len - 1
+        while i > 0 && (self.buffer[i] & 0xC0) == 0x80:
+            i -= 1
+        let char_start = i
+        let char_len = self.len - char_start
+        let c = self.decode_char_at(char_start)
+        self.buffer.truncate(char_start)
+        self.len = char_start
+        Option::Some(c)
+        
+    fn decode_char_at(&self, pos: usize) -> char:
+        let b0 = self.buffer[pos]
+        if b0 & 0x80 == 0:
+            return b0 as char
+        else if b0 & 0xE0 == 0xC0:
+            let code = ((b0 & 0x1F) as u32) << 6 | (self.buffer[pos+1] & 0x3F) as u32
+            return code as char
+        else if b0 & 0xF0 == 0xE0:
+            let code = ((b0 & 0x0F) as u32) << 12 
+                     | ((self.buffer[pos+1] & 0x3F) as u32) << 6
+                     | (self.buffer[pos+2] & 0x3F) as u32
+            return code as char
+        else:
+            let code = ((b0 & 0x07) as u32) << 18
+                     | ((self.buffer[pos+1] & 0x3F) as u32) << 12
+                     | ((self.buffer[pos+2] & 0x3F) as u32) << 6
+                     | (self.buffer[pos+3] & 0x3F) as u32
+            return code as char
+
+    fn contains(&self, sub: &str) -> bool:
+        self.find(sub).is_some()
+        
+    fn find(&self, sub: &str) -> Option<usize>:
+        // Boyer-Moore-Horspool substring search
+        let sub_bytes = sub.as_bytes()
+        let n = self.len
+        let m = sub_bytes.len()
+        if m == 0: return Option::Some(0)
+        if m > n: return Option::None
+        
+        // Build skip table
+        var skip: [usize; 256] = [m; 256]
+        for i in 0..(m-1):
+            skip[sub_bytes[i] as usize] = m - 1 - i
+            
+        // Search
+        var i = m - 1
+        while i < n:
+            var j = m - 1
+            var k = i
+            while j >= 0 && self.buffer[k] == sub_bytes[j]:
+                j -= 1
+                k -= 1
+            if j < 0:
+                return Option::Some(k + 1)
+            i += skip[self.buffer[i] as usize]
+        return Option::None
+        
+    fn split(&self, delimiter: &str) -> Vec<String>:
+        let mut result = Vec::new()
+        let mut start = 0
+        while let Some(pos) = self.find_from(delimiter, start):
+            result.push(self.substring(start, pos))
+            start = pos + delimiter.len()
+        if start < self.len:
+            result.push(self.substring(start, self.len))
+        result
+        
+    fn find_from(&self, sub: &str, start: usize) -> Option<usize>:
+        if start >= self.len: return Option::None
+        let sub_str = self.substring(start, self.len)
+        match sub_str.find(sub):
+            Option::Some(pos) => Option::Some(start + pos)
+            Option::None => Option::None
+        
+    fn substring(&self, start: usize, end: usize) -> String:
+        let mut s = String::new()
+        for i in start..end:
+            s.buffer.push(self.buffer[i])
+        s.len = end - start
+        s
+        
+    fn trim(&self) -> String:
+        let mut start = 0
+        let mut end = self.len
+        while start < end && self.buffer[start].is_whitespace():
+            start += 1
+        while end > start && self.buffer[end-1].is_whitespace():
+            end -= 1
+        self.substring(start, end)
+        
+    fn to_lower(&self) -> String:
+        let mut s = String::new()
+        for i in 0..self.len:
+            let b = self.buffer[i]
+            if b >= 65 && b <= 90:
+                s.buffer.push(b + 32)
+            else:
+                s.buffer.push(b)
+        s.len = self.len
+        s
+        
+    fn to_upper(&self) -> String:
+        let mut s = String::new()
+        for i in 0..self.len:
+            let b = self.buffer[i]
+            if b >= 97 && b <= 122:
+                s.buffer.push(b - 32)
+            else:
+                s.buffer.push(b)
+        s.len = self.len
+        s
+        
+    fn replace(&self, from: &str, to: &str) -> String:
+        let mut result = String::new()
+        let mut i = 0
+        while i < self.len:
+            if self.starts_with_at(from, i):
+                result.push_str(to)
+                i += from.len()
+            else:
+                result.buffer.push(self.buffer[i])
+                result.len += 1
+                i += 1
+        result
+        
+    fn starts_with_at(&self, prefix: &str, pos: usize) -> bool:
+        let prefix_bytes = prefix.as_bytes()
+        if pos + prefix_bytes.len() > self.len: return false
+        for i in 0..prefix_bytes.len():
+            if self.buffer[pos + i] != prefix_bytes[i]:
+                return false
+        true
+        
+    fn starts_with(&self, prefix: &str) -> bool:
+        self.starts_with_at(prefix, 0)
+        
+    fn ends_with(&self, suffix: &str) -> bool:
+        let suffix_bytes = suffix.as_bytes()
+        if suffix_bytes.len() > self.len: return false
+        let start = self.len - suffix_bytes.len()
+        for i in 0..suffix_bytes.len():
+            if self.buffer[start + i] != suffix_bytes[i]:
+                return false
+        true
+        
+    fn chars(&self) -> StringChars:
+        StringChars { string: self, pos: 0 }
+        
+    fn as_bytes(&self) -> &[u8]:
+        &self.buffer
+
+struct StringChars:
+    string: &String
+    pos: usize
+    
+impl Iterator for StringChars:
+    type Item = char
+    
+    fn next(&mut self) -> Option<char>:
+        if self.pos >= self.string.len:
+            return Option::None
+        let c = self.string.decode_char_at(self.pos)
+        // Advance position by UTF-8 char length
+        let b = self.string.buffer[self.pos]
+        if b & 0x80 == 0:
+            self.pos += 1
+        else if b & 0xE0 == 0xC0:
+            self.pos += 2
+        else if b & 0xF0 == 0xE0:
+            self.pos += 3
+        else:
+            self.pos += 4
+        Option::Some(c)
+
+// ============================================
+// Memory Management
+// ============================================
+
+struct Box<T>:
+    ptr: usize
+    _marker: PhantomData<T>
+    
+    fn new(value: T) -> Box<T>:
+        // Intrinsic allocation
+        let size = size_of::<T>()
+        let ptr = __intrinsic_alloc(size, align_of::<T>())
+        __intrinsic_write(ptr, value)
+        Box { ptr, _marker: PhantomData }
+        
+    fn as_ref(&self) -> &T:
+        __intrinsic_read(self.ptr)
+        
+    fn as_mut(&mut self) -> &mut T:
+        __intrinsic_read_mut(self.ptr)
+        
+    fn into_inner(self) -> T:
+        let value = __intrinsic_read(self.ptr)
+        __intrinsic_dealloc(self.ptr)
+        value
+
+impl<T> Drop for Box<T>:
+    fn drop(&mut self):
+        // Call destructor on inner value
+        let inner: &mut T = __intrinsic_read_mut(self.ptr)
+        inner.drop()
+        __intrinsic_dealloc(self.ptr)
+
+struct Rc<T>:
+    ptr: usize  // Points to RcInner<T>
+    
+struct RcInner<T>:
+    strong_count: usize
+    weak_count: usize
+    value: T
+    
+impl<T> Rc<T>:
+    fn new(value: T) -> Rc<T>:
+        let inner = RcInner {
+            strong_count: 1,
+            weak_count: 0,
+            value
+        }
+        let ptr = __intrinsic_alloc(size_of::<RcInner<T>>(), align_of::<RcInner<T>>())
+        __intrinsic_write(ptr, inner)
+        Rc { ptr }
+        
+    fn clone(&self) -> Rc<T>:
+        let inner: &mut RcInner<T> = __intrinsic_read_mut(self.ptr)
+        inner.strong_count += 1
+        Rc { ptr: self.ptr }
+        
+    fn strong_count(&self) -> usize:
+        let inner: &RcInner<T> = __intrinsic_read(self.ptr)
+        inner.strong_count
+
+impl<T> Drop for Rc<T>:
+    fn drop(&mut self):
+        let inner: &mut RcInner<T> = __intrinsic_read_mut(self.ptr)
+        inner.strong_count -= 1
+        if inner.strong_count == 0:
+            inner.value.drop()
+            if inner.weak_count == 0:
+                __intrinsic_dealloc(self.ptr)
+
+struct Arc<T>:
+    ptr: usize  // Thread-safe reference counting
+    
+impl<T: Send + Sync> Arc<T>:
+    fn new(value: T) -> Arc<T>:
+        let inner = ArcInner {
+            strong_count: AtomicUsize::new(1),
+            weak_count: AtomicUsize::new(0),
+            value
+        }
+        let ptr = __intrinsic_alloc(size_of::<ArcInner<T>>(), align_of::<ArcInner<T>>())
+        __intrinsic_write(ptr, inner)
+        Arc { ptr }
+
+// ============================================
+// Error Handling
+// ============================================
+
+fn panic(msg: &str) -> !:
+    // Print panic message and abort
+    __intrinsic_print("PANIC: ")
+    __intrinsic_print(msg)
+    __intrinsic_print("\n")
+    __intrinsic_abort()
+
+fn unreachable() -> !:
+    panic("unreachable code reached")
+
+fn assert(condition: bool, msg: &str):
+    if !condition:
+        panic(msg)
+        
+fn debug_assert(condition: bool, msg: &str):
+    // Only checked in debug builds
+    comptime if cfg("debug"):
+        assert(condition, msg)
+
+trait Error: Display + Debug:
+    fn source(&self) -> Option<&dyn Error>:
+        Option::None
+        
+    fn description(&self) -> &str:
+        "error"
+
+// ============================================
+// Numeric Traits
+// ============================================
+
+trait Add<Rhs = Self>:
+    type Output
+    fn add(self, rhs: Rhs) -> Self::Output
+
+trait Sub<Rhs = Self>:
+    type Output
+    fn sub(self, rhs: Rhs) -> Self::Output
+
+trait Mul<Rhs = Self>:
+    type Output
+    fn mul(self, rhs: Rhs) -> Self::Output
+
+trait Div<Rhs = Self>:
+    type Output
+    fn div(self, rhs: Rhs) -> Self::Output
+
+trait Neg:
+    type Output
+    fn neg(self) -> Self::Output
+
+trait Zero:
+    fn zero() -> Self
+
+trait One:
+    fn one() -> Self
+
+// ============================================
+// Conversion Traits
+// ============================================
+
+trait From<T>:
+    fn from(value: T) -> Self
+
+trait Into<T>:
+    fn into(self) -> T
+
+trait TryFrom<T>:
+    type Error
+    fn try_from(value: T) -> Result<Self, Self::Error>
+
+trait TryInto<T>:
+    type Error
+    fn try_into(self) -> Result<T, Self::Error>
+
+trait AsRef<T>:
+    fn as_ref(&self) -> &T
+
+trait AsMut<T>:
+    fn as_mut(&mut self) -> &mut T
+
+// ============================================
+// Hash Trait
+// ============================================
+
+trait Hash:
+    fn hash<H: Hasher>(&self, state: &mut H)
+
+trait Hasher:
+    fn finish(&self) -> u64
+    fn write(&mut self, bytes: &[u8])
+    
+    fn write_u8(&mut self, i: u8): self.write(&[i])
+    fn write_u16(&mut self, i: u16): self.write(&i.to_le_bytes())
+    fn write_u32(&mut self, i: u32): self.write(&i.to_le_bytes())
+    fn write_u64(&mut self, i: u64): self.write(&i.to_le_bytes())
+    fn write_i64(&mut self, i: i64): self.write(&i.to_le_bytes())
+
+// Default hasher using FNV-1a
+struct FnvHasher:
+    state: u64
+    
+impl FnvHasher:
+    fn new() -> FnvHasher:
+        FnvHasher { state: 0xcbf29ce484222325 }  // FNV offset basis
+
+impl Hasher for FnvHasher:
+    fn finish(&self) -> u64:
+        self.state
+        
+    fn write(&mut self, bytes: &[u8]):
+        for b in bytes:
+            self.state ^= b as u64
+            self.state = self.state.wrapping_mul(0x100000001b3)  // FNV prime
+
+// ============================================
+// Intrinsics
+// ============================================
+
+// These are compiler intrinsics - implemented by the runtime
+extern "intrinsic":
+    fn __intrinsic_alloc(size: usize, align: usize) -> usize
+    fn __intrinsic_dealloc(ptr: usize)
+    fn __intrinsic_realloc(ptr: usize, new_size: usize) -> usize
+    fn __intrinsic_write<T>(ptr: usize, value: T)
+    fn __intrinsic_read<T>(ptr: usize) -> T
+    fn __intrinsic_read_mut<T>(ptr: usize) -> &mut T
+    fn __intrinsic_copy(src: usize, dst: usize, size: usize)
+    fn __intrinsic_print(s: &str)
+    fn __intrinsic_abort() -> !
+    fn size_of<T>() -> usize
+    fn align_of<T>() -> usize
+    fn type_name<T>() -> &'static str

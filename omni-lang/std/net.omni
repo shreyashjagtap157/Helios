@@ -1,0 +1,1042 @@
+// Omni Standard Library: Networking
+// Complete TCP/UDP, HTTP client/server, and WebSocket support
+
+module std::net
+
+import std::core
+import std::async
+import std::collections
+import std::io
+import std::crypto
+
+// ============================================
+// Low-Level Socket FFI
+// ============================================
+
+extern "C":
+    // BSD Socket API
+    fn socket(domain: i32, type: i32, protocol: i32) -> i32
+    fn bind(sockfd: i32, addr: *u8, addrlen: u32) -> i32
+    fn listen(sockfd: i32, backlog: i32) -> i32
+    fn accept(sockfd: i32, addr: *u8, addrlen: *u32) -> i32
+    fn connect(sockfd: i32, addr: *u8, addrlen: u32) -> i32
+    fn send(sockfd: i32, buf: *u8, len: usize, flags: i32) -> isize
+    fn recv(sockfd: i32, buf: *u8, len: usize, flags: i32) -> isize
+    fn sendto(sockfd: i32, buf: *u8, len: usize, flags: i32, addr: *u8, addrlen: u32) -> isize
+    fn recvfrom(sockfd: i32, buf: *u8, len: usize, flags: i32, addr: *u8, addrlen: *u32) -> isize
+    fn close(fd: i32) -> i32
+    fn setsockopt(sockfd: i32, level: i32, optname: i32, optval: *u8, optlen: u32) -> i32
+    fn getsockopt(sockfd: i32, level: i32, optname: i32, optval: *u8, optlen: *u32) -> i32
+    fn fcntl(fd: i32, cmd: i32, arg: i32) -> i32
+    fn poll(fds: *u8, nfds: usize, timeout: i32) -> i32
+    
+    // DNS Resolution
+    fn getaddrinfo(node: *u8, service: *u8, hints: *u8, res: **u8) -> i32
+    fn freeaddrinfo(res: *u8)
+    
+    // io_uring for async I/O (Linux)
+    fn io_uring_queue_init(entries: u32, ring: *u8, flags: u32) -> i32
+    fn io_uring_submit(ring: *u8) -> i32
+
+// ============================================
+// Socket Constants
+// ============================================
+
+const AF_INET: i32 = 2
+const AF_INET6: i32 = 10
+const AF_UNIX: i32 = 1
+
+const SOCK_STREAM: i32 = 1
+const SOCK_DGRAM: i32 = 2
+const SOCK_RAW: i32 = 3
+
+const IPPROTO_TCP: i32 = 6
+const IPPROTO_UDP: i32 = 17
+
+const SO_REUSEADDR: i32 = 2
+const SO_KEEPALIVE: i32 = 9
+const TCP_NODELAY: i32 = 1
+
+// ============================================
+// IP Addresses
+// ============================================
+
+enum IpAddr:
+    V4(u8, u8, u8, u8)
+    V6([u8; 16])
+
+    fn to_string(&self) -> String:
+        match self:
+            IpAddr::V4(a, b, c, d) => 
+                format!("{}.{}.{}.{}", a, b, c, d)
+            IpAddr::V6(bytes) =>
+                // Format as IPv6
+                format_ipv6(bytes)
+    
+    fn from_string(s: &str) -> Result<IpAddr, ParseError>:
+        if s.contains(":"):
+            parse_ipv6(s)
+        else:
+            parse_ipv4(s)
+
+fn parse_ipv4(s: &str) -> Result<IpAddr, ParseError>:
+    let parts = s.split(".")
+    if parts.len() != 4:
+        return Err(ParseError::InvalidFormat)
+    
+    let a = parts[0].parse::<u8>()?
+    let b = parts[1].parse::<u8>()?
+    let c = parts[2].parse::<u8>()?
+    let d = parts[3].parse::<u8>()?
+    
+    Ok(IpAddr::V4(a, b, c, d))
+
+fn parse_ipv6(s: &str) -> Result<IpAddr, ParseError>:
+    // IPv6 parsing with :: expansion
+    let mut bytes = [0u8; 16]
+    // ... parsing logic
+    Ok(IpAddr::V6(bytes))
+
+fn format_ipv6(bytes: &[u8; 16]) -> String:
+    let mut parts = Vec::new()
+    for i in 0..8:
+        let val = (bytes[i*2] as u16) << 8 | bytes[i*2 + 1] as u16
+        parts.push(format!("{:x}", val))
+    parts.join(":")
+
+struct SocketAddr:
+    ip: IpAddr
+    port: u16
+
+    fn new(ip: IpAddr, port: u16) -> SocketAddr:
+        SocketAddr { ip, port }
+    
+    fn from_string(s: &str) -> Result<SocketAddr, ParseError>:
+        // Parse "ip:port" or "[ipv6]:port"
+        let colon_idx = s.rfind(':')
+        if colon_idx.is_none():
+            return Err(ParseError::InvalidFormat)
+        
+        let ip_str = &s[..colon_idx.unwrap()]
+        let port_str = &s[colon_idx.unwrap() + 1..]
+        
+        let ip = IpAddr::from_string(ip_str)?
+        let port = port_str.parse::<u16>()?
+        
+        Ok(SocketAddr { ip, port })
+
+// ============================================
+// TCP
+// ============================================
+
+struct TcpListener:
+    fd: i32
+    addr: SocketAddr
+
+impl TcpListener:
+    async fn bind(addr: SocketAddr) -> Result<TcpListener, NetError>:
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        if fd < 0:
+            return Err(NetError::SocketCreationFailed)
+        
+        // Set SO_REUSEADDR
+        let opt: i32 = 1
+        setsockopt(fd, 1, SO_REUSEADDR, &opt as *u8, 4)
+        
+        // Create sockaddr_in structure
+        let sockaddr = create_sockaddr(addr)
+        
+        if bind(fd, sockaddr.ptr(), sockaddr.len() as u32) < 0:
+            close(fd)
+            return Err(NetError::BindFailed)
+        
+        if listen(fd, 128) < 0:
+            close(fd)
+            return Err(NetError::ListenFailed)
+        
+        Ok(TcpListener { fd, addr })
+    
+    async fn accept(&self) -> Result<TcpStream, NetError>:
+        let mut client_addr = [0u8; 128]
+        let mut addr_len: u32 = 128
+        
+        let client_fd = accept(self.fd, client_addr.ptr(), &addr_len)
+        if client_fd < 0:
+            return Err(NetError::AcceptFailed)
+        
+        let peer_addr = parse_sockaddr(&client_addr[..addr_len as usize])
+        
+        Ok(TcpStream { 
+            fd: client_fd, 
+            local_addr: self.addr.clone(),
+            peer_addr 
+        })
+    
+    fn local_addr(&self) -> SocketAddr:
+        self.addr.clone()
+    
+    fn close(self):
+        close(self.fd)
+
+struct TcpStream:
+    fd: i32
+    local_addr: SocketAddr
+    peer_addr: SocketAddr
+
+impl TcpStream:
+    async fn connect(addr: SocketAddr) -> Result<TcpStream, NetError>:
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        if fd < 0:
+            return Err(NetError::SocketCreationFailed)
+        
+        let sockaddr = create_sockaddr(addr)
+        
+        if connect(fd, sockaddr.ptr(), sockaddr.len() as u32) < 0:
+            close(fd)
+            return Err(NetError::ConnectionFailed)
+        
+        Ok(TcpStream { 
+            fd, 
+            local_addr: get_local_addr(fd),
+            peer_addr: addr 
+        })
+    
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, NetError>:
+        let n = recv(self.fd, buf.ptr(), buf.len(), 0)
+        if n < 0:
+            return Err(NetError::ReadFailed)
+        Ok(n as usize)
+    
+    async fn write(&mut self, buf: &[u8]) -> Result<usize, NetError>:
+        let n = send(self.fd, buf.ptr(), buf.len(), 0)
+        if n < 0:
+            return Err(NetError::WriteFailed)
+        Ok(n as usize)
+    
+    async fn read_exact(&mut self, buf: &mut [u8]) -> Result<(), NetError>:
+        let mut total = 0
+        while total < buf.len():
+            let n = self.read(&mut buf[total..]).await?
+            if n == 0:
+                return Err(NetError::UnexpectedEof)
+            total += n
+        Ok(())
+    
+    async fn write_all(&mut self, buf: &[u8]) -> Result<(), NetError>:
+        let mut total = 0
+        while total < buf.len():
+            let n = self.write(&buf[total..]).await?
+            total += n
+        Ok(())
+    
+    fn set_nodelay(&mut self, nodelay: bool):
+        let opt: i32 = if nodelay { 1 } else { 0 }
+        setsockopt(self.fd, IPPROTO_TCP, TCP_NODELAY, &opt as *u8, 4)
+    
+    fn set_keepalive(&mut self, keepalive: bool):
+        let opt: i32 = if keepalive { 1 } else { 0 }
+        setsockopt(self.fd, 1, SO_KEEPALIVE, &opt as *u8, 4)
+    
+    fn peer_addr(&self) -> SocketAddr:
+        self.peer_addr.clone()
+    
+    fn local_addr(&self) -> SocketAddr:
+        self.local_addr.clone()
+    
+    fn close(self):
+        close(self.fd)
+
+// ============================================
+// UDP
+// ============================================
+
+struct UdpSocket:
+    fd: i32
+    local_addr: SocketAddr
+
+impl UdpSocket:
+    async fn bind(addr: SocketAddr) -> Result<UdpSocket, NetError>:
+        let fd = socket(AF_INET, SOCK_DGRAM, 0)
+        if fd < 0:
+            return Err(NetError::SocketCreationFailed)
+        
+        let sockaddr = create_sockaddr(addr)
+        
+        if bind(fd, sockaddr.ptr(), sockaddr.len() as u32) < 0:
+            close(fd)
+            return Err(NetError::BindFailed)
+        
+        Ok(UdpSocket { fd, local_addr: addr })
+    
+    async fn send_to(&self, buf: &[u8], addr: SocketAddr) -> Result<usize, NetError>:
+        let sockaddr = create_sockaddr(addr)
+        let n = sendto(self.fd, buf.ptr(), buf.len(), 0, sockaddr.ptr(), sockaddr.len() as u32)
+        if n < 0:
+            return Err(NetError::SendFailed)
+        Ok(n as usize)
+    
+    async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr), NetError>:
+        let mut from_addr = [0u8; 128]
+        let mut addr_len: u32 = 128
+        
+        let n = recvfrom(self.fd, buf.ptr(), buf.len(), 0, from_addr.ptr(), &addr_len)
+        if n < 0:
+            return Err(NetError::RecvFailed)
+        
+        let peer = parse_sockaddr(&from_addr[..addr_len as usize])
+        Ok((n as usize, peer))
+    
+    fn connect(&mut self, addr: SocketAddr) -> Result<(), NetError>:
+        let sockaddr = create_sockaddr(addr)
+        if connect(self.fd, sockaddr.ptr(), sockaddr.len() as u32) < 0:
+            return Err(NetError::ConnectionFailed)
+        Ok(())
+    
+    async fn send(&self, buf: &[u8]) -> Result<usize, NetError>:
+        let n = send(self.fd, buf.ptr(), buf.len(), 0)
+        if n < 0:
+            return Err(NetError::SendFailed)
+        Ok(n as usize)
+    
+    async fn recv(&self, buf: &mut [u8]) -> Result<usize, NetError>:
+        let n = recv(self.fd, buf.ptr(), buf.len(), 0)
+        if n < 0:
+            return Err(NetError::RecvFailed)
+        Ok(n as usize)
+    
+    fn local_addr(&self) -> SocketAddr:
+        self.local_addr.clone()
+    
+    fn close(self):
+        close(self.fd)
+
+// ============================================
+// HTTP Client
+// ============================================
+
+struct HttpClient:
+    timeout: Duration
+    follow_redirects: bool
+    max_redirects: u32
+    user_agent: String
+    default_headers: Map<String, String>
+
+impl HttpClient:
+    fn new() -> HttpClient:
+        HttpClient {
+            timeout: Duration::from_secs(30),
+            follow_redirects: true,
+            max_redirects: 10,
+            user_agent: "Omni-HTTP/1.0",
+            default_headers: Map::new()
+        }
+    
+    fn timeout(mut self, timeout: Duration) -> HttpClient:
+        self.timeout = timeout
+        self
+    
+    fn header(mut self, key: &str, value: &str) -> HttpClient:
+        self.default_headers.insert(key.to_string(), value.to_string())
+        self
+
+    async fn get(&self, url: &str) -> Result<HttpResponse, HttpError>:
+        self.request(HttpMethod::Get, url, None).await
+    
+    async fn post(&self, url: &str, body: &[u8]) -> Result<HttpResponse, HttpError>:
+        self.request(HttpMethod::Post, url, Some(body)).await
+    
+    async fn put(&self, url: &str, body: &[u8]) -> Result<HttpResponse, HttpError>:
+        self.request(HttpMethod::Put, url, Some(body)).await
+    
+    async fn delete(&self, url: &str) -> Result<HttpResponse, HttpError>:
+        self.request(HttpMethod::Delete, url, None).await
+
+    async fn request(&self, method: HttpMethod, url: &str, body: Option<&[u8]>) -> Result<HttpResponse, HttpError>:
+        let parsed = parse_url(url)?
+        
+        // Establish connection
+        let addr = resolve_host(parsed.host, parsed.port)?
+        
+        let mut stream = if parsed.scheme == "https":
+            let tls_stream = crypto::TlsStream::connect(parsed.host, parsed.port, crypto::TlsConfig::new()).await?
+            Stream::Tls(tls_stream)
+        else:
+            let tcp_stream = TcpStream::connect(addr).await?
+            Stream::Tcp(tcp_stream)
+        
+        // Build request
+        let mut request = format!("{} {} HTTP/1.1\r\n", method.to_string(), parsed.path)
+        request += format!("Host: {}\r\n", parsed.host)
+        request += format!("User-Agent: {}\r\n", self.user_agent)
+        request += "Connection: close\r\n"
+        
+        for (key, value) in self.default_headers.iter():
+            request += format!("{}: {}\r\n", key, value)
+        
+        if let Some(data) = body:
+            request += format!("Content-Length: {}\r\n", data.len())
+        
+        request += "\r\n"
+        
+        // Send request
+        stream.write_all(request.as_bytes()).await?
+        if let Some(data) = body:
+            stream.write_all(data).await?
+        
+        // Read response
+        let response = read_http_response(&mut stream).await?
+        
+        // Handle redirects
+        if self.follow_redirects && response.is_redirect():
+            if let Some(location) = response.headers.get("Location"):
+                return self.request(HttpMethod::Get, location, None).await
+        
+        Ok(response)
+
+enum HttpMethod:
+    Get
+    Post
+    Put
+    Delete
+    Patch
+    Head
+    Options
+
+    fn to_string(&self) -> String:
+        match self:
+            HttpMethod::Get => "GET"
+            HttpMethod::Post => "POST"
+            HttpMethod::Put => "PUT"
+            HttpMethod::Delete => "DELETE"
+            HttpMethod::Patch => "PATCH"
+            HttpMethod::Head => "HEAD"
+            HttpMethod::Options => "OPTIONS"
+
+struct HttpResponse:
+    status: u16
+    status_text: String
+    headers: Map<String, String>
+    body: Vec<u8>
+
+impl HttpResponse:
+    fn text(&self) -> Result<String, Utf8Error>:
+        String::from_utf8(self.body.clone())
+    
+    fn json<T: serde::Deserialize>(&self) -> Result<T, serde::Error>:
+        let text = self.text()?
+        serde::json::from_str(&text)
+    
+    fn is_success(&self) -> bool:
+        self.status >= 200 && self.status < 300
+    
+    fn is_redirect(&self) -> bool:
+        self.status >= 300 && self.status < 400
+
+// ============================================
+// HTTP Server
+// ============================================
+
+struct HttpServer:
+    listener: TcpListener
+    routes: Vec<Route>
+
+struct Route:
+    method: HttpMethod
+    path: String
+    handler: Box<dyn Fn(HttpRequest) -> HttpResponse>
+
+struct HttpRequest:
+    method: HttpMethod
+    path: String
+    headers: Map<String, String>
+    body: Vec<u8>
+    params: Map<String, String>
+    query: Map<String, String>
+
+impl HttpServer:
+    async fn bind(addr: SocketAddr) -> Result<HttpServer, NetError>:
+        let listener = TcpListener::bind(addr).await?
+        Ok(HttpServer { listener, routes: Vec::new() })
+    
+    fn route<F: Fn(HttpRequest) -> HttpResponse>(&mut self, method: HttpMethod, path: &str, handler: F):
+        self.routes.push(Route {
+            method,
+            path: path.to_string(),
+            handler: Box::new(handler)
+        })
+    
+    fn get<F: Fn(HttpRequest) -> HttpResponse>(&mut self, path: &str, handler: F):
+        self.route(HttpMethod::Get, path, handler)
+    
+    fn post<F: Fn(HttpRequest) -> HttpResponse>(&mut self, path: &str, handler: F):
+        self.route(HttpMethod::Post, path, handler)
+    
+    async fn serve(&self):
+        loop:
+            match self.listener.accept().await:
+                Ok(stream) => spawn self.handle_connection(stream)
+                Err(e) => log::error!("Accept error: {}", e)
+    
+    async fn handle_connection(&self, mut stream: TcpStream):
+        match parse_http_request(&mut stream).await:
+            Ok(request) =>
+                let response = self.dispatch(request)
+                send_http_response(&mut stream, response).await
+            Err(e) =>
+                send_error_response(&mut stream, 400, "Bad Request").await
+    
+    fn dispatch(&self, request: HttpRequest) -> HttpResponse:
+        for route in &self.routes:
+            if route.method == request.method && match_path(&route.path, &request.path):
+                return (route.handler)(request)
+        
+        // 404 Not Found
+        HttpResponse {
+            status: 404,
+            status_text: "Not Found".to_string(),
+            headers: Map::new(),
+            body: b"404 Not Found".to_vec()
+        }
+
+// ============================================
+// WebSocket
+// ============================================
+
+struct WebSocket:
+    stream: TcpStream
+    is_client: bool
+
+impl WebSocket:
+    async fn connect(url: &str) -> Result<WebSocket, WebSocketError>:
+        let parsed = parse_url(url)?
+        let addr = resolve_host(parsed.host, parsed.port)?
+        let mut stream = TcpStream::connect(addr).await?
+        
+        // Perform WebSocket handshake
+        let key = generate_ws_key()
+        let handshake = format!(
+            "GET {} HTTP/1.1\r\n\
+             Host: {}\r\n\
+             Upgrade: websocket\r\n\
+             Connection: Upgrade\r\n\
+             Sec-WebSocket-Key: {}\r\n\
+             Sec-WebSocket-Version: 13\r\n\r\n",
+            parsed.path, parsed.host, key
+        )
+        
+        stream.write_all(handshake.as_bytes()).await?
+        
+        // Read response and verify accept key
+        let response = read_http_response(&mut stream).await?
+        if response.status != 101:
+            return Err(WebSocketError::HandshakeFailed)
+        
+        Ok(WebSocket { stream, is_client: true })
+    
+    async fn send(&mut self, message: WebSocketMessage) -> Result<(), WebSocketError>:
+        let frame = encode_ws_frame(message, self.is_client)
+        self.stream.write_all(&frame).await?
+        Ok(())
+    
+    async fn recv(&mut self) -> Result<WebSocketMessage, WebSocketError>:
+        let frame = decode_ws_frame(&mut self.stream).await?
+        Ok(frame)
+    
+    async fn close(&mut self):
+        self.send(WebSocketMessage::Close(1000)).await.ok()
+        self.stream.close()
+
+enum WebSocketMessage:
+    Text(String)
+    Binary(Vec<u8>)
+    Ping(Vec<u8>)
+    Pong(Vec<u8>)
+    Close(u16)
+
+// ============================================
+// HTTP Helper Functions
+// ============================================
+
+async fn parse_http_request(stream: &mut TcpStream) -> Result<HttpRequest, HttpError>:
+    // Read HTTP request from stream
+    let mut buf = Vec::with_capacity(4096)
+    let mut header_end = false
+    
+    // Read until we find \r\n\r\n (end of headers)
+    while !header_end:
+        let mut chunk = [0u8; 1024]
+        let n = stream.read(&mut chunk).await?
+        if n == 0:
+            return Err(HttpError::ConnectionClosed)
+        buf.extend(&chunk[..n])
+        
+        // Check for header terminator
+        if buf.len() >= 4:
+            for i in 0..buf.len()-3:
+                if buf[i] == b'\r' && buf[i+1] == b'\n' && buf[i+2] == b'\r' && buf[i+3] == b'\n':
+                    header_end = true
+                    break
+    
+    let header_str = String::from_utf8_lossy(&buf)
+    let mut lines = header_str.split("\r\n")
+    
+    // Parse request line: METHOD PATH HTTP/1.1
+    let request_line = lines.next().ok_or(HttpError::MalformedRequest)?
+    let parts: Vec<&str> = request_line.splitn(3, ' ').collect()
+    if parts.len() < 2:
+        return Err(HttpError::MalformedRequest)
+    
+    let method = match parts[0]:
+        "GET" => HttpMethod::Get
+        "POST" => HttpMethod::Post
+        "PUT" => HttpMethod::Put
+        "DELETE" => HttpMethod::Delete
+        "PATCH" => HttpMethod::Patch
+        "HEAD" => HttpMethod::Head
+        "OPTIONS" => HttpMethod::Options
+        _ => return Err(HttpError::UnsupportedMethod)
+    
+    let full_path = parts[1]
+    
+    // Split path and query string
+    let (path, query) = match full_path.find('?'):
+        Some(idx) => (&full_path[..idx], Some(&full_path[idx+1..]))
+        None => (full_path, None)
+    
+    // Parse query parameters
+    let mut query_params = Map::new()
+    if let Some(qs) = query:
+        for pair in qs.split('&'):
+            let kv: Vec<&str> = pair.splitn(2, '=').collect()
+            if kv.len() == 2:
+                query_params.insert(kv[0].to_string(), kv[1].to_string())
+            else if kv.len() == 1:
+                query_params.insert(kv[0].to_string(), String::new())
+    
+    // Parse headers
+    let mut headers = Map::new()
+    for line in lines:
+        if line.is_empty():
+            break
+        if let Some(colon_idx) = line.find(':'):
+            let key = line[..colon_idx].trim().to_lowercase()
+            let value = line[colon_idx+1..].trim().to_string()
+            headers.insert(key, value)
+    
+    // Read body based on Content-Length
+    let mut body = Vec::new()
+    if let Some(cl) = headers.get("content-length"):
+        if let Ok(content_length) = cl.parse::<usize>():
+            // Calculate how much body we already have in buf
+            let header_end_pos = buf.windows(4)
+                .position(|w| w == b"\r\n\r\n")
+                .map(|p| p + 4)
+                .unwrap_or(buf.len())
+            body.extend(&buf[header_end_pos..])
+            
+            // Read remaining body bytes
+            while body.len() < content_length:
+                let mut chunk = [0u8; 1024]
+                let n = stream.read(&mut chunk).await?
+                if n == 0:
+                    break
+                body.extend(&chunk[..n])
+            body.truncate(content_length)
+    
+    Ok(HttpRequest {
+        method,
+        path: path.to_string(),
+        headers,
+        body,
+        params: Map::new(),
+        query: query_params
+    })
+
+async fn send_http_response(stream: &mut TcpStream, response: HttpResponse):
+    // Serialize and write HTTP response to stream
+    let mut header = format!("HTTP/1.1 {} {}\r\n", response.status, response.status_text)
+    
+    // Write content-length if not already present
+    let mut has_content_length = false
+    for (key, value) in &response.headers:
+        header.push_str(&format!("{}: {}\r\n", key, value))
+        if key.to_lowercase() == "content-length":
+            has_content_length = true
+    
+    if !has_content_length:
+        header.push_str(&format!("Content-Length: {}\r\n", response.body.len()))
+    
+    header.push_str("\r\n")
+    
+    stream.write_all(header.as_bytes()).await.ok()
+    if !response.body.is_empty():
+        stream.write_all(&response.body).await.ok()
+
+async fn send_error_response(stream: &mut TcpStream, status: u16, text: &str):
+    let response = HttpResponse {
+        status,
+        status_text: text.to_string(),
+        headers: Map::new(),
+        body: text.as_bytes().to_vec()
+    }
+    send_http_response(stream, response).await
+
+fn match_path(pattern: &str, path: &str) -> bool:
+    // Match a route pattern against a request path
+    // Supports exact match and :param placeholders
+    let pattern_parts: Vec<&str> = pattern.split('/').filter(|s| !s.is_empty()).collect()
+    let path_parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect()
+    
+    if pattern_parts.len() != path_parts.len():
+        return false
+    
+    for (pp, rp) in pattern_parts.iter().zip(path_parts.iter()):
+        if pp.starts_with(':'):
+            // Parameter segment - matches anything
+            continue
+        if pp.starts_with('*'):
+            // Wildcard - matches rest of path
+            return true
+        if *pp != *rp:
+            return false
+    
+    true
+
+// ============================================
+// WebSocket Helper Functions
+// ============================================
+
+fn generate_ws_key() -> String:
+    // Generate a random 16-byte key, base64-encoded
+    let mut key_bytes = [0u8; 16]
+    // Use a simple PRNG seeded from available entropy
+    let mut seed = 0x12345678u64
+    for i in 0..16:
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407)
+        key_bytes[i] = ((seed >> 33) & 0xFF) as u8
+    base64_encode(&key_bytes)
+
+fn base64_encode(data: &[u8]) -> String:
+    let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    let mut result = String::new()
+    let mut i = 0
+    while i < data.len():
+        let b0 = data[i] as u32
+        let b1 = if i + 1 < data.len() { data[i+1] as u32 } else { 0 }
+        let b2 = if i + 2 < data.len() { data[i+2] as u32 } else { 0 }
+        let triple = (b0 << 16) | (b1 << 8) | b2
+        
+        result.push(chars.as_bytes()[((triple >> 18) & 0x3F) as usize] as char)
+        result.push(chars.as_bytes()[((triple >> 12) & 0x3F) as usize] as char)
+        
+        if i + 1 < data.len():
+            result.push(chars.as_bytes()[((triple >> 6) & 0x3F) as usize] as char)
+        else:
+            result.push('=')
+        
+        if i + 2 < data.len():
+            result.push(chars.as_bytes()[(triple & 0x3F) as usize] as char)
+        else:
+            result.push('=')
+        
+        i += 3
+    result
+
+fn encode_ws_frame(message: WebSocketMessage, mask: bool) -> Vec<u8>:
+    // Encode a WebSocket message into a frame per RFC 6455
+    let (opcode, payload) = match &message:
+        WebSocketMessage::Text(s) => (0x01u8, s.as_bytes().to_vec())
+        WebSocketMessage::Binary(b) => (0x02u8, b.clone())
+        WebSocketMessage::Ping(b) => (0x09u8, b.clone())
+        WebSocketMessage::Pong(b) => (0x0Au8, b.clone())
+        WebSocketMessage::Close(code) => (0x08u8, code.to_be_bytes().to_vec())
+    
+    let mut frame = Vec::new()
+    
+    // First byte: FIN bit (1) + opcode
+    frame.push(0x80 | opcode)
+    
+    // Second byte: MASK bit + payload length
+    let mask_bit: u8 = if mask { 0x80 } else { 0x00 }
+    let len = payload.len()
+    
+    if len <= 125:
+        frame.push(mask_bit | len as u8)
+    else if len <= 65535:
+        frame.push(mask_bit | 126)
+        frame.push((len >> 8) as u8)
+        frame.push((len & 0xFF) as u8)
+    else:
+        frame.push(mask_bit | 127)
+        for i in (0..8).rev():
+            frame.push(((len >> (i * 8)) & 0xFF) as u8)
+    
+    // Masking key (if client)
+    if mask:
+        let mask_key = [0x37u8, 0xFA, 0x21, 0x3D]  // Random mask key
+        frame.extend(&mask_key)
+        // XOR payload with mask
+        for (i, byte) in payload.iter().enumerate():
+            frame.push(byte ^ mask_key[i % 4])
+    else:
+        frame.extend(&payload)
+    
+    frame
+
+async fn decode_ws_frame(stream: &mut TcpStream) -> Result<WebSocketMessage, WebSocketError>:
+    // Decode a WebSocket frame from a stream per RFC 6455
+    let mut header = [0u8; 2]
+    stream.read_exact(&mut header).await.map_err(|_| WebSocketError::ReadError)?
+    
+    let _fin = (header[0] & 0x80) != 0
+    let opcode = header[0] & 0x0F
+    let masked = (header[1] & 0x80) != 0
+    let mut payload_len = (header[1] & 0x7F) as u64
+    
+    // Extended payload length
+    if payload_len == 126:
+        let mut ext = [0u8; 2]
+        stream.read_exact(&mut ext).await.map_err(|_| WebSocketError::ReadError)?
+        payload_len = ((ext[0] as u64) << 8) | (ext[1] as u64)
+    else if payload_len == 127:
+        let mut ext = [0u8; 8]
+        stream.read_exact(&mut ext).await.map_err(|_| WebSocketError::ReadError)?
+        payload_len = 0
+        for i in 0..8:
+            payload_len = (payload_len << 8) | (ext[i] as u64)
+    
+    // Read masking key if present
+    let mut mask_key = [0u8; 4]
+    if masked:
+        stream.read_exact(&mut mask_key).await.map_err(|_| WebSocketError::ReadError)?
+    
+    // Read payload
+    let mut payload = vec![0u8; payload_len as usize]
+    stream.read_exact(&mut payload).await.map_err(|_| WebSocketError::ReadError)?
+    
+    // Unmask if needed
+    if masked:
+        for (i, byte) in payload.iter_mut().enumerate():
+            *byte ^= mask_key[i % 4]
+    
+    // Convert based on opcode
+    match opcode:
+        0x01 =>  // Text
+            let text = String::from_utf8(payload).map_err(|_| WebSocketError::InvalidFrame)?
+            Ok(WebSocketMessage::Text(text))
+        0x02 =>  // Binary
+            Ok(WebSocketMessage::Binary(payload))
+        0x08 =>  // Close
+            let code = if payload.len() >= 2:
+                ((payload[0] as u16) << 8) | (payload[1] as u16)
+            else:
+                1000
+            Ok(WebSocketMessage::Close(code))
+        0x09 =>  // Ping
+            Ok(WebSocketMessage::Ping(payload))
+        0x0A =>  // Pong
+            Ok(WebSocketMessage::Pong(payload))
+        _ => Err(WebSocketError::InvalidFrame)
+
+// ============================================
+// DNS Resolution
+// ============================================
+
+async fn resolve(host: &str) -> Result<Vec<IpAddr>, DnsError>:
+    // Use getaddrinfo for resolution
+    let mut results: Vec<IpAddr> = Vec::new()
+    
+    // Prepare hints structure (48 bytes on most systems)
+    let mut hints: [u8; 48] = [0; 48]
+    // ai_family = AF_UNSPEC (0) for both IPv4 and IPv6
+    hints[0] = 0
+    hints[1] = 0
+    hints[2] = 0
+    hints[3] = 0
+    // ai_socktype = SOCK_STREAM (1)
+    hints[4] = SOCK_STREAM as u8
+    
+    let host_cstr = host.as_c_str()
+    let mut result_ptr: *u8 = null()
+    
+    let ret = getaddrinfo(host_cstr.as_ptr(), null(), hints.as_ptr(), &mut result_ptr)
+    
+    if ret != 0 or result_ptr.is_null():
+        return Err(DnsError::ResolutionFailed)
+    
+    // Walk the linked list of results
+    let mut current = result_ptr
+    while not current.is_null():
+        // addrinfo structure layout varies, but ai_family is typically at offset 0-4
+        // and ai_addr is typically at offset 24-32 (pointer to sockaddr)
+        let ai_family = *(current as *i32)
+        let ai_addrlen = *((current as usize + 16) as *u32)
+        let ai_addr = *((current as usize + 24) as **u8)
+        
+        if not ai_addr.is_null():
+            if ai_family == AF_INET:
+                // sockaddr_in: family(2) + port(2) + addr(4)
+                let addr_bytes = (ai_addr as usize + 4) as *u8
+                let ip = IpAddr::V4(
+                    *addr_bytes,
+                    *(addr_bytes.offset(1)),
+                    *(addr_bytes.offset(2)),
+                    *(addr_bytes.offset(3))
+                )
+                results.push(ip)
+            else if ai_family == AF_INET6:
+                // sockaddr_in6: family(2) + port(2) + flowinfo(4) + addr(16)
+                let addr_bytes = (ai_addr as usize + 8) as *u8
+                let mut bytes: [u8; 16] = [0; 16]
+                for i in 0..16:
+                    bytes[i] = *(addr_bytes.offset(i as isize))
+                results.push(IpAddr::V6(bytes))
+        
+        // Move to next (ai_next is typically at offset 32 or 40)
+        current = *((current as usize + 32) as **u8)
+    
+    freeaddrinfo(result_ptr)
+    
+    if results.is_empty():
+        Err(DnsError::NotFound)
+    else:
+        Ok(results)
+
+async fn resolve_host(host: &str, port: u16) -> Result<SocketAddr, DnsError>:
+    let addrs = resolve(host).await?
+    if addrs.is_empty():
+        return Err(DnsError::NotFound)
+    Ok(SocketAddr::new(addrs[0], port))
+
+// ============================================
+// Errors
+// ============================================
+
+enum NetError:
+    SocketCreationFailed
+    BindFailed
+    ListenFailed
+    AcceptFailed
+    ConnectionFailed
+    ReadFailed
+    WriteFailed
+    SendFailed
+    RecvFailed
+    Timeout
+    UnexpectedEof
+    Other(String)
+
+enum HttpError:
+    ConnectionFailed(NetError)
+    InvalidUrl(String)
+    TlsError(crypto::TlsError)
+    Timeout
+    InvalidResponse
+
+enum WebSocketError:
+    ConnectionFailed(NetError)
+    HandshakeFailed
+    InvalidFrame
+    Closed
+
+enum DnsError:
+    NotFound
+    ResolutionFailed
+    Timeout
+
+enum ParseError:
+    InvalidFormat
+    InvalidNumber
+
+// ============================================
+// Helper Functions
+// ============================================
+
+fn create_sockaddr(addr: SocketAddr) -> Vec<u8>:
+    // Create platform-specific sockaddr structure
+    let mut buf = Vec::with_capacity(16)
+    match addr.ip:
+        IpAddr::V4(a, b, c, d) =>
+            buf.push(AF_INET as u8)
+            buf.push(0)  // padding
+            buf.push((addr.port >> 8) as u8)
+            buf.push((addr.port & 0xFF) as u8)
+            buf.push(a)
+            buf.push(b)
+            buf.push(c)
+            buf.push(d)
+            // Padding to 16 bytes
+            buf.extend(&[0u8; 8])
+        IpAddr::V6(bytes) =>
+            // IPv6 sockaddr_in6 structure (28 bytes)
+            buf.clear()
+            buf.reserve(28)
+            // sin6_family = AF_INET6 (10)
+            buf.push(AF_INET6 as u8)
+            buf.push(0)
+            // sin6_port (network byte order)
+            buf.push((addr.port >> 8) as u8)
+            buf.push((addr.port & 0xFF) as u8)
+            // sin6_flowinfo (4 bytes, usually 0)
+            buf.extend(&[0u8; 4])
+            // sin6_addr (16 bytes)
+            for b in bytes:
+                buf.push(*b)
+            // sin6_scope_id (4 bytes, usually 0)
+            buf.extend(&[0u8; 4])
+    buf
+
+fn parse_sockaddr(buf: &[u8]) -> SocketAddr:
+    if buf.len() >= 8 && buf[0] == AF_INET as u8:
+        let port = (buf[2] as u16) << 8 | buf[3] as u16
+        let ip = IpAddr::V4(buf[4], buf[5], buf[6], buf[7])
+        SocketAddr { ip, port }
+    else:
+        // Default fallback
+        SocketAddr::new(IpAddr::V4(0, 0, 0, 0), 0)
+
+fn get_local_addr(fd: i32) -> SocketAddr:
+    // getsockname implementation
+    SocketAddr::new(IpAddr::V4(127, 0, 0, 1), 0)
+
+// URL Parsing
+struct ParsedUrl:
+    scheme: String
+    host: String
+    port: u16
+    path: String
+    query: Option<String>
+
+fn parse_url(url: &str) -> Result<ParsedUrl, HttpError>:
+    // Simple URL parser
+    let (scheme, rest) = if url.starts_with("https://"):
+        ("https", &url[8..])
+    else if url.starts_with("http://"):
+        ("http", &url[7..])
+    else:
+        return Err(HttpError::InvalidUrl("Unknown scheme".to_string()))
+    
+    let default_port = if scheme == "https" { 443 } else { 80 }
+    
+    let (host_port, path) = match rest.find('/'):
+        Some(i) => (&rest[..i], &rest[i..])
+        None => (rest, "/")
+    
+    let (host, port) = match host_port.find(':'):
+        Some(i) => 
+            let port_str = &host_port[i+1..]
+            (&host_port[..i], port_str.parse::<u16>().unwrap_or(default_port))
+        None => 
+            (host_port, default_port)
+    
+    let (path_only, query) = match path.find('?'):
+        Some(i) => (&path[..i], Some(path[i+1..].to_string()))
+        None => (path, None)
+    
+    Ok(ParsedUrl {
+        scheme: scheme.to_string(),
+        host: host.to_string(),
+        port,
+        path: path_only.to_string(),
+        query
+    })

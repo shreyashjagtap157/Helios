@@ -1,0 +1,579 @@
+module compiler::lexer::token
+
+// ============================================================================
+// Token Definitions for the Omni Programming Language
+// Complete token set: 80+ token kinds covering all language constructs
+// ============================================================================
+
+// --- Source Location ---
+
+struct Span:
+    file_id: u32
+    start: u32
+    end: u32
+    line: u32
+    column: u32
+
+    fn new(file_id: u32, start: u32, end: u32, line: u32, column: u32) -> own Self:
+        return Span { file_id: file_id, start: start, end: end, line: line, column: column }
+
+    fn merge(&self, other: &Span) -> own Span:
+        let s = if self.start < other.start: self.start else: other.start
+        let e = if self.end > other.end: self.end else: other.end
+        return Span::new(self.file_id, s, e, self.line, self.column)
+
+    fn len(&self) -> u32:
+        return self.end - self.start
+
+    fn dummy() -> own Span:
+        return Span::new(0, 0, 0, 0, 0)
+
+// --- Token Kind ---
+
+enum TokenKind:
+    // --- Literals ---
+    IntLiteral(u64)
+    FloatLiteral(f64)
+    StringLiteral(str)
+    CharLiteral(char)
+    BoolLiteral(bool)
+
+    // --- Identifier ---
+    Identifier(str)
+
+    // --- Keywords: Declarations ---
+    KwFn
+    KwStruct
+    KwEnum
+    KwTrait
+    KwImpl
+    KwType
+    KwConst
+    KwStatic
+    KwModule
+    KwMacro
+    KwExtern
+
+    // --- Keywords: Bindings ---
+    KwLet
+    KwMut
+    KwVar
+
+    // --- Keywords: Control Flow ---
+    KwIf
+    KwElif
+    KwElse
+    KwFor
+    KwIn
+    KwWhile
+    KwLoop
+    KwMatch
+    KwSelect
+    KwCase
+
+    // --- Keywords: Flow Control ---
+    KwReturn
+    KwBreak
+    KwContinue
+    KwYield
+    KwPass
+
+    // --- Keywords: Ownership ---
+    KwOwn
+    KwShared
+    KwUnsafe
+
+    // --- Keywords: Traits ---
+    KwImplements
+    KwDyn
+    KwWhere
+
+    // --- Keywords: Async ---
+    KwAsync
+    KwAwait
+    KwSpawn
+
+    // --- Keywords: Visibility ---
+    KwPub
+
+    // --- Keywords: Compile-time ---
+    KwComptime
+    KwDefer
+
+    // --- Keywords: Values ---
+    KwTrue
+    KwFalse
+    KwNull
+    KwSome
+    KwNone
+    KwOk
+    KwErr
+    KwSelfValue       // self
+    KwSelfType        // Self
+
+    // --- Keywords: Import ---
+    KwImport
+    KwUse
+    KwAs
+
+    // --- Keywords: Logical ---
+    KwAnd
+    KwOr
+    KwNot
+
+    // --- Operators: Arithmetic ---
+    Plus              // +
+    Minus             // -
+    Star              // *
+    Slash             // /
+    Percent           // %
+
+    // --- Operators: Comparison ---
+    EqEq              // ==
+    NotEq             // !=
+    Less              // <
+    Greater           // >
+    LessEq            // <=
+    GreaterEq         // >=
+
+    // --- Operators: Logical ---
+    AmpAmp            // &&
+    PipePipe          // ||
+    Bang              // !
+
+    // --- Operators: Bitwise ---
+    Amp               // &
+    Pipe              // |
+    Caret             // ^
+    ShiftLeft         // <<
+    ShiftRight        // >>
+    Tilde             // ~
+
+    // --- Operators: Assignment ---
+    Eq                // =
+    PlusEq            // +=
+    MinusEq           // -=
+    StarEq            // *=
+    SlashEq           // /=
+    PercentEq         // %=
+    AmpEq             // &=
+    PipeEq            // |=
+    CaretEq           // ^=
+    ShiftLeftEq       // <<=
+    ShiftRightEq      // >>=
+
+    // --- Operators: Range ---
+    DotDot            // ..
+    DotDotEq          // ..=
+
+    // --- Operators: Special ---
+    Arrow             // ->
+    FatArrow          // =>
+    Question          // ?
+    PipeGreater       // |>
+    ColonColon        // ::
+    At                // @
+
+    // --- Delimiters ---
+    LeftParen         // (
+    RightParen        // )
+    LeftBracket       // [
+    RightBracket      // ]
+    LeftBrace         // {
+    RightBrace        // }
+
+    // --- Punctuation ---
+    Colon             // :
+    Semicolon         // ;
+    Comma             // ,
+    Dot               // .
+    Hash              // #
+    Underscore        // _
+    Ellipsis          // ...
+
+    // --- Indentation ---
+    Indent
+    Dedent
+    Newline
+
+    // --- Special ---
+    Eof
+    Error(str)
+
+    fn is_keyword(&self) -> bool:
+        match self:
+            KwFn | KwStruct | KwEnum | KwTrait | KwImpl | KwType |
+            KwConst | KwStatic | KwModule | KwMacro | KwExtern |
+            KwLet | KwMut | KwVar |
+            KwIf | KwElif | KwElse | KwFor | KwIn | KwWhile |
+            KwLoop | KwMatch | KwSelect | KwCase |
+            KwReturn | KwBreak | KwContinue | KwYield | KwPass |
+            KwOwn | KwShared | KwUnsafe |
+            KwImplements | KwDyn | KwWhere |
+            KwAsync | KwAwait | KwSpawn |
+            KwPub | KwComptime | KwDefer |
+            KwTrue | KwFalse | KwNull | KwSome | KwNone | KwOk | KwErr |
+            KwSelfValue | KwSelfType |
+            KwImport | KwUse | KwAs |
+            KwAnd | KwOr | KwNot => true
+            _ => false
+
+    fn is_literal(&self) -> bool:
+        match self:
+            IntLiteral(_) | FloatLiteral(_) | StringLiteral(_) |
+            CharLiteral(_) | BoolLiteral(_) => true
+            _ => false
+
+    fn is_operator(&self) -> bool:
+        match self:
+            Plus | Minus | Star | Slash | Percent |
+            EqEq | NotEq | Less | Greater | LessEq | GreaterEq |
+            AmpAmp | PipePipe | Bang |
+            Amp | Pipe | Caret | ShiftLeft | ShiftRight | Tilde |
+            Eq | PlusEq | MinusEq | StarEq | SlashEq | PercentEq |
+            AmpEq | PipeEq | CaretEq | ShiftLeftEq | ShiftRightEq |
+            DotDot | DotDotEq | Arrow | FatArrow | Question |
+            PipeGreater | ColonColon | At => true
+            _ => false
+
+    fn is_assignment(&self) -> bool:
+        match self:
+            Eq | PlusEq | MinusEq | StarEq | SlashEq | PercentEq |
+            AmpEq | PipeEq | CaretEq | ShiftLeftEq | ShiftRightEq => true
+            _ => false
+
+    fn is_comparison(&self) -> bool:
+        match self:
+            EqEq | NotEq | Less | Greater | LessEq | GreaterEq => true
+            _ => false
+
+    fn precedence(&self) -> i32:
+        match self:
+            Eq | PlusEq | MinusEq | StarEq | SlashEq |
+            PercentEq | AmpEq | PipeEq | CaretEq |
+            ShiftLeftEq | ShiftRightEq     => 1
+            PipePipe | KwOr                 => 2
+            AmpAmp | KwAnd                  => 3
+            Pipe                            => 4
+            Caret                           => 5
+            Amp                             => 6
+            EqEq | NotEq                    => 7
+            Less | Greater | LessEq | GreaterEq => 8
+            DotDot | DotDotEq               => 9
+            ShiftLeft | ShiftRight          => 10
+            Plus | Minus                    => 11
+            Star | Slash | Percent          => 12
+            KwAs                            => 13
+            Bang | Tilde | KwNot            => 14  // unary
+            PipeGreater                     => 15
+            _                               => 0
+
+    fn to_string(&self) -> str:
+        match self:
+            IntLiteral(v)    => format("int({})", v)
+            FloatLiteral(v)  => format("float({})", v)
+            StringLiteral(v) => format("string(\"{}\")", v)
+            CharLiteral(v)   => format("char('{}')", v)
+            BoolLiteral(v)   => format("bool({})", v)
+            Identifier(v)    => format("ident({})", v)
+            KwFn             => "fn"
+            KwStruct         => "struct"
+            KwEnum           => "enum"
+            KwTrait          => "trait"
+            KwImpl           => "impl"
+            KwType           => "type"
+            KwConst          => "const"
+            KwStatic         => "static"
+            KwModule         => "module"
+            KwMacro          => "macro"
+            KwExtern         => "extern"
+            KwLet            => "let"
+            KwMut            => "mut"
+            KwVar            => "var"
+            KwIf             => "if"
+            KwElif           => "elif"
+            KwElse           => "else"
+            KwFor            => "for"
+            KwIn             => "in"
+            KwWhile          => "while"
+            KwLoop           => "loop"
+            KwMatch          => "match"
+            KwSelect         => "select"
+            KwCase           => "case"
+            KwReturn         => "return"
+            KwBreak          => "break"
+            KwContinue       => "continue"
+            KwYield          => "yield"
+            KwPass           => "pass"
+            KwOwn            => "own"
+            KwShared         => "shared"
+            KwUnsafe         => "unsafe"
+            KwImplements     => "implements"
+            KwDyn            => "dyn"
+            KwWhere          => "where"
+            KwAsync          => "async"
+            KwAwait          => "await"
+            KwSpawn          => "spawn"
+            KwPub            => "pub"
+            KwComptime       => "comptime"
+            KwDefer          => "defer"
+            KwTrue           => "true"
+            KwFalse          => "false"
+            KwNull           => "null"
+            KwSome           => "Some"
+            KwNone           => "None"
+            KwOk             => "Ok"
+            KwErr            => "Err"
+            KwSelfValue      => "self"
+            KwSelfType       => "Self"
+            KwImport         => "import"
+            KwUse            => "use"
+            KwAs             => "as"
+            KwAnd            => "and"
+            KwOr             => "or"
+            KwNot            => "not"
+            Plus             => "+"
+            Minus            => "-"
+            Star             => "*"
+            Slash            => "/"
+            Percent          => "%"
+            EqEq             => "=="
+            NotEq            => "!="
+            Less             => "<"
+            Greater          => ">"
+            LessEq           => "<="
+            GreaterEq        => ">="
+            AmpAmp           => "&&"
+            PipePipe         => "||"
+            Bang             => "!"
+            Amp              => "&"
+            Pipe             => "|"
+            Caret            => "^"
+            ShiftLeft        => "<<"
+            ShiftRight       => ">>"
+            Tilde            => "~"
+            Eq               => "="
+            PlusEq           => "+="
+            MinusEq          => "-="
+            StarEq           => "*="
+            SlashEq          => "/="
+            PercentEq        => "%="
+            AmpEq            => "&="
+            PipeEq           => "|="
+            CaretEq          => "^="
+            ShiftLeftEq      => "<<="
+            ShiftRightEq     => ">>="
+            DotDot           => ".."
+            DotDotEq         => "..="
+            Arrow            => "->"
+            FatArrow          => "=>"
+            Question         => "?"
+            PipeGreater      => "|>"
+            ColonColon       => "::"
+            At               => "@"
+            LeftParen        => "("
+            RightParen       => ")"
+            LeftBracket      => "["
+            RightBracket     => "]"
+            LeftBrace        => "{"
+            RightBrace       => "}"
+            Colon            => ":"
+            Semicolon        => ";"
+            Comma            => ","
+            Dot              => "."
+            Hash             => "#"
+            Underscore       => "_"
+            Ellipsis         => "..."
+            Indent           => "<INDENT>"
+            Dedent           => "<DEDENT>"
+            Newline          => "<NEWLINE>"
+            Eof              => "<EOF>"
+            Error(msg)       => format("<ERROR: {}>", msg)
+
+// --- Token ---
+
+struct Token:
+    kind: TokenKind
+    span: Span
+    leading_trivia: str     // whitespace/comments before token
+    has_leading_newline: bool
+
+    fn new(kind: TokenKind, span: Span) -> own Self:
+        return Token {
+            kind: kind,
+            span: span,
+            leading_trivia: "",
+            has_leading_newline: false,
+        }
+
+    fn with_trivia(kind: TokenKind, span: Span, trivia: str, has_newline: bool) -> own Self:
+        return Token {
+            kind: kind,
+            span: span,
+            leading_trivia: trivia,
+            has_leading_newline: has_newline,
+        }
+
+    fn is_eof(&self) -> bool:
+        match self.kind:
+            TokenKind::Eof => true
+            _ => false
+
+    fn is_newline(&self) -> bool:
+        match self.kind:
+            TokenKind::Newline => true
+            _ => false
+
+    fn is_keyword(&self, kw: &TokenKind) -> bool:
+        return self.kind == kw
+
+    fn to_string(&self) -> str:
+        return format("Token({}, {}:{})", self.kind.to_string(), self.span.line, self.span.column)
+
+// --- Keyword Lookup ---
+
+fn lookup_keyword(ident: &str) -> Option<TokenKind>:
+    match ident:
+        "fn"         => Some(TokenKind::KwFn)
+        "struct"     => Some(TokenKind::KwStruct)
+        "enum"       => Some(TokenKind::KwEnum)
+        "trait"      => Some(TokenKind::KwTrait)
+        "impl"       => Some(TokenKind::KwImpl)
+        "type"       => Some(TokenKind::KwType)
+        "const"      => Some(TokenKind::KwConst)
+        "static"     => Some(TokenKind::KwStatic)
+        "module"     => Some(TokenKind::KwModule)
+        "macro"      => Some(TokenKind::KwMacro)
+        "extern"     => Some(TokenKind::KwExtern)
+        "let"        => Some(TokenKind::KwLet)
+        "mut"        => Some(TokenKind::KwMut)
+        "var"        => Some(TokenKind::KwVar)
+        "if"         => Some(TokenKind::KwIf)
+        "elif"       => Some(TokenKind::KwElif)
+        "else"       => Some(TokenKind::KwElse)
+        "for"        => Some(TokenKind::KwFor)
+        "in"         => Some(TokenKind::KwIn)
+        "while"      => Some(TokenKind::KwWhile)
+        "loop"       => Some(TokenKind::KwLoop)
+        "match"      => Some(TokenKind::KwMatch)
+        "select"     => Some(TokenKind::KwSelect)
+        "case"       => Some(TokenKind::KwCase)
+        "return"     => Some(TokenKind::KwReturn)
+        "break"      => Some(TokenKind::KwBreak)
+        "continue"   => Some(TokenKind::KwContinue)
+        "yield"      => Some(TokenKind::KwYield)
+        "pass"       => Some(TokenKind::KwPass)
+        "own"        => Some(TokenKind::KwOwn)
+        "shared"     => Some(TokenKind::KwShared)
+        "unsafe"     => Some(TokenKind::KwUnsafe)
+        "implements" => Some(TokenKind::KwImplements)
+        "dyn"        => Some(TokenKind::KwDyn)
+        "where"      => Some(TokenKind::KwWhere)
+        "async"      => Some(TokenKind::KwAsync)
+        "await"      => Some(TokenKind::KwAwait)
+        "spawn"      => Some(TokenKind::KwSpawn)
+        "pub"        => Some(TokenKind::KwPub)
+        "comptime"   => Some(TokenKind::KwComptime)
+        "defer"      => Some(TokenKind::KwDefer)
+        "true"       => Some(TokenKind::KwTrue)
+        "false"      => Some(TokenKind::KwFalse)
+        "null"       => Some(TokenKind::KwNull)
+        "Some"       => Some(TokenKind::KwSome)
+        "None"       => Some(TokenKind::KwNone)
+        "Ok"         => Some(TokenKind::KwOk)
+        "Err"        => Some(TokenKind::KwErr)
+        "self"       => Some(TokenKind::KwSelfValue)
+        "Self"       => Some(TokenKind::KwSelfType)
+        "import"     => Some(TokenKind::KwImport)
+        "use"        => Some(TokenKind::KwUse)
+        "as"         => Some(TokenKind::KwAs)
+        "and"        => Some(TokenKind::KwAnd)
+        "or"         => Some(TokenKind::KwOr)
+        "not"        => Some(TokenKind::KwNot)
+        _            => None
+
+// --- Lexer Error ---
+
+enum LexerError:
+    UnexpectedChar(char, u32, u32)
+    UnterminatedString(u32, u32)
+    UnterminatedBlockComment(u32, u32)
+    InvalidEscapeSequence(str, u32, u32)
+    InvalidNumberLiteral(str, u32, u32)
+    InvalidCharLiteral(str, u32, u32)
+    InvalidUnicodeEscape(str, u32, u32)
+    IndentationError(str, u32, u32)
+    MixedIndentation(u32, u32)
+
+    fn message(&self) -> str:
+        match self:
+            UnexpectedChar(c, line, col) =>
+                format("unexpected character '{}' at {}:{}", c, line, col)
+            UnterminatedString(line, col) =>
+                format("unterminated string literal starting at {}:{}", line, col)
+            UnterminatedBlockComment(line, col) =>
+                format("unterminated block comment starting at {}:{}", line, col)
+            InvalidEscapeSequence(seq, line, col) =>
+                format("invalid escape sequence '{}' at {}:{}", seq, line, col)
+            InvalidNumberLiteral(lit, line, col) =>
+                format("invalid number literal '{}' at {}:{}", lit, line, col)
+            InvalidCharLiteral(lit, line, col) =>
+                format("invalid character literal '{}' at {}:{}", lit, line, col)
+            InvalidUnicodeEscape(esc, line, col) =>
+                format("invalid unicode escape '{}' at {}:{}", esc, line, col)
+            IndentationError(msg, line, col) =>
+                format("indentation error: {} at {}:{}", msg, line, col)
+            MixedIndentation(line, col) =>
+                format("mixed tabs and spaces in indentation at {}:{}", line, col)
+
+    fn line(&self) -> u32:
+        match self:
+            UnexpectedChar(_, l, _) | UnterminatedString(l, _) |
+            UnterminatedBlockComment(l, _) | InvalidEscapeSequence(_, l, _) |
+            InvalidNumberLiteral(_, l, _) | InvalidCharLiteral(_, l, _) |
+            InvalidUnicodeEscape(_, l, _) | IndentationError(_, l, _) |
+            MixedIndentation(l, _) => l
+
+    fn column(&self) -> u32:
+        match self:
+            UnexpectedChar(_, _, c) | UnterminatedString(_, c) |
+            UnterminatedBlockComment(_, c) | InvalidEscapeSequence(_, _, c) |
+            InvalidNumberLiteral(_, _, c) | InvalidCharLiteral(_, _, c) |
+            InvalidUnicodeEscape(_, _, c) | IndentationError(_, _, c) |
+            MixedIndentation(_, c) => c
+
+// --- Lexer Result ---
+
+type LexResult = Result<Vector<Token>, LexerError>
+
+// --- Utility Functions ---
+
+fn is_ident_start(c: char) -> bool:
+    return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_'
+
+fn is_ident_continue(c: char) -> bool:
+    return is_ident_start(c) or (c >= '0' and c <= '9')
+
+fn is_digit(c: char) -> bool:
+    return c >= '0' and c <= '9'
+
+fn is_hex_digit(c: char) -> bool:
+    return is_digit(c) or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')
+
+fn is_binary_digit(c: char) -> bool:
+    return c == '0' or c == '1'
+
+fn is_octal_digit(c: char) -> bool:
+    return c >= '0' and c <= '7'
+
+fn is_whitespace(c: char) -> bool:
+    return c == ' ' or c == '\t' or c == '\r'
+
+fn hex_char_value(c: char) -> u64:
+    if c >= '0' and c <= '9':
+        return (c as u64) - ('0' as u64)
+    elif c >= 'a' and c <= 'f':
+        return (c as u64) - ('a' as u64) + 10
+    elif c >= 'A' and c <= 'F':
+        return (c as u64) - ('A' as u64) + 10
+    return 0

@@ -1,0 +1,1364 @@
+module std::collections
+
+// ============================================================================
+// Omni Standard Library — Collections
+// ============================================================================
+// Vector, HashMap, HashSet, BTreeMap, LinkedList, and VecDeque.
+
+import std::core::{
+    Option, Some, None, Result, Ok, Err,
+    Clone, Drop, Default, Debug, Display, PartialEq, Eq, Hash, Hasher,
+    Iterator, ExactSizeIterator, IntoIterator, FromIterator, Ordering,
+}
+import std::mem::{
+    alloc, dealloc, realloc_mem, size_of, align_of,
+    copy_nonoverlapping, write_bytes, swap, is_null, null_mut,
+    memcpy, memmove, Box,
+}
+
+// ============================================================================
+// Vector<T> — Dynamic Array
+// ============================================================================
+
+struct Vector<T>:
+    data: *mut T
+    len: usize
+    cap: usize
+
+    fn new() -> own Vector<T>:
+        return Vector { data: null_mut(), len: 0, cap: 0 }
+
+    fn with_capacity(cap: usize) -> own Vector<T>:
+        if cap == 0:
+            return Vector::new()
+        let data = alloc(cap * size_of::<T>()) as *mut T
+        if is_null(data):
+            panic("Vector allocation failed")
+        return Vector { data, len: 0, cap }
+
+    fn from_slice(slice: &[T]) -> own Vector<T> where T: Clone:
+        let mut v = Vector::with_capacity(slice.len())
+        for item in slice:
+            v.push(item.clone())
+        return v
+
+    fn from(arr: [T]) -> own Vector<T>:
+        let mut v = Vector::with_capacity(arr.len())
+        for item in arr:
+            v.push(item)
+        return v
+
+    fn len(&self) -> usize:
+        return self.len
+
+    fn is_empty(&self) -> bool:
+        return self.len == 0
+
+    fn capacity(&self) -> usize:
+        return self.cap
+
+    fn push(&mut self, value: T):
+        if self.len == self.cap:
+            self.grow()
+        unsafe:
+            let ptr = self.data.offset(self.len as isize)
+            std::mem::write(ptr, value)
+        self.len += 1
+
+    fn pop(&mut self) -> Option<T>:
+        if self.len == 0:
+            return None
+        self.len -= 1
+        unsafe:
+            let ptr = self.data.offset(self.len as isize)
+            return Some(std::mem::read(ptr as *const T))
+
+    fn get(&self, index: usize) -> Option<&T>:
+        if index >= self.len:
+            return None
+        unsafe:
+            return Some(&*self.data.offset(index as isize))
+
+    fn get_mut(&mut self, index: usize) -> Option<&mut T>:
+        if index >= self.len:
+            return None
+        unsafe:
+            return Some(&mut *self.data.offset(index as isize))
+
+    fn first(&self) -> Option<&T>:
+        return self.get(0)
+
+    fn last(&self) -> Option<&T>:
+        if self.len == 0:
+            return None
+        return self.get(self.len - 1)
+
+    fn first_mut(&mut self) -> Option<&mut T>:
+        return self.get_mut(0)
+
+    fn last_mut(&mut self) -> Option<&mut T>:
+        if self.len == 0:
+            return None
+        return self.get_mut(self.len - 1)
+
+    fn insert(&mut self, index: usize, value: T):
+        assert(index <= self.len, "insert index out of bounds")
+        if self.len == self.cap:
+            self.grow()
+        unsafe:
+            if index < self.len:
+                let src = self.data.offset(index as isize)
+                let dst = self.data.offset((index + 1) as isize)
+                memmove(dst as *mut u8, src as *const u8, (self.len - index) * size_of::<T>())
+            let ptr = self.data.offset(index as isize)
+            std::mem::write(ptr, value)
+        self.len += 1
+
+    fn remove(&mut self, index: usize) -> T:
+        assert(index < self.len, "remove index out of bounds")
+        unsafe:
+            let ptr = self.data.offset(index as isize)
+            let value = std::mem::read(ptr as *const T)
+            if index < self.len - 1:
+                let src = self.data.offset((index + 1) as isize)
+                memmove(ptr as *mut u8, src as *const u8, (self.len - index - 1) * size_of::<T>())
+            self.len -= 1
+            return value
+
+    fn swap_remove(&mut self, index: usize) -> T:
+        assert(index < self.len, "swap_remove index out of bounds")
+        let last = self.len - 1
+        if index != last:
+            unsafe:
+                let a = self.data.offset(index as isize)
+                let b = self.data.offset(last as isize)
+                std::mem::swap(&mut *a, &mut *b)
+        return self.pop().unwrap()
+
+    fn clear(&mut self):
+        // Drop all elements
+        for i in 0..self.len:
+            unsafe:
+                let ptr = self.data.offset(i as isize)
+                let val = std::mem::read(ptr as *const T)
+                std::mem::drop(val)
+        self.len = 0
+
+    fn truncate(&mut self, new_len: usize):
+        if new_len >= self.len:
+            return
+        for i in new_len..self.len:
+            unsafe:
+                let ptr = self.data.offset(i as isize)
+                let val = std::mem::read(ptr as *const T)
+                std::mem::drop(val)
+        self.len = new_len
+
+    fn reserve(&mut self, additional: usize):
+        let needed = self.len + additional
+        if needed <= self.cap:
+            return
+        let new_cap = needed.max(self.cap * 2).max(4)
+        self.resize_buffer(new_cap)
+
+    fn shrink_to_fit(&mut self):
+        if self.cap > self.len:
+            self.resize_buffer(self.len)
+
+    fn resize(&mut self, new_len: usize, value: T) where T: Clone:
+        if new_len > self.len:
+            self.reserve(new_len - self.len)
+            for _ in self.len..new_len:
+                self.push(value.clone())
+        else:
+            self.truncate(new_len)
+
+    fn extend(&mut self, iter: impl Iterator<Item = T>):
+        for item in iter:
+            self.push(item)
+
+    fn extend_from_slice(&mut self, slice: &[T]) where T: Clone:
+        self.reserve(slice.len())
+        for item in slice:
+            self.push(item.clone())
+
+    fn as_slice(&self) -> &[T]:
+        if self.len == 0:
+            return &[]
+        unsafe:
+            return std::mem::slice_from_raw_parts(self.data as *const T, self.len)
+
+    fn as_mut_slice(&mut self) -> &mut [T]:
+        if self.len == 0:
+            return &mut []
+        unsafe:
+            return std::mem::slice_from_raw_parts_mut(self.data, self.len)
+
+    fn contains(&self, value: &T) -> bool where T: PartialEq:
+        for i in 0..self.len:
+            unsafe:
+                if (&*self.data.offset(i as isize)).eq(value):
+                    return true
+        return false
+
+    fn iter(&self) -> VecIter<T>:
+        return VecIter {
+            ptr: self.data as *const T,
+            end: unsafe { (self.data as *const T).offset(self.len as isize) },
+        }
+
+    fn iter_mut(&mut self) -> VecIterMut<T>:
+        return VecIterMut {
+            ptr: self.data,
+            end: unsafe { self.data.offset(self.len as isize) },
+        }
+
+    fn sort(&mut self) where T: Ord:
+        self.sort_by(|a, b| a.cmp(b))
+
+    fn sort_by<F: Fn(&T, &T) -> Ordering>(&mut self, compare: F):
+        if self.len <= 1:
+            return
+        quicksort(self.as_mut_slice(), &compare)
+
+    fn sort_unstable(&mut self) where T: Ord:
+        self.sort_by(|a, b| a.cmp(b))
+
+    fn binary_search(&self, target: &T) -> Result<usize, usize> where T: Ord:
+        let mut low = 0
+        let mut high = self.len
+        while low < high:
+            let mid = low + (high - low) / 2
+            match unsafe { (&*self.data.offset(mid as isize)).cmp(target) }:
+                Ordering::Less => low = mid + 1
+                Ordering::Greater => high = mid
+                Ordering::Equal => return Ok(mid)
+        return Err(low)
+
+    fn dedup(&mut self) where T: PartialEq:
+        if self.len <= 1:
+            return
+        let mut write = 1
+        for read in 1..self.len:
+            unsafe:
+                let prev = &*self.data.offset((write - 1) as isize)
+                let curr = &*self.data.offset(read as isize)
+                if not prev.eq(curr):
+                    if write != read:
+                        let src = self.data.offset(read as isize)
+                        let dst = self.data.offset(write as isize)
+                        memcpy(dst as *mut u8, src as *const u8, size_of::<T>())
+                    write += 1
+        self.len = write
+
+    fn reverse(&mut self):
+        if self.len <= 1:
+            return
+        let mut i = 0
+        let mut j = self.len - 1
+        while i < j:
+            unsafe:
+                let a = &mut *self.data.offset(i as isize)
+                let b = &mut *self.data.offset(j as isize)
+                std::mem::swap(a, b)
+            i += 1
+            j -= 1
+
+    fn retain<F: Fn(&T) -> bool>(&mut self, f: F):
+        let mut write = 0
+        for read in 0..self.len:
+            unsafe:
+                let item = &*self.data.offset(read as isize)
+                if f(item):
+                    if write != read:
+                        let src = self.data.offset(read as isize)
+                        let dst = self.data.offset(write as isize)
+                        memcpy(dst as *mut u8, src as *const u8, size_of::<T>())
+                    write += 1
+        self.len = write
+
+    fn windows(&self, size: usize) -> WindowsIter<T>:
+        assert(size > 0, "window size must be > 0")
+        return WindowsIter { slice: self.as_slice(), size, pos: 0 }
+
+    fn chunks(&self, size: usize) -> ChunksIter<T>:
+        assert(size > 0, "chunk size must be > 0")
+        return ChunksIter { slice: self.as_slice(), size, pos: 0 }
+
+    fn join(&self, sep: &str) -> String where T: Display:
+        let mut result = String::new()
+        for i in 0..self.len:
+            if i > 0:
+                result.push_str(sep)
+            unsafe:
+                let item = &*self.data.offset(i as isize)
+                result.push_str(&format("{}", item))
+        return result
+
+    fn clone(&self) -> own Vector<T> where T: Clone:
+        let mut v = Vector::with_capacity(self.len)
+        for i in 0..self.len:
+            unsafe:
+                let item = &*self.data.offset(i as isize)
+                v.push(item.clone())
+        return v
+
+    // --- Private helpers ---
+
+    fn grow(&mut self):
+        let new_cap = if self.cap == 0 { 4 } else { self.cap * 2 }
+        self.resize_buffer(new_cap)
+
+    fn resize_buffer(&mut self, new_cap: usize):
+        let new_size = new_cap * size_of::<T>()
+        if is_null(self.data):
+            self.data = alloc(new_size) as *mut T
+        else:
+            self.data = realloc_mem(
+                self.data as *mut u8,
+                self.cap * size_of::<T>(),
+                new_size,
+            ) as *mut T
+        if is_null(self.data) and new_cap > 0:
+            panic("Vector reallocation failed")
+        self.cap = new_cap
+
+impl<T> Drop for Vector<T>:
+    fn drop(&mut self):
+        self.clear()
+        if not is_null(self.data):
+            dealloc(self.data as *mut u8, self.cap * size_of::<T>())
+
+impl<T: PartialEq> PartialEq for Vector<T>:
+    fn eq(&self, other: &Vector<T>) -> bool:
+        if self.len != other.len:
+            return false
+        for i in 0..self.len:
+            unsafe:
+                let a = &*self.data.offset(i as isize)
+                let b = &*other.data.offset(i as isize)
+                if not a.eq(b):
+                    return false
+        return true
+
+impl<T: Clone> Clone for Vector<T>:
+    fn clone(&self) -> own Vector<T>:
+        return self.clone()
+
+impl<T: Default> Default for Vector<T>:
+    fn default() -> own Vector<T>:
+        return Vector::new()
+
+impl<T> FromIterator<T> for Vector<T>:
+    fn from_iter<I: Iterator<Item = T>>(iter: I) -> own Vector<T>:
+        let mut v = Vector::new()
+        for item in iter:
+            v.push(item)
+        return v
+
+impl<T> IntoIterator for Vector<T>:
+    type Item = T
+    type IntoIter = VecIntoIter<T>
+    fn into_iter(self) -> VecIntoIter<T>:
+        let iter = VecIntoIter {
+            data: self.data,
+            len: self.len,
+            cap: self.cap,
+            pos: 0,
+        }
+        std::mem::forget(self)
+        return iter
+
+// Vector Index operator
+impl<T> Index<usize> for Vector<T>:
+    type Output = T
+    fn index(&self, idx: usize) -> &T:
+        assert(idx < self.len, "index out of bounds")
+        unsafe:
+            return &*self.data.offset(idx as isize)
+
+impl<T> IndexMut<usize> for Vector<T>:
+    fn index_mut(&mut self, idx: usize) -> &mut T:
+        assert(idx < self.len, "index out of bounds")
+        unsafe:
+            return &mut *self.data.offset(idx as isize)
+
+// Vector Iterators
+
+struct VecIter<T>:
+    ptr: *const T
+    end: *const T
+
+impl<T> Iterator for VecIter<T>:
+    type Item = &T
+    fn next(&mut self) -> Option<&T>:
+        if self.ptr == self.end:
+            return None
+        unsafe:
+            let item = &*self.ptr
+            self.ptr = self.ptr.offset(1)
+            return Some(item)
+
+struct VecIterMut<T>:
+    ptr: *mut T
+    end: *mut T
+
+impl<T> Iterator for VecIterMut<T>:
+    type Item = &mut T
+    fn next(&mut self) -> Option<&mut T>:
+        if self.ptr == self.end:
+            return None
+        unsafe:
+            let item = &mut *self.ptr
+            self.ptr = self.ptr.offset(1)
+            return Some(item)
+
+struct VecIntoIter<T>:
+    data: *mut T
+    len: usize
+    cap: usize
+    pos: usize
+
+impl<T> Iterator for VecIntoIter<T>:
+    type Item = T
+    fn next(&mut self) -> Option<T>:
+        if self.pos >= self.len:
+            return None
+        unsafe:
+            let ptr = self.data.offset(self.pos as isize)
+            let val = std::mem::read(ptr as *const T)
+            self.pos += 1
+            return Some(val)
+
+impl<T> Drop for VecIntoIter<T>:
+    fn drop(&mut self):
+        // Drop remaining elements
+        while self.pos < self.len:
+            unsafe:
+                let ptr = self.data.offset(self.pos as isize)
+                let val = std::mem::read(ptr as *const T)
+                std::mem::drop(val)
+            self.pos += 1
+        if not is_null(self.data):
+            dealloc(self.data as *mut u8, self.cap * size_of::<T>())
+
+struct WindowsIter<T>:
+    slice: &[T]
+    size: usize
+    pos: usize
+
+impl<T> Iterator for WindowsIter<T>:
+    type Item = &[T]
+    fn next(&mut self) -> Option<&[T]>:
+        if self.pos + self.size > self.slice.len():
+            return None
+        let window = &self.slice[self.pos..self.pos + self.size]
+        self.pos += 1
+        return Some(window)
+
+struct ChunksIter<T>:
+    slice: &[T]
+    size: usize
+    pos: usize
+
+impl<T> Iterator for ChunksIter<T>:
+    type Item = &[T]
+    fn next(&mut self) -> Option<&[T]>:
+        if self.pos >= self.slice.len():
+            return None
+        let end = (self.pos + self.size).min(self.slice.len())
+        let chunk = &self.slice[self.pos..end]
+        self.pos = end
+        return Some(chunk)
+
+fn quicksort<T, F: Fn(&T, &T) -> Ordering>(arr: &mut [T], compare: &F):
+    if arr.len() <= 1:
+        return
+    if arr.len() <= 16:
+        insertion_sort(arr, compare)
+        return
+    let pivot_idx = partition(arr, compare)
+    quicksort(&mut arr[..pivot_idx], compare)
+    quicksort(&mut arr[pivot_idx + 1..], compare)
+
+fn partition<T, F: Fn(&T, &T) -> Ordering>(arr: &mut [T], compare: &F) -> usize:
+    let len = arr.len()
+    let pivot = len - 1
+    let mut i = 0
+    for j in 0..pivot:
+        if compare(&arr[j], &arr[pivot]) != Ordering::Greater:
+            arr.swap(i, j)
+            i += 1
+    arr.swap(i, pivot)
+    return i
+
+fn insertion_sort<T, F: Fn(&T, &T) -> Ordering>(arr: &mut [T], compare: &F):
+    for i in 1..arr.len():
+        let mut j = i
+        while j > 0 and compare(&arr[j - 1], &arr[j]) == Ordering::Greater:
+            arr.swap(j - 1, j)
+            j -= 1
+
+// ============================================================================
+// HashMap<K, V> — Hash Map with Robin Hood Hashing
+// ============================================================================
+
+const HASH_MAP_INITIAL_CAP: usize = 16
+const HASH_MAP_MAX_LOAD: f64 = 0.75
+
+struct HashEntry<K, V>:
+    key: K
+    value: V
+    hash: u64
+    occupied: bool
+    tombstone: bool
+
+struct HashMap<K: Hash + Eq, V>:
+    entries: *mut HashEntry<K, V>
+    len: usize
+    cap: usize
+
+    fn new() -> own HashMap<K, V>:
+        return HashMap { entries: null_mut(), len: 0, cap: 0 }
+
+    fn with_capacity(cap: usize) -> own HashMap<K, V>:
+        let actual_cap = cap.max(HASH_MAP_INITIAL_CAP).next_power_of_two()
+        let mut map = HashMap::new()
+        map.alloc_entries(actual_cap)
+        return map
+
+    fn len(&self) -> usize:
+        return self.len
+
+    fn is_empty(&self) -> bool:
+        return self.len == 0
+
+    fn capacity(&self) -> usize:
+        return self.cap
+
+    fn insert(&mut self, key: K, value: V) -> Option<V>:
+        if self.should_grow():
+            self.grow()
+
+        let hash = self.hash_key(&key)
+        let mask = self.cap - 1
+        let mut idx = (hash as usize) & mask
+        let mut dist = 0
+
+        loop:
+            unsafe:
+                let entry = &mut *self.entries.offset(idx as isize)
+                if not entry.occupied or entry.tombstone:
+                    entry.key = key
+                    entry.value = value
+                    entry.hash = hash
+                    entry.occupied = true
+                    entry.tombstone = false
+                    self.len += 1
+                    return None
+                if entry.hash == hash and entry.key.eq(&key):
+                    let old_value = std::mem::replace(&mut entry.value, value)
+                    return Some(old_value)
+
+                // Robin Hood: check if current probe distance is less than ours
+                let existing_dist = self.probe_distance(entry.hash, idx)
+                if existing_dist < dist:
+                    // Steal this slot and continue with displaced entry
+                    std::mem::swap(&mut entry.key, &mut key)
+                    std::mem::swap(&mut entry.value, &mut value)
+                    std::mem::swap(&mut entry.hash, &mut hash)
+                    dist = existing_dist
+
+            idx = (idx + 1) & mask
+            dist += 1
+
+    fn get(&self, key: &K) -> Option<&V>:
+        if self.cap == 0:
+            return None
+        let hash = self.hash_key(key)
+        let mask = self.cap - 1
+        let mut idx = (hash as usize) & mask
+        let mut dist = 0
+
+        loop:
+            unsafe:
+                let entry = &*self.entries.offset(idx as isize)
+                if not entry.occupied:
+                    return None
+                if not entry.tombstone and entry.hash == hash and entry.key.eq(key):
+                    return Some(&entry.value)
+
+                let existing_dist = self.probe_distance(entry.hash, idx)
+                if dist > existing_dist and not entry.tombstone:
+                    return None
+
+            idx = (idx + 1) & mask
+            dist += 1
+
+    fn get_mut(&mut self, key: &K) -> Option<&mut V>:
+        if self.cap == 0:
+            return None
+        let hash = self.hash_key(key)
+        let mask = self.cap - 1
+        let mut idx = (hash as usize) & mask
+        let mut dist = 0
+
+        loop:
+            unsafe:
+                let entry = &mut *self.entries.offset(idx as isize)
+                if not entry.occupied:
+                    return None
+                if not entry.tombstone and entry.hash == hash and entry.key.eq(key):
+                    return Some(&mut entry.value)
+
+                let existing_dist = self.probe_distance(entry.hash, idx)
+                if dist > existing_dist and not entry.tombstone:
+                    return None
+
+            idx = (idx + 1) & mask
+            dist += 1
+
+    fn remove(&mut self, key: &K) -> Option<V>:
+        if self.cap == 0:
+            return None
+        let hash = self.hash_key(key)
+        let mask = self.cap - 1
+        let mut idx = (hash as usize) & mask
+        let mut dist = 0
+
+        loop:
+            unsafe:
+                let entry = &mut *self.entries.offset(idx as isize)
+                if not entry.occupied:
+                    return None
+                if not entry.tombstone and entry.hash == hash and entry.key.eq(key):
+                    entry.tombstone = true
+                    self.len -= 1
+                    return Some(std::mem::read(&entry.value as *const V))
+
+                let existing_dist = self.probe_distance(entry.hash, idx)
+                if dist > existing_dist and not entry.tombstone:
+                    return None
+
+            idx = (idx + 1) & mask
+            dist += 1
+
+    fn contains_key(&self, key: &K) -> bool:
+        return self.get(key).is_some()
+
+    fn entry(&mut self, key: K) -> Entry<K, V>:
+        if self.contains_key(&key):
+            return Entry::Occupied(OccupiedEntry { map: self, key })
+        else:
+            return Entry::Vacant(VacantEntry { map: self, key })
+
+    fn keys(&self) -> HashMapKeyIter<K, V>:
+        return HashMapKeyIter { entries: self.entries, cap: self.cap, pos: 0 }
+
+    fn values(&self) -> HashMapValueIter<K, V>:
+        return HashMapValueIter { entries: self.entries, cap: self.cap, pos: 0 }
+
+    fn iter(&self) -> HashMapIter<K, V>:
+        return HashMapIter { entries: self.entries, cap: self.cap, pos: 0 }
+
+    fn iter_mut(&mut self) -> HashMapIterMut<K, V>:
+        return HashMapIterMut { entries: self.entries, cap: self.cap, pos: 0 }
+
+    fn clear(&mut self):
+        if is_null(self.entries):
+            return
+        for i in 0..self.cap:
+            unsafe:
+                let entry = &mut *self.entries.offset(i as isize)
+                if entry.occupied and not entry.tombstone:
+                    std::mem::drop(std::mem::read(&entry.key as *const K))
+                    std::mem::drop(std::mem::read(&entry.value as *const V))
+                entry.occupied = false
+                entry.tombstone = false
+        self.len = 0
+
+    fn or_insert(&mut self, key: K, default: V) -> &mut V:
+        if not self.contains_key(&key):
+            self.insert(key, default)
+        return self.get_mut(&key).unwrap()
+
+    fn get_or_insert_with<F: Fn() -> V>(&mut self, key: K, f: F) -> &mut V:
+        if not self.contains_key(&key):
+            self.insert(key, f())
+        return self.get_mut(&key).unwrap()
+
+    fn clone(&self) -> own HashMap<K, V> where K: Clone, V: Clone:
+        let mut map = HashMap::with_capacity(self.cap)
+        for (k, v) in self.iter():
+            map.insert(k.clone(), v.clone())
+        return map
+
+    // --- Private helpers ---
+
+    fn hash_key(&self, key: &K) -> u64:
+        let mut hasher = Hasher::new()
+        key.hash(&mut hasher)
+        return hasher.finish()
+
+    fn probe_distance(&self, hash: u64, current: usize) -> usize:
+        let mask = self.cap - 1
+        let ideal = (hash as usize) & mask
+        return (current.wrapping_sub(ideal)) & mask
+
+    fn should_grow(&self) -> bool:
+        return self.cap == 0 or (self.len as f64) / (self.cap as f64) > HASH_MAP_MAX_LOAD
+
+    fn grow(&mut self):
+        let new_cap = if self.cap == 0 { HASH_MAP_INITIAL_CAP } else { self.cap * 2 }
+        let old_entries = self.entries
+        let old_cap = self.cap
+
+        self.alloc_entries(new_cap)
+        self.len = 0
+
+        if not is_null(old_entries):
+            for i in 0..old_cap:
+                unsafe:
+                    let entry = &mut *old_entries.offset(i as isize)
+                    if entry.occupied and not entry.tombstone:
+                        let key = std::mem::read(&entry.key as *const K)
+                        let value = std::mem::read(&entry.value as *const V)
+                        self.insert(key, value)
+            dealloc(old_entries as *mut u8, old_cap * size_of::<HashEntry<K, V>>())
+
+    fn alloc_entries(&mut self, cap: usize):
+        let size = cap * size_of::<HashEntry<K, V>>()
+        self.entries = alloc(size) as *mut HashEntry<K, V>
+        if is_null(self.entries):
+            panic("HashMap allocation failed")
+        write_bytes(self.entries as *mut u8, 0, size)
+        self.cap = cap
+
+impl<K: Hash + Eq, V> Drop for HashMap<K, V>:
+    fn drop(&mut self):
+        self.clear()
+        if not is_null(self.entries):
+            dealloc(self.entries as *mut u8, self.cap * size_of::<HashEntry<K, V>>())
+
+impl<K: Hash + Eq, V> Default for HashMap<K, V>:
+    fn default() -> own HashMap<K, V>:
+        return HashMap::new()
+
+// HashMap Entry API
+
+enum Entry<K, V>:
+    Occupied(OccupiedEntry<K, V>)
+    Vacant(VacantEntry<K, V>)
+
+    fn or_insert(self, default: V) -> &mut V:
+        match self:
+            Entry::Occupied(e) => e.map.get_mut(&e.key).unwrap()
+            Entry::Vacant(e) =>
+                e.map.insert(e.key, default)
+                e.map.get_mut(&e.key).unwrap()
+
+    fn or_insert_with<F: Fn() -> V>(self, f: F) -> &mut V:
+        match self:
+            Entry::Occupied(e) => e.map.get_mut(&e.key).unwrap()
+            Entry::Vacant(e) =>
+                let val = f()
+                e.map.insert(e.key, val)
+                e.map.get_mut(&e.key).unwrap()
+
+struct OccupiedEntry<K, V>:
+    map: &mut HashMap<K, V>
+    key: K
+
+struct VacantEntry<K, V>:
+    map: &mut HashMap<K, V>
+    key: K
+
+// HashMap Iterators
+
+struct HashMapIter<K, V>:
+    entries: *const HashEntry<K, V>
+    cap: usize
+    pos: usize
+
+impl<K, V> Iterator for HashMapIter<K, V>:
+    type Item = (&K, &V)
+    fn next(&mut self) -> Option<(&K, &V)>:
+        while self.pos < self.cap:
+            unsafe:
+                let entry = &*self.entries.offset(self.pos as isize)
+                self.pos += 1
+                if entry.occupied and not entry.tombstone:
+                    return Some((&entry.key, &entry.value))
+        return None
+
+struct HashMapIterMut<K, V>:
+    entries: *mut HashEntry<K, V>
+    cap: usize
+    pos: usize
+
+impl<K, V> Iterator for HashMapIterMut<K, V>:
+    type Item = (&K, &mut V)
+    fn next(&mut self) -> Option<(&K, &mut V)>:
+        while self.pos < self.cap:
+            unsafe:
+                let entry = &mut *self.entries.offset(self.pos as isize)
+                self.pos += 1
+                if entry.occupied and not entry.tombstone:
+                    return Some((&entry.key, &mut entry.value))
+        return None
+
+struct HashMapKeyIter<K, V>:
+    entries: *const HashEntry<K, V>
+    cap: usize
+    pos: usize
+
+impl<K, V> Iterator for HashMapKeyIter<K, V>:
+    type Item = &K
+    fn next(&mut self) -> Option<&K>:
+        while self.pos < self.cap:
+            unsafe:
+                let entry = &*self.entries.offset(self.pos as isize)
+                self.pos += 1
+                if entry.occupied and not entry.tombstone:
+                    return Some(&entry.key)
+        return None
+
+struct HashMapValueIter<K, V>:
+    entries: *const HashEntry<K, V>
+    cap: usize
+    pos: usize
+
+impl<K, V> Iterator for HashMapValueIter<K, V>:
+    type Item = &V
+    fn next(&mut self) -> Option<&V>:
+        while self.pos < self.cap:
+            unsafe:
+                let entry = &*self.entries.offset(self.pos as isize)
+                self.pos += 1
+                if entry.occupied and not entry.tombstone:
+                    return Some(&entry.value)
+        return None
+
+// ============================================================================
+// HashSet<T>
+// ============================================================================
+
+struct HashSet<T: Hash + Eq>:
+    map: HashMap<T, ()>
+
+    fn new() -> own HashSet<T>:
+        return HashSet { map: HashMap::new() }
+
+    fn with_capacity(cap: usize) -> own HashSet<T>:
+        return HashSet { map: HashMap::with_capacity(cap) }
+
+    fn len(&self) -> usize:
+        return self.map.len()
+
+    fn is_empty(&self) -> bool:
+        return self.map.is_empty()
+
+    fn insert(&mut self, value: T) -> bool:
+        return self.map.insert(value, ()).is_none()
+
+    fn remove(&mut self, value: &T) -> bool:
+        return self.map.remove(value).is_some()
+
+    fn contains(&self, value: &T) -> bool:
+        return self.map.contains_key(value)
+
+    fn clear(&mut self):
+        self.map.clear()
+
+    fn iter(&self) -> HashSetIter<T>:
+        return HashSetIter { inner: self.map.keys() }
+
+    fn union(&self, other: &HashSet<T>) -> own HashSet<T> where T: Clone:
+        let mut result = self.clone()
+        for item in other.iter():
+            result.insert(item.clone())
+        return result
+
+    fn intersection(&self, other: &HashSet<T>) -> own HashSet<T> where T: Clone:
+        let mut result = HashSet::new()
+        for item in self.iter():
+            if other.contains(item):
+                result.insert(item.clone())
+        return result
+
+    fn difference(&self, other: &HashSet<T>) -> own HashSet<T> where T: Clone:
+        let mut result = HashSet::new()
+        for item in self.iter():
+            if not other.contains(item):
+                result.insert(item.clone())
+        return result
+
+    fn symmetric_difference(&self, other: &HashSet<T>) -> own HashSet<T> where T: Clone:
+        let mut result = HashSet::new()
+        for item in self.iter():
+            if not other.contains(item):
+                result.insert(item.clone())
+        for item in other.iter():
+            if not self.contains(item):
+                result.insert(item.clone())
+        return result
+
+    fn is_subset(&self, other: &HashSet<T>) -> bool:
+        for item in self.iter():
+            if not other.contains(item):
+                return false
+        return true
+
+    fn is_superset(&self, other: &HashSet<T>) -> bool:
+        return other.is_subset(self)
+
+    fn is_disjoint(&self, other: &HashSet<T>) -> bool:
+        for item in self.iter():
+            if other.contains(item):
+                return false
+        return true
+
+    fn clone(&self) -> own HashSet<T> where T: Clone:
+        let mut set = HashSet::with_capacity(self.len())
+        for item in self.iter():
+            set.insert(item.clone())
+        return set
+
+impl<T: Hash + Eq> Default for HashSet<T>:
+    fn default() -> own HashSet<T>:
+        return HashSet::new()
+
+impl<T: Hash + Eq> FromIterator<T> for HashSet<T>:
+    fn from_iter<I: Iterator<Item = T>>(iter: I) -> own HashSet<T>:
+        let mut set = HashSet::new()
+        for item in iter:
+            set.insert(item)
+        return set
+
+struct HashSetIter<T>:
+    inner: HashMapKeyIter<T, ()>
+
+impl<T> Iterator for HashSetIter<T>:
+    type Item = &T
+    fn next(&mut self) -> Option<&T>:
+        return self.inner.next()
+
+// ============================================================================
+// VecDeque<T> — Double-Ended Queue
+// ============================================================================
+
+struct VecDeque<T>:
+    data: *mut T
+    head: usize
+    len: usize
+    cap: usize
+
+    fn new() -> own VecDeque<T>:
+        return VecDeque { data: null_mut(), head: 0, len: 0, cap: 0 }
+
+    fn with_capacity(cap: usize) -> own VecDeque<T>:
+        let actual = cap.next_power_of_two().max(4)
+        let data = alloc(actual * size_of::<T>()) as *mut T
+        return VecDeque { data, head: 0, len: 0, cap: actual }
+
+    fn len(&self) -> usize:
+        return self.len
+
+    fn is_empty(&self) -> bool:
+        return self.len == 0
+
+    fn push_back(&mut self, value: T):
+        if self.len == self.cap:
+            self.grow()
+        let idx = self.wrap_index(self.head + self.len)
+        unsafe:
+            std::mem::write(self.data.offset(idx as isize), value)
+        self.len += 1
+
+    fn push_front(&mut self, value: T):
+        if self.len == self.cap:
+            self.grow()
+        self.head = self.wrap_index(self.head.wrapping_sub(1))
+        unsafe:
+            std::mem::write(self.data.offset(self.head as isize), value)
+        self.len += 1
+
+    fn pop_back(&mut self) -> Option<T>:
+        if self.len == 0:
+            return None
+        self.len -= 1
+        let idx = self.wrap_index(self.head + self.len)
+        unsafe:
+            return Some(std::mem::read(self.data.offset(idx as isize) as *const T))
+
+    fn pop_front(&mut self) -> Option<T>:
+        if self.len == 0:
+            return None
+        unsafe:
+            let val = std::mem::read(self.data.offset(self.head as isize) as *const T)
+            self.head = self.wrap_index(self.head + 1)
+            self.len -= 1
+            return Some(val)
+
+    fn front(&self) -> Option<&T>:
+        if self.len == 0:
+            return None
+        unsafe:
+            return Some(&*self.data.offset(self.head as isize))
+
+    fn back(&self) -> Option<&T>:
+        if self.len == 0:
+            return None
+        let idx = self.wrap_index(self.head + self.len - 1)
+        unsafe:
+            return Some(&*self.data.offset(idx as isize))
+
+    fn get(&self, index: usize) -> Option<&T>:
+        if index >= self.len:
+            return None
+        let idx = self.wrap_index(self.head + index)
+        unsafe:
+            return Some(&*self.data.offset(idx as isize))
+
+    fn clear(&mut self):
+        while self.pop_front().is_some():
+            pass
+
+    // --- Private ---
+
+    fn wrap_index(&self, idx: usize) -> usize:
+        if self.cap == 0:
+            return 0
+        return idx & (self.cap - 1)
+
+    fn grow(&mut self):
+        let new_cap = if self.cap == 0 { 4 } else { self.cap * 2 }
+        let new_data = alloc(new_cap * size_of::<T>()) as *mut T
+        if is_null(new_data):
+            panic("VecDeque grow failed")
+
+        // Copy elements in order
+        for i in 0..self.len:
+            let old_idx = self.wrap_index(self.head + i)
+            unsafe:
+                let val = std::mem::read(self.data.offset(old_idx as isize) as *const T)
+                std::mem::write(new_data.offset(i as isize), val)
+
+        if not is_null(self.data):
+            dealloc(self.data as *mut u8, self.cap * size_of::<T>())
+        self.data = new_data
+        self.head = 0
+        self.cap = new_cap
+
+impl<T> Drop for VecDeque<T>:
+    fn drop(&mut self):
+        self.clear()
+        if not is_null(self.data):
+            dealloc(self.data as *mut u8, self.cap * size_of::<T>())
+
+// ============================================================================
+// BTreeMap<K, V> — Balanced B-Tree Map
+// ============================================================================
+
+const BTREE_ORDER: usize = 6
+const BTREE_MAX_KEYS: usize = 2 * BTREE_ORDER - 1
+const BTREE_MIN_KEYS: usize = BTREE_ORDER - 1
+
+struct BTreeNode<K, V>:
+    keys: [Option<K>; BTREE_MAX_KEYS]
+    values: [Option<V>; BTREE_MAX_KEYS]
+    children: [Option<own Box<BTreeNode<K, V>>>; 2 * BTREE_ORDER]
+    num_keys: usize
+    is_leaf: bool
+
+    fn new(is_leaf: bool) -> own BTreeNode<K, V>:
+        return BTreeNode {
+            keys: [None; BTREE_MAX_KEYS],
+            values: [None; BTREE_MAX_KEYS],
+            children: [None; 2 * BTREE_ORDER],
+            num_keys: 0,
+            is_leaf,
+        }
+
+struct BTreeMap<K: Ord, V>:
+    root: Option<own Box<BTreeNode<K, V>>>
+    len: usize
+
+    fn new() -> own BTreeMap<K, V>:
+        return BTreeMap { root: None, len: 0 }
+
+    fn len(&self) -> usize:
+        return self.len
+
+    fn is_empty(&self) -> bool:
+        return self.len == 0
+
+    fn get(&self, key: &K) -> Option<&V>:
+        match self.root:
+            Some(ref node) => return btree_search(node.as_ref(), key)
+            None => return None
+
+    fn insert(&mut self, key: K, value: V) -> Option<V>:
+        if self.root.is_none():
+            let mut node = BTreeNode::new(true)
+            node.keys[0] = Some(key)
+            node.values[0] = Some(value)
+            node.num_keys = 1
+            self.root = Some(Box::new(node))
+            self.len += 1
+            return None
+
+        // Check if root is full and needs splitting
+        let root = self.root.as_mut().unwrap().as_mut()
+        if root.num_keys == BTREE_MAX_KEYS:
+            let mut new_root = BTreeNode::new(false)
+            let old_root = self.root.take().unwrap()
+            new_root.children[0] = Some(old_root)
+            btree_split_child(&mut new_root, 0)
+            self.root = Some(Box::new(new_root))
+
+        let result = btree_insert_nonfull(self.root.as_mut().unwrap().as_mut(), key, value)
+        if result.is_none():
+            self.len += 1
+        return result
+
+    fn contains_key(&self, key: &K) -> bool:
+        return self.get(key).is_some()
+
+    fn clear(&mut self):
+        self.root = None
+        self.len = 0
+
+fn btree_search<K: Ord, V>(node: &BTreeNode<K, V>, key: &K) -> Option<&V>:
+    let mut i = 0
+    while i < node.num_keys:
+        match &node.keys[i]:
+            Some(k) =>
+                match key.cmp(k):
+                    Ordering::Equal => return node.values[i].as_ref()
+                    Ordering::Less => break
+                    Ordering::Greater => i += 1
+            None => break
+    if node.is_leaf:
+        return None
+    match &node.children[i]:
+        Some(child) => return btree_search(child.as_ref(), key)
+        None => return None
+
+fn btree_insert_nonfull<K: Ord, V>(node: &mut BTreeNode<K, V>, key: K, value: V) -> Option<V>:
+    let mut i = node.num_keys as i64 - 1
+    if node.is_leaf:
+        // Check for existing key
+        for j in 0..node.num_keys:
+            if let Some(ref k) = node.keys[j]:
+                if key.cmp(k) == Ordering::Equal:
+                    let old = node.values[j].take()
+                    node.values[j] = Some(value)
+                    return old
+
+        // Insert in sorted order
+        while i >= 0 and node.keys[i as usize].as_ref().map_or(false, |k| key.cmp(k) == Ordering::Less):
+            node.keys[(i + 1) as usize] = node.keys[i as usize].take()
+            node.values[(i + 1) as usize] = node.values[i as usize].take()
+            i -= 1
+        node.keys[(i + 1) as usize] = Some(key)
+        node.values[(i + 1) as usize] = Some(value)
+        node.num_keys += 1
+        return None
+    else:
+        while i >= 0 and node.keys[i as usize].as_ref().map_or(false, |k| key.cmp(k) == Ordering::Less):
+            i -= 1
+        i += 1
+        let child = node.children[i as usize].as_ref().unwrap().as_ref()
+        if child.num_keys == BTREE_MAX_KEYS:
+            btree_split_child(node, i as usize)
+            if node.keys[i as usize].as_ref().map_or(false, |k| key.cmp(k) == Ordering::Greater):
+                i += 1
+        return btree_insert_nonfull(node.children[i as usize].as_mut().unwrap().as_mut(), key, value)
+
+fn btree_split_child<K: Ord, V>(parent: &mut BTreeNode<K, V>, index: usize):
+    let child = parent.children[index].as_mut().unwrap().as_mut()
+    let mut new_node = BTreeNode::new(child.is_leaf)
+    let mid = BTREE_ORDER - 1
+
+    // Move upper half to new node
+    for j in 0..BTREE_MIN_KEYS:
+        new_node.keys[j] = child.keys[mid + 1 + j].take()
+        new_node.values[j] = child.values[mid + 1 + j].take()
+    if not child.is_leaf:
+        for j in 0..BTREE_ORDER:
+            new_node.children[j] = child.children[mid + 1 + j].take()
+    new_node.num_keys = BTREE_MIN_KEYS
+
+    // Move median key up to parent
+    for j in (index..parent.num_keys).rev():
+        parent.keys[j + 1] = parent.keys[j].take()
+        parent.values[j + 1] = parent.values[j].take()
+        parent.children[j + 2] = parent.children[j + 1].take()
+    parent.keys[index] = child.keys[mid].take()
+    parent.values[index] = child.values[mid].take()
+    parent.children[index + 1] = Some(Box::new(new_node))
+    parent.num_keys += 1
+    child.num_keys = mid
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[test]
+fn test_vector_basic():
+    let mut v = Vector::new()
+    v.push(1)
+    v.push(2)
+    v.push(3)
+    assert(v.len() == 3, "len should be 3")
+    assert(v[0] == 1, "first element")
+    assert(v[2] == 3, "third element")
+
+#[test]
+fn test_vector_pop():
+    let mut v = Vector::from([1, 2, 3])
+    assert(v.pop() == Some(3), "pop 3")
+    assert(v.pop() == Some(2), "pop 2")
+    assert(v.len() == 1, "len 1")
+
+#[test]
+fn test_vector_insert_remove():
+    let mut v = Vector::from([1, 2, 4])
+    v.insert(2, 3)
+    assert(v.len() == 4, "len 4")
+    assert(v[2] == 3, "inserted 3")
+    let removed = v.remove(1)
+    assert(removed == 2, "removed 2")
+    assert(v.len() == 3, "len 3 after remove")
+
+#[test]
+fn test_vector_sort():
+    let mut v = Vector::from([3, 1, 4, 1, 5, 9, 2, 6])
+    v.sort()
+    assert(v[0] == 1, "first sorted")
+    assert(v[v.len() - 1] == 9, "last sorted")
+    for i in 1..v.len():
+        assert(v[i] >= v[i - 1], "sorted order")
+
+#[test]
+fn test_vector_binary_search():
+    let v = Vector::from([1, 3, 5, 7, 9])
+    assert(v.binary_search(&5) == Ok(2), "found 5 at index 2")
+    assert(v.binary_search(&4) == Err(2), "4 would go at index 2")
+
+#[test]
+fn test_vector_dedup():
+    let mut v = Vector::from([1, 1, 2, 3, 3, 3, 4])
+    v.dedup()
+    assert(v.len() == 4, "dedup len")
+    assert(v[2] == 3, "dedup content")
+
+#[test]
+fn test_vector_retain():
+    let mut v = Vector::from([1, 2, 3, 4, 5, 6])
+    v.retain(|x| *x % 2 == 0)
+    assert(v.len() == 3, "retain even")
+    assert(v[0] == 2 and v[1] == 4 and v[2] == 6, "retained values")
+
+#[test]
+fn test_hashmap_basic():
+    let mut map = HashMap::new()
+    map.insert("hello", 1)
+    map.insert("world", 2)
+    assert(map.len() == 2, "len 2")
+    assert(map.get(&"hello") == Some(&1), "get hello")
+    assert(map.get(&"world") == Some(&2), "get world")
+    assert(map.get(&"foo").is_none(), "foo not found")
+
+#[test]
+fn test_hashmap_overwrite():
+    let mut map = HashMap::new()
+    map.insert("key", 1)
+    let old = map.insert("key", 2)
+    assert(old == Some(1), "old value returned")
+    assert(map.get(&"key") == Some(&2), "value updated")
+    assert(map.len() == 1, "len still 1")
+
+#[test]
+fn test_hashmap_remove():
+    let mut map = HashMap::new()
+    map.insert("a", 1)
+    map.insert("b", 2)
+    let removed = map.remove(&"a")
+    assert(removed == Some(1), "removed a")
+    assert(map.len() == 1, "len 1")
+    assert(map.get(&"a").is_none(), "a gone")
+
+#[test]
+fn test_hashmap_iter():
+    let mut map = HashMap::new()
+    map.insert(1, "a")
+    map.insert(2, "b")
+    map.insert(3, "c")
+    let mut count = 0
+    for (k, v) in map.iter():
+        count += 1
+    assert(count == 3, "iterated 3 entries")
+
+#[test]
+fn test_hashset_basic():
+    let mut set = HashSet::new()
+    assert(set.insert(1), "first insert")
+    assert(set.insert(2), "second insert")
+    assert(not set.insert(1), "duplicate insert")
+    assert(set.len() == 2, "len 2")
+    assert(set.contains(&1), "contains 1")
+    assert(not set.contains(&3), "not contains 3")
+
+#[test]
+fn test_hashset_operations():
+    let mut a = HashSet::new()
+    a.insert(1); a.insert(2); a.insert(3)
+    let mut b = HashSet::new()
+    b.insert(2); b.insert(3); b.insert(4)
+
+    let union = a.union(&b)
+    assert(union.len() == 4, "union len")
+
+    let intersection = a.intersection(&b)
+    assert(intersection.len() == 2, "intersection len")
+
+    let diff = a.difference(&b)
+    assert(diff.len() == 1, "difference len")
+    assert(diff.contains(&1), "diff contains 1")
+
+#[test]
+fn test_vecdeque():
+    let mut dq = VecDeque::new()
+    dq.push_back(1)
+    dq.push_back(2)
+    dq.push_front(0)
+    assert(dq.len() == 3, "len 3")
+    assert(dq.front() == Some(&0), "front 0")
+    assert(dq.back() == Some(&2), "back 2")
+    assert(dq.pop_front() == Some(0), "pop front 0")
+    assert(dq.pop_back() == Some(2), "pop back 2")
+
+#[test]
+fn test_btreemap():
+    let mut tree = BTreeMap::new()
+    tree.insert(5, "five")
+    tree.insert(3, "three")
+    tree.insert(7, "seven")
+    tree.insert(1, "one")
+    tree.insert(9, "nine")
+
+    assert(tree.len() == 5, "btree len")
+    assert(tree.get(&3) == Some(&"three"), "btree get 3")
+    assert(tree.get(&5) == Some(&"five"), "btree get 5")
+    assert(tree.get(&4).is_none(), "btree get 4 none")
+
+#[test]
+fn test_hashmap_many_entries():
+    let mut map = HashMap::new()
+    for i in 0..1000:
+        map.insert(i, i * i)
+    assert(map.len() == 1000, "1000 entries")
+    for i in 0..1000:
+        assert(map.get(&i) == Some(&(i * i)), format("entry {}", i))

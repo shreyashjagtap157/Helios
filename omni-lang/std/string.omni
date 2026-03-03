@@ -1,0 +1,518 @@
+// Standard Library - String Utilities
+// Extended string operations, formatting, and builder patterns
+
+module std::string
+
+import std::core
+import std::collections
+
+// ============================================
+// String Extension Methods
+// ============================================
+
+/// Additional methods extending the core String type
+impl String:
+    /// Repeat the string `count` times
+    fn repeat(&self, count: usize) -> String:
+        let mut result = String::new()
+        for _ in 0..count:
+            result.push_str(self.as_str())
+        result
+
+    /// Pad the string on the left to reach `width`, filling with `pad_char`
+    fn pad_left(&self, width: usize, pad_char: char) -> String:
+        if self.len() >= width:
+            return self.clone()
+        let padding = width - self.len()
+        let mut result = String::new()
+        for _ in 0..padding:
+            result.push(pad_char)
+        result.push_str(self.as_str())
+        result
+
+    /// Pad the string on the right to reach `width`, filling with `pad_char`
+    fn pad_right(&self, width: usize, pad_char: char) -> String:
+        if self.len() >= width:
+            return self.clone()
+        let padding = width - self.len()
+        let mut result = String::from(self.as_str())
+        for _ in 0..padding:
+            result.push(pad_char)
+        result
+
+    /// Center the string within `width`, filling both sides with `pad_char`
+    fn center(&self, width: usize, pad_char: char) -> String:
+        if self.len() >= width:
+            return self.clone()
+        let total_pad = width - self.len()
+        let left_pad = total_pad / 2
+        let right_pad = total_pad - left_pad
+        let mut result = String::new()
+        for _ in 0..left_pad:
+            result.push(pad_char)
+        result.push_str(self.as_str())
+        for _ in 0..right_pad:
+            result.push(pad_char)
+        result
+
+    /// Trim only leading whitespace
+    fn trim_start(&self) -> String:
+        let bytes = self.as_bytes()
+        let mut start = 0
+        while start < bytes.len() and is_whitespace_byte(bytes[start]):
+            start += 1
+        self.substring(start, self.len())
+
+    /// Trim only trailing whitespace
+    fn trim_end(&self) -> String:
+        let bytes = self.as_bytes()
+        let mut end = bytes.len()
+        while end > 0 and is_whitespace_byte(bytes[end - 1]):
+            end -= 1
+        self.substring(0, end)
+
+    /// Count occurrences of a substring
+    fn count(&self, sub: &str) -> usize:
+        if sub.len() == 0:
+            return 0
+        let mut total = 0
+        let mut start = 0
+        while let Some(pos) = self.find_from(sub, start):
+            total += 1
+            start = pos + sub.len()
+        total
+
+    /// Replace only the first occurrence of `from` with `to`
+    fn replace_first(&self, from: &str, to: &str) -> String:
+        match self.find(from):
+            Option::Some(pos) =>
+                let mut result = self.substring(0, pos)
+                result.push_str(to)
+                result.push_str(&self.substring(pos + from.len(), self.len()).as_str())
+                result
+            Option::None => self.clone()
+
+    /// Split the string into chunks of `size` characters
+    fn chunks(&self, size: usize) -> Vec<String>:
+        let mut result = Vec::new()
+        let mut start = 0
+        while start < self.len():
+            let end = min(start + size, self.len())
+            result.push(self.substring(start, end))
+            start = end
+        result
+
+    /// Check if the string contains only ASCII digits
+    fn is_numeric(&self) -> bool:
+        if self.is_empty():
+            return false
+        let bytes = self.as_bytes()
+        for i in 0..bytes.len():
+            if bytes[i] < 48 or bytes[i] > 57:
+                return false
+        true
+
+    /// Check if the string contains only ASCII alphabetic characters
+    fn is_alphabetic(&self) -> bool:
+        if self.is_empty():
+            return false
+        let bytes = self.as_bytes()
+        for i in 0..bytes.len():
+            let b = bytes[i]
+            if !(b >= 65 and b <= 90) and !(b >= 97 and b <= 122):
+                return false
+        true
+
+    /// Check if the string contains only alphanumeric characters
+    fn is_alphanumeric(&self) -> bool:
+        if self.is_empty():
+            return false
+        let bytes = self.as_bytes()
+        for i in 0..bytes.len():
+            let b = bytes[i]
+            if !(b >= 48 and b <= 57) and !(b >= 65 and b <= 90) and !(b >= 97 and b <= 122):
+                return false
+        true
+
+    /// Reverse the string (byte-level; ASCII safe)
+    fn reverse(&self) -> String:
+        let bytes = self.as_bytes()
+        let mut result = String::new()
+        let mut i = bytes.len()
+        while i > 0:
+            i -= 1
+            result.buffer.push(bytes[i])
+        result.len = bytes.len()
+        result
+
+    /// Convert the string to a vector of bytes
+    fn bytes(&self) -> Vec<u8>:
+        let mut result = Vec::new()
+        let raw = self.as_bytes()
+        for i in 0..raw.len():
+            result.push(raw[i])
+        result
+
+    /// Return the character count (may differ from byte length for UTF-8)
+    fn char_count(&self) -> usize:
+        let mut count = 0
+        for _ in self.chars():
+            count += 1
+        count
+
+    /// Split the string into at most `limit` parts
+    fn splitn(&self, delimiter: &str, limit: usize) -> Vec<String>:
+        let mut result = Vec::new()
+        let mut start = 0
+        let mut splits = 0
+        while splits < limit - 1:
+            match self.find_from(delimiter, start):
+                Option::Some(pos) =>
+                    result.push(self.substring(start, pos))
+                    start = pos + delimiter.len()
+                    splits += 1
+                Option::None => break
+        result.push(self.substring(start, self.len()))
+        result
+
+    /// Split the string by lines (\n and \r\n)
+    fn lines(&self) -> Vec<String>:
+        let raw_lines = self.split("\n")
+        let mut result = Vec::new()
+        for line in raw_lines.iter():
+            if line.ends_with("\r"):
+                result.push(line.substring(0, line.len() - 1))
+            else:
+                result.push(line.clone())
+        result
+
+// ============================================
+// Join Function
+// ============================================
+
+/// Join a collection of strings with a separator
+fn join(parts: &Vec<String>, separator: &str) -> String:
+    if parts.is_empty():
+        return String::new()
+    let mut result = String::new()
+    for i in 0..parts.len():
+        if i > 0:
+            result.push_str(separator)
+        result.push_str(parts.get(i).unwrap().as_str())
+    result
+
+// ============================================
+// StringBuilder
+// ============================================
+
+/// Efficient mutable string builder for constructing strings incrementally
+struct StringBuilder:
+    buffer: Vec<u8>
+
+impl StringBuilder:
+    /// Create a new empty StringBuilder
+    fn new() -> StringBuilder:
+        StringBuilder { buffer: Vec::new() }
+
+    /// Create a StringBuilder with pre-allocated capacity
+    fn with_capacity(cap: usize) -> StringBuilder:
+        StringBuilder { buffer: Vec::with_capacity(cap) }
+
+    /// Append a string slice
+    fn append(&mut self, s: &str):
+        let bytes = s.as_bytes()
+        for i in 0..bytes.len():
+            self.buffer.push(bytes[i])
+
+    /// Append a single character
+    fn append_char(&mut self, c: char):
+        let code = c as u32
+        if code < 0x80:
+            self.buffer.push(code as u8)
+        else if code < 0x800:
+            self.buffer.push((0xC0 | (code >> 6)) as u8)
+            self.buffer.push((0x80 | (code & 0x3F)) as u8)
+        else if code < 0x10000:
+            self.buffer.push((0xE0 | (code >> 12)) as u8)
+            self.buffer.push((0x80 | ((code >> 6) & 0x3F)) as u8)
+            self.buffer.push((0x80 | (code & 0x3F)) as u8)
+        else:
+            self.buffer.push((0xF0 | (code >> 18)) as u8)
+            self.buffer.push((0x80 | ((code >> 12) & 0x3F)) as u8)
+            self.buffer.push((0x80 | ((code >> 6) & 0x3F)) as u8)
+            self.buffer.push((0x80 | (code & 0x3F)) as u8)
+
+    /// Append an integer as its string representation
+    fn append_int(&mut self, value: i64):
+        if value < 0:
+            self.buffer.push(45)  // '-'
+            self.append_uint((-value) as u64)
+        else:
+            self.append_uint(value as u64)
+
+    /// Append an unsigned integer as its string representation
+    fn append_uint(&mut self, value: u64):
+        if value == 0:
+            self.buffer.push(48)  // '0'
+            return
+        let mut digits = Vec::new()
+        var v = value
+        while v > 0:
+            digits.push((48 + (v % 10)) as u8)
+            v = v / 10
+        // Reverse digits into buffer
+        let mut i = digits.len()
+        while i > 0:
+            i -= 1
+            self.buffer.push(digits.get(i).unwrap().clone())
+
+    /// Append a line (string + newline)
+    fn append_line(&mut self, s: &str):
+        self.append(s)
+        self.buffer.push(10)  // '\n'
+
+    /// Get the current length in bytes
+    fn len(&self) -> usize:
+        self.buffer.len()
+
+    /// Check if the builder is empty
+    fn is_empty(&self) -> bool:
+        self.buffer.is_empty()
+
+    /// Clear the builder contents
+    fn clear(&mut self):
+        self.buffer.clear()
+
+    /// Build the final String, consuming the builder
+    fn build(self) -> String:
+        String::from_utf8(self.buffer).unwrap_or(String::new())
+
+    /// Get a view of the current content as a String (non-consuming)
+    fn to_string(&self) -> String:
+        let mut buf_copy = Vec::new()
+        for i in 0..self.buffer.len():
+            buf_copy.push(self.buffer.get(i).unwrap().clone())
+        String::from_utf8(buf_copy).unwrap_or(String::new())
+
+// ============================================
+// Formatting Utilities
+// ============================================
+
+/// Format an integer as a string
+fn int_to_string(value: i64) -> String:
+    let mut sb = StringBuilder::new()
+    sb.append_int(value)
+    sb.build()
+
+/// Format an unsigned integer as a string
+fn uint_to_string(value: u64) -> String:
+    let mut sb = StringBuilder::new()
+    sb.append_uint(value)
+    sb.build()
+
+/// Format an integer in hexadecimal
+fn to_hex(value: u64) -> String:
+    if value == 0:
+        return String::from("0")
+    let hex_chars = "0123456789abcdef"
+    let mut digits = Vec::new()
+    var v = value
+    while v > 0:
+        digits.push(hex_chars.as_bytes()[v as usize % 16])
+        v = v / 16
+    let mut result = String::new()
+    let mut i = digits.len()
+    while i > 0:
+        i -= 1
+        result.buffer.push(digits.get(i).unwrap().clone())
+    result.len = digits.len()
+    result
+
+/// Format an integer in binary
+fn to_binary(value: u64) -> String:
+    if value == 0:
+        return String::from("0")
+    let mut bits = Vec::new()
+    var v = value
+    while v > 0:
+        bits.push(if v % 2 == 0: 48u8 else: 49u8)
+        v = v / 2
+    let mut result = String::new()
+    let mut i = bits.len()
+    while i > 0:
+        i -= 1
+        result.buffer.push(bits.get(i).unwrap().clone())
+    result.len = bits.len()
+    result
+
+/// Format an integer in octal
+fn to_octal(value: u64) -> String:
+    if value == 0:
+        return String::from("0")
+    let mut digits = Vec::new()
+    var v = value
+    while v > 0:
+        digits.push((48 + (v % 8)) as u8)
+        v = v / 8
+    let mut result = String::new()
+    let mut i = digits.len()
+    while i > 0:
+        i -= 1
+        result.buffer.push(digits.get(i).unwrap().clone())
+    result.len = digits.len()
+    result
+
+// ============================================
+// Character Classification Utilities
+// ============================================
+
+/// Check if a byte is ASCII whitespace
+fn is_whitespace_byte(b: u8) -> bool:
+    b == 32 or b == 9 or b == 10 or b == 13 or b == 12
+
+/// Check if a byte is an ASCII digit (0-9)
+fn is_digit_byte(b: u8) -> bool:
+    b >= 48 and b <= 57
+
+/// Check if a byte is an ASCII uppercase letter
+fn is_upper_byte(b: u8) -> bool:
+    b >= 65 and b <= 90
+
+/// Check if a byte is an ASCII lowercase letter
+fn is_lower_byte(b: u8) -> bool:
+    b >= 97 and b <= 122
+
+/// Check if a byte is an ASCII letter
+fn is_alpha_byte(b: u8) -> bool:
+    is_upper_byte(b) or is_lower_byte(b)
+
+/// Check if a byte is ASCII alphanumeric
+fn is_alnum_byte(b: u8) -> bool:
+    is_alpha_byte(b) or is_digit_byte(b)
+
+// ============================================
+// String Conversion Traits
+// ============================================
+
+/// Trait for types that can be parsed from a string
+trait FromStr:
+    type Err
+    fn from_str(s: &str) -> Result<Self, Self::Err>
+
+/// Trait for types that can be converted to a string
+trait ToString:
+    fn to_string(&self) -> String
+
+/// Parse error type
+enum ParseError:
+    InvalidFormat
+    OutOfRange
+    EmptyInput
+    UnexpectedChar(char)
+
+impl Display for ParseError:
+    fn to_string(&self) -> String:
+        match self:
+            ParseError::InvalidFormat => String::from("invalid format")
+            ParseError::OutOfRange => String::from("value out of range")
+            ParseError::EmptyInput => String::from("empty input")
+            ParseError::UnexpectedChar(c) =>
+                let mut s = String::from("unexpected character: ")
+                s.push(*c)
+                s
+
+// ============================================
+// Numeric Parsing
+// ============================================
+
+/// Parse a string as an i64
+fn parse_int(s: &str) -> Result<i64, ParseError>:
+    if s.len() == 0:
+        return Result::Err(ParseError::EmptyInput)
+    let bytes = s.as_bytes()
+    let mut i = 0
+    let negative = bytes[0] == 45  // '-'
+    if negative or bytes[0] == 43:  // '+'
+        i = 1
+    if i >= bytes.len():
+        return Result::Err(ParseError::InvalidFormat)
+    var result: i64 = 0
+    while i < bytes.len():
+        let b = bytes[i]
+        if b < 48 or b > 57:
+            return Result::Err(ParseError::UnexpectedChar(b as char))
+        result = result * 10 + (b - 48) as i64
+        i += 1
+    if negative:
+        result = -result
+    Result::Ok(result)
+
+/// Parse a string as a u64
+fn parse_uint(s: &str) -> Result<u64, ParseError>:
+    if s.len() == 0:
+        return Result::Err(ParseError::EmptyInput)
+    let bytes = s.as_bytes()
+    var result: u64 = 0
+    for i in 0..bytes.len():
+        let b = bytes[i]
+        if b < 48 or b > 57:
+            return Result::Err(ParseError::UnexpectedChar(b as char))
+        result = result * 10 + (b - 48) as u64
+    Result::Ok(result)
+
+/// Parse a string as an f64
+fn parse_float(s: &str) -> Result<f64, ParseError>:
+    if s.len() == 0:
+        return Result::Err(ParseError::EmptyInput)
+    let bytes = s.as_bytes()
+    let mut i = 0
+    let negative = bytes[0] == 45
+    if negative or bytes[0] == 43:
+        i = 1
+    if i >= bytes.len():
+        return Result::Err(ParseError::InvalidFormat)
+    var integer_part: f64 = 0.0
+    while i < bytes.len() and bytes[i] >= 48 and bytes[i] <= 57:
+        integer_part = integer_part * 10.0 + (bytes[i] - 48) as f64
+        i += 1
+    var frac_part: f64 = 0.0
+    if i < bytes.len() and bytes[i] == 46:  // '.'
+        i += 1
+        var divisor: f64 = 10.0
+        while i < bytes.len() and bytes[i] >= 48 and bytes[i] <= 57:
+            frac_part = frac_part + (bytes[i] - 48) as f64 / divisor
+            divisor = divisor * 10.0
+            i += 1
+    var result = integer_part + frac_part
+    // Handle exponent (e.g. 1.5e10)
+    if i < bytes.len() and (bytes[i] == 101 or bytes[i] == 69):  // 'e' or 'E'
+        i += 1
+        let exp_neg = i < bytes.len() and bytes[i] == 45
+        if exp_neg or (i < bytes.len() and bytes[i] == 43):
+            i += 1
+        var exp: i64 = 0
+        while i < bytes.len() and bytes[i] >= 48 and bytes[i] <= 57:
+            exp = exp * 10 + (bytes[i] - 48) as i64
+            i += 1
+        var factor: f64 = 1.0
+        for _ in 0..exp:
+            factor = factor * 10.0
+        if exp_neg:
+            result = result / factor
+        else:
+            result = result * factor
+    if negative:
+        result = -result
+    Result::Ok(result)
+
+// ============================================
+// Helper Functions
+// ============================================
+
+/// Return the minimum of two values
+fn min(a: usize, b: usize) -> usize:
+    if a < b: a else: b
+
+/// Return the maximum of two values
+fn max(a: usize, b: usize) -> usize:
+    if a > b: a else: b

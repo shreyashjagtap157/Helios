@@ -1,0 +1,200 @@
+// HELIOS Framework - Capability System
+// Extensible capability registry for HELIOS actions
+
+module helios::capability
+
+import core::collections::HashMap
+import core::logging as log
+
+// ============================================================================
+// Types
+// ============================================================================
+
+/// Permission level required to execute a capability
+enum Permission:
+    None
+    UserApproval
+    DeveloperOnly
+    SystemLevel
+
+/// A named, executable capability that HELIOS can perform
+struct Capability:
+    name: String
+    description: String
+    handler: String
+    permissions: Permission
+    category: String
+    enabled: bool
+
+    fn new(name: String, description: String, handler: String) -> Capability:
+        return Capability {
+            name: name,
+            description: description,
+            handler: handler,
+            permissions: Permission::None,
+            category: "general".to_string(),
+            enabled: true
+        }
+
+    fn with_permission(mut self, perm: Permission) -> Capability:
+        self.permissions = perm
+        return self
+
+    fn with_category(mut self, category: String) -> Capability:
+        self.category = category
+        return self
+
+/// Result of executing a capability
+enum CapabilityResult:
+    Success(value: Any)
+    Error(message: String)
+    PermissionDenied(reason: String)
+    NotFound(name: String)
+
+// ============================================================================
+// Capability Registry
+// ============================================================================
+
+/// Registry of all capabilities available to HELIOS.
+/// Provides registration, lookup, and execution dispatching.
+struct CapabilityRegistry:
+    capabilities: HashMap<String, Capability>
+    categories: HashMap<String, Vec<String>>
+
+    fn new() -> CapabilityRegistry:
+        log::info("Initializing CapabilityRegistry")
+        let mut registry = CapabilityRegistry {
+            capabilities: HashMap::new(),
+            categories: HashMap::new()
+        }
+        registry.register_builtins()
+        return registry
+
+    /// Register a new capability
+    fn register(&mut self, cap: Capability):
+        log::debug("Registering capability: {}", cap.name)
+        let name = cap.name.clone()
+        let category = cap.category.clone()
+        self.capabilities.insert(name.clone(), cap)
+        self.categories.entry(category).or_default().push(name)
+
+    /// Execute a capability by name with arguments
+    fn execute(&self, name: String, args: HashMap<String, Any>) -> CapabilityResult:
+        log::debug("Executing capability: {}", name)
+
+        let cap = match self.capabilities.get(&name):
+            Some(c) => c
+            None => return CapabilityResult::NotFound(name)
+
+        if !cap.enabled:
+            return CapabilityResult::Error("Capability is disabled".to_string())
+
+        // Enforce permission checks
+        match cap.permissions:
+            Permission::DeveloperOnly:
+                return CapabilityResult::PermissionDenied(
+                    "Developer authentication required".to_string())
+            Permission::SystemLevel:
+                return CapabilityResult::PermissionDenied(
+                    "System-level access required".to_string())
+            _:
+                pass
+
+        // Dispatch to the appropriate handler
+        return self.dispatch(&cap.handler, args)
+
+    /// Check if a capability exists
+    fn has(&self, name: &str) -> bool:
+        return self.capabilities.contains_key(name)
+
+    /// Get a capability by name
+    fn get(&self, name: &str) -> Option<&Capability>:
+        return self.capabilities.get(name)
+
+    /// List all registered capabilities
+    fn list(&self) -> Vec<&Capability>:
+        return self.capabilities.values().collect()
+
+    /// List capabilities in a specific category
+    fn list_by_category(&self, category: &str) -> Vec<&Capability>:
+        match self.categories.get(category):
+            Some(names) =>
+                return names.iter()
+                    .filter_map(|n| self.capabilities.get(n))
+                    .collect()
+            None =>
+                return Vec::new()
+
+    /// Register the built-in capabilities
+    fn register_builtins(&mut self):
+        self.register(
+            Capability::new(
+                "search".to_string(),
+                "Search the knowledge base".to_string(),
+                "builtin_search".to_string()
+            ).with_category("knowledge".to_string())
+        )
+        self.register(
+            Capability::new(
+                "calculate".to_string(),
+                "Perform mathematical calculations".to_string(),
+                "builtin_calculate".to_string()
+            ).with_category("math".to_string())
+        )
+        self.register(
+            Capability::new(
+                "summarize".to_string(),
+                "Summarize text content".to_string(),
+                "builtin_summarize".to_string()
+            ).with_category("text".to_string())
+        )
+        self.register(
+            Capability::new(
+                "translate".to_string(),
+                "Translate text between languages".to_string(),
+                "builtin_translate".to_string()
+            ).with_category("text".to_string())
+        )
+        self.register(
+            Capability::new(
+                "code_generate".to_string(),
+                "Generate code from a description".to_string(),
+                "builtin_code_generate".to_string()
+            ).with_category("development".to_string())
+             .with_permission(Permission::UserApproval)
+        )
+
+    /// Dispatch execution to handler functions
+    fn dispatch(&self, handler: &str, args: HashMap<String, Any>) -> CapabilityResult:
+        match handler:
+            "builtin_search" =>
+                return self.handle_search(args)
+            "builtin_calculate" =>
+                return self.handle_calculate(args)
+            "builtin_summarize" =>
+                return self.handle_summarize(args)
+            "builtin_translate" =>
+                return self.handle_translate(args)
+            "builtin_code_generate" =>
+                return self.handle_code_generate(args)
+            _ =>
+                return CapabilityResult::Error(format("Unknown handler: {}", handler))
+
+    fn handle_search(&self, args: HashMap<String, Any>) -> CapabilityResult:
+        return CapabilityResult::Success("Search results placeholder")
+
+    fn handle_calculate(&self, args: HashMap<String, Any>) -> CapabilityResult:
+        return CapabilityResult::Success("Calculation result placeholder")
+
+    fn handle_summarize(&self, args: HashMap<String, Any>) -> CapabilityResult:
+        return CapabilityResult::Success("Summary placeholder")
+
+    fn handle_translate(&self, args: HashMap<String, Any>) -> CapabilityResult:
+        return CapabilityResult::Success("Translation placeholder")
+
+    fn handle_code_generate(&self, args: HashMap<String, Any>) -> CapabilityResult:
+        return CapabilityResult::Success("Generated code placeholder")
+
+    /// Get count of registered capabilities
+    fn count(&self) -> usize:
+        return self.capabilities.len()

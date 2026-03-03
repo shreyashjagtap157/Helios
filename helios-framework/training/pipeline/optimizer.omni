@@ -1,0 +1,157 @@
+# Cognitive Knowledge Optimizer
+# Memory-efficient knowledge graph consolidation and optimization
+
+module CognitiveOptimizer
+
+import core::logging as log
+import brain::knowledge_graph
+
+# Knowledge consolidation and memory-efficient update logic
+struct KnowledgeOptimizer:
+    max_memory_gb: usize
+    confidence_threshold: f64
+    merge_similarity: f64
+    compaction_interval: usize
+    steps_since_compaction: usize
+
+    fn new(max_memory_gb: usize, confidence_threshold: f64) -> own KnowledgeOptimizer:
+        log::info("Initializing KnowledgeOptimizer (max memory: {} GB, threshold: {})", max_memory_gb, confidence_threshold)
+        return KnowledgeOptimizer {
+            max_memory_gb,
+            confidence_threshold,
+            merge_similarity: 0.85,
+            compaction_interval: 1000,
+            steps_since_compaction: 0
+        }
+
+    # Full optimization pass: merge duplicates, prune low-confidence, compact storage
+    fn optimize(&mut self, kg: &mut knowledge_graph::KnowledgeGraph):
+        log::info("Running knowledge graph optimization...")
+        let initial_nodes = kg.node_count()
+        let initial_edges = kg.edge_count()
+
+        # Step 1: Merge semantically duplicate nodes
+        kg.merge_duplicates_by_similarity(self.merge_similarity)
+
+        # Step 2: Prune nodes below confidence threshold
+        kg.prune_below_confidence(self.confidence_threshold)
+
+        # Step 3: Remove orphan edges (edges to deleted nodes)
+        kg.remove_orphan_edges()
+
+        # Step 4: If still over memory limit, prune progressively
+        while kg.memory_usage_gb() > self.max_memory_gb:
+            kg.prune_lowest_confidence(100)  # Remove 100 lowest nodes per round
+            kg.remove_orphan_edges()
+
+        # Step 5: Compact storage
+        kg.compact_storage()
+
+        let final_nodes = kg.node_count()
+        let final_edges = kg.edge_count()
+        log::info("Optimization complete: nodes {} -> {} (removed {}), edges {} -> {} (removed {})",
+            initial_nodes, final_nodes, initial_nodes - final_nodes,
+            initial_edges, final_edges, initial_edges - final_edges)
+
+    # Incremental optimization: lightweight pass suitable for running between queries
+    fn optimize_incremental(&mut self, kg: &mut knowledge_graph::KnowledgeGraph):
+        self.steps_since_compaction += 1
+
+        # Quick prune of very low confidence nodes
+        kg.prune_below_confidence(self.confidence_threshold * 0.5)
+
+        # Full compaction only every N steps
+        if self.steps_since_compaction >= self.compaction_interval:
+            self.optimize(kg)
+            self.steps_since_compaction = 0
+
+    # Reinforce high-confidence knowledge paths
+    fn reinforce(&mut self, kg: &mut knowledge_graph::KnowledgeGraph, node_ids: &[u64], boost: f64):
+        for id in node_ids:
+            if let Some(node) = kg.get_node_mut(*id):
+                node.confidence = (node.confidence + boost).min(1.0)
+                log::debug("Reinforced node {} confidence to {:.3}", node.label, node.confidence)
+
+    # Decay stale knowledge that hasn't been accessed recently
+    fn decay_stale(&mut self, kg: &mut knowledge_graph::KnowledgeGraph, max_age_hours: u64, decay_rate: f64):
+        let now = time::now_ms()
+        let max_age_ms = max_age_hours * 3600 * 1000
+
+        for node in kg.get_all_nodes_mut():
+            let age = now - node.last_accessed
+            if age > max_age_ms:
+                node.confidence *= (1.0 - decay_rate)
+
+        # Remove nodes that decayed below threshold
+        kg.prune_below_confidence(self.confidence_threshold * 0.1)
+
+
+struct OptimizerConfig:
+    max_memory_gb: usize
+    confidence_threshold: f64
+    merge_similarity: f64
+    decay_rate: f64
+    decay_max_age_hours: u64
+
+    fn default() -> own OptimizerConfig:
+        return OptimizerConfig {
+            max_memory_gb: 8,
+            confidence_threshold: 0.3,
+            merge_similarity: 0.85,
+            decay_rate: 0.05,
+            decay_max_age_hours: 168  # 1 week
+        }
+
+
+# Knowledge graph optimization scheduler
+struct OptimizationScheduler:
+    optimizer: KnowledgeOptimizer
+    config: OptimizerConfig
+    queries_since_optimize: usize
+    optimize_interval: usize
+
+    fn new(config: OptimizerConfig) -> own OptimizationScheduler:
+        let optimizer = KnowledgeOptimizer::new(config.max_memory_gb, config.confidence_threshold)
+        return OptimizationScheduler {
+            optimizer,
+            config,
+            queries_since_optimize: 0,
+            optimize_interval: 500
+        }
+
+    fn on_query(&mut self, kg: &mut knowledge_graph::KnowledgeGraph):
+        self.queries_since_optimize += 1
+
+        if self.queries_since_optimize >= self.optimize_interval:
+            log::info("Scheduled optimization triggered after {} queries", self.queries_since_optimize)
+            self.optimizer.optimize(kg)
+            self.queries_since_optimize = 0
+
+    fn on_idle(&mut self, kg: &mut knowledge_graph::KnowledgeGraph):
+        # Run during idle time: decay stale + optimize
+        self.optimizer.decay_stale(kg, self.config.decay_max_age_hours, self.config.decay_rate)
+        self.optimizer.optimize_incremental(kg)
+
+
+# Knowledge graph statistics
+struct KnowledgeStats:
+    node_count: usize
+    edge_count: usize
+    avg_confidence: f64
+    memory_usage_gb: f64
+    connected_components: usize
+
+fn compute_stats(kg: &knowledge_graph::KnowledgeGraph) -> KnowledgeStats:
+    let nodes = kg.get_all_nodes()
+    let avg_conf = if nodes.is_empty():
+        0.0
+    else:
+        nodes.iter().map(|n| n.confidence).sum::<f64>() / nodes.len() as f64
+
+    return KnowledgeStats {
+        node_count: kg.node_count(),
+        edge_count: kg.edge_count(),
+        avg_confidence: avg_conf,
+        memory_usage_gb: kg.memory_usage_gb() as f64,
+        connected_components: kg.connected_component_count()
+    }

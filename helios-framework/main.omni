@@ -1,0 +1,47 @@
+// HELIOS Framework - Entry Point
+// Initializes and starts the HELIOS cognitive service
+
+module main
+
+import core::logging as log
+import helios::cognitive::HeliosCognitive
+import helios::service::{HeliosService, ServiceState}
+import helios::capability::CapabilityRegistry
+import brain::reasoning_engine::ReasoningEngine
+import brain::knowledge_graph::KnowledgeGraph
+import brain::memory_architecture::MemorySystem
+import brain::adaptive_learning::LearningEngine
+import safety::asimov::SafetyFramework
+import config::default::{HeliosConfig, load_config, default_config}
+
+/// HELIOS main entry point
+fn main():
+    log::info("=== HELIOS Cognitive Framework ===")
+    log::info("Version 0.1.0")
+
+    // Load configuration from file or fall back to defaults
+    let config = load_config("config/default.toml".to_string())
+    log::info("Configuration loaded: {}", config.name)
+
+    // Create and start the service
+    let mut service = HeliosService::new(config)
+    service.start()
+
+    log::info("HELIOS is ready.")
+    log::info("Listening on port {}", service.config.api_port)
+
+    // Main service loop
+    loop:
+        match service.health().state:
+            ServiceState::Running:
+                // Service is healthy — continue
+                thread::sleep(100)
+            ServiceState::Error(msg):
+                log::error("Service error: {}", msg)
+                break
+            _:
+                break
+
+    // Graceful shutdown
+    service.stop()
+    log::info("=== HELIOS shutdown complete ===")

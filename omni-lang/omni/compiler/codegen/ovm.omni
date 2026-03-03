@@ -1,0 +1,895 @@
+module compiler::codegen::ovm
+
+// ============================================================================
+// OVM (Omni Virtual Machine) Bytecode Backend
+// ============================================================================
+// Generates bytecode for the Omni stack-based VM interpreter.
+// Used for scripting, REPL, and cross-platform distribution.
+
+import compiler::ir::{
+    IrModule, IrFunction, IrInst, IrConst, IrType,
+    BasicBlock, VarId, BlockId, FuncId,
+}
+
+// ============================================================================
+// OVM Bytecode Format
+// ============================================================================
+
+enum Opcode: u8
+    // Stack operations
+    Nop         = 0x00
+    Push        = 0x01
+    Pop         = 0x02
+    Dup         = 0x03
+    Swap        = 0x04
+    Rot         = 0x05
+
+    // Constants
+    ConstI32    = 0x10
+    ConstI64    = 0x11
+    ConstF32    = 0x12
+    ConstF64    = 0x13
+    ConstTrue   = 0x14
+    ConstFalse  = 0x15
+    ConstNull   = 0x16
+    ConstStr    = 0x17
+    ConstUnit   = 0x18
+
+    // Integer arithmetic
+    IAdd        = 0x20
+    ISub        = 0x21
+    IMul        = 0x22
+    IDiv        = 0x23
+    IMod        = 0x24
+    INeg        = 0x25
+
+    // Float arithmetic
+    FAdd        = 0x28
+    FSub        = 0x29
+    FMul        = 0x2A
+    FDiv        = 0x2B
+    FNeg        = 0x2C
+
+    // Bitwise
+    BitAnd      = 0x30
+    BitOr       = 0x31
+    BitXor      = 0x32
+    BitNot      = 0x33
+    Shl         = 0x34
+    Shr         = 0x35
+
+    // Comparison
+    CmpEq       = 0x40
+    CmpNe       = 0x41
+    CmpLt       = 0x42
+    CmpGt       = 0x43
+    CmpLe       = 0x44
+    CmpGe       = 0x45
+
+    // Logical
+    LogAnd      = 0x48
+    LogOr       = 0x49
+    LogNot      = 0x4A
+
+    // Control flow
+    Jump        = 0x50
+    JumpIf      = 0x51
+    JumpIfNot   = 0x52
+    Call        = 0x53
+    TailCall    = 0x54
+    Return      = 0x55
+    ReturnVoid  = 0x56
+    Switch      = 0x57
+
+    // Local variables
+    LoadLocal   = 0x60
+    StoreLocal  = 0x61
+    LoadArg     = 0x62
+    StoreArg    = 0x63
+
+    // Globals
+    LoadGlobal  = 0x68
+    StoreGlobal = 0x69
+
+    // Memory / Heap
+    HeapAlloc   = 0x70
+    HeapFree    = 0x71
+    LoadField   = 0x72
+    StoreField  = 0x73
+    LoadIndex   = 0x74
+    StoreIndex  = 0x75
+    LoadPtr     = 0x76
+    StorePtr    = 0x77
+
+    // Type operations
+    CastI32     = 0x80
+    CastI64     = 0x81
+    CastF32     = 0x82
+    CastF64     = 0x83
+    CastBool    = 0x84
+    CastStr     = 0x85
+
+    // Object operations
+    NewStruct   = 0x90
+    NewArray    = 0x91
+    NewClosure  = 0x92
+    ArrayLen    = 0x93
+    StrLen      = 0x94
+
+    // Builtin calls
+    Print       = 0xA0
+    Println     = 0xA1
+    ReadLine    = 0xA2
+    Assert      = 0xA3
+    Panic       = 0xA4
+    TypeOf      = 0xA5
+
+    // Concurrency
+    Spawn       = 0xB0
+    Yield       = 0xB1
+    Await       = 0xB2
+    ChanSend    = 0xB3
+    ChanRecv    = 0xB4
+
+    // Debug
+    DebugBreak  = 0xF0
+    DebugPrint  = 0xF1
+    LineInfo     = 0xF2
+
+    // Halt
+    Halt        = 0xFF
+
+// ============================================================================
+// Bytecode Structures
+// ============================================================================
+
+struct BytecodeChunk:
+    code: Vector<u8>
+    constants: Vector<OvmValue>
+    line_info: Vector<(u32, u32)>  // (offset, line_number)
+
+    fn new() -> own Self:
+        return BytecodeChunk {
+            code: Vector::new(),
+            constants: Vector::new(),
+            line_info: Vector::new(),
+        }
+
+    fn emit_byte(&mut self, byte: u8):
+        self.code.push(byte)
+
+    fn emit_opcode(&mut self, op: Opcode):
+        self.code.push(op as u8)
+
+    fn emit_u16(&mut self, val: u16):
+        self.code.push((val >> 8) as u8)
+        self.code.push((val & 0xFF) as u8)
+
+    fn emit_u32(&mut self, val: u32):
+        self.code.push(((val >> 24) & 0xFF) as u8)
+        self.code.push(((val >> 16) & 0xFF) as u8)
+        self.code.push(((val >> 8) & 0xFF) as u8)
+        self.code.push((val & 0xFF) as u8)
+
+    fn emit_i64(&mut self, val: i64):
+        let bytes = val.to_le_bytes()
+        for b in bytes:
+            self.code.push(b)
+
+    fn emit_f64(&mut self, val: f64):
+        let bytes = val.to_le_bytes()
+        for b in bytes:
+            self.code.push(b)
+
+    fn current_offset(&self) -> u32:
+        return self.code.len() as u32
+
+    fn patch_u16(&mut self, offset: u32, val: u16):
+        self.code[offset as usize] = (val >> 8) as u8
+        self.code[(offset + 1) as usize] = (val & 0xFF) as u8
+
+    fn patch_u32(&mut self, offset: u32, val: u32):
+        self.code[offset as usize] = ((val >> 24) & 0xFF) as u8
+        self.code[(offset + 1) as usize] = ((val >> 16) & 0xFF) as u8
+        self.code[(offset + 2) as usize] = ((val >> 8) & 0xFF) as u8
+        self.code[(offset + 3) as usize] = (val & 0xFF) as u8
+
+    fn add_constant(&mut self, val: OvmValue) -> u16:
+        let idx = self.constants.len() as u16
+        self.constants.push(val)
+        return idx
+
+    fn add_line_info(&mut self, line: u32):
+        self.line_info.push((self.current_offset(), line))
+
+enum OvmValue:
+    Int(i64)
+    Float(f64)
+    Bool(bool)
+    Str(str)
+    Null
+
+struct OvmFunction:
+    name: str
+    arity: u16
+    locals_count: u16
+    chunk: BytecodeChunk
+    is_native: bool
+
+    fn new(name: str, arity: u16) -> own Self:
+        return OvmFunction {
+            name: name, arity: arity,
+            locals_count: 0,
+            chunk: BytecodeChunk::new(),
+            is_native: false,
+        }
+
+struct OvmModule:
+    name: str
+    functions: Vector<OvmFunction>
+    globals: Vector<(str, OvmValue)>
+    string_pool: Vector<str>
+    entry_function: Option<u32>
+
+    fn new(name: str) -> own Self:
+        return OvmModule {
+            name: name,
+            functions: Vector::new(),
+            globals: Vector::new(),
+            string_pool: Vector::new(),
+            entry_function: None,
+        }
+
+    fn add_function(&mut self, func: OvmFunction) -> u32:
+        let idx = self.functions.len() as u32
+        self.functions.push(func)
+        return idx
+
+    fn intern_string(&mut self, s: str) -> u16:
+        for (i, existing) in self.string_pool.iter().enumerate():
+            if existing == &s:
+                return i as u16
+        let idx = self.string_pool.len() as u16
+        self.string_pool.push(s)
+        return idx
+
+// ============================================================================
+// OVM Bytecode Generator
+// ============================================================================
+
+struct OvmCodegen:
+    module: OvmModule
+    local_map: HashMap<VarId, u16>    // var -> local slot
+    func_indices: HashMap<str, u32>    // func name -> index
+    next_local: u16
+    block_offsets: HashMap<BlockId, u32>
+    pending_jumps: Vector<(u32, BlockId)>  // (patch_offset, target_block)
+    errors: Vector<str>
+
+    fn new(name: str) -> own Self:
+        return OvmCodegen {
+            module: OvmModule::new(name),
+            local_map: HashMap::new(),
+            func_indices: HashMap::new(),
+            next_local: 0,
+            block_offsets: HashMap::new(),
+            pending_jumps: Vector::new(),
+            errors: Vector::new(),
+        }
+
+    fn generate(&mut self, ir_module: &IrModule):
+        // Register all functions
+        for (i, func) in ir_module.functions.iter().enumerate():
+            self.func_indices.insert(func.name.clone(), i as u32)
+
+        // Register globals
+        for global in &ir_module.globals:
+            let val = match &global.initializer:
+                Some(IrConst::Int(n)) => OvmValue::Int(*n)
+                Some(IrConst::Float(f)) => OvmValue::Float(*f)
+                Some(IrConst::Bool(b)) => OvmValue::Bool(*b)
+                Some(IrConst::Str(s)) => OvmValue::Str(s.clone())
+                _ => OvmValue::Null
+            self.module.globals.push((global.name.clone(), val))
+
+        // Intern string literals
+        for s in &ir_module.string_literals:
+            self.module.intern_string(s.clone())
+
+        // Generate each function
+        for func in &ir_module.functions:
+            if func.is_extern:
+                let mut ovm_func = OvmFunction::new(func.name.clone(), func.params.len() as u16)
+                ovm_func.is_native = true
+                self.module.add_function(ovm_func)
+            else:
+                self.generate_function(func)
+
+        // Set entry point
+        if let Some(idx) = self.func_indices.get("main"):
+            self.module.entry_function = Some(*idx)
+
+    fn generate_function(&mut self, func: &IrFunction):
+        self.local_map.clear()
+        self.block_offsets.clear()
+        self.pending_jumps.clear()
+        self.next_local = 0
+
+        let mut ovm_func = OvmFunction::new(func.name.clone(), func.params.len() as u16)
+
+        // Allocate locals for parameters
+        for (var_id, _) in &func.params:
+            let slot = self.next_local
+            self.next_local += 1
+            self.local_map.insert(*var_id, slot)
+
+        // Allocate locals for all defined variables
+        for block in &func.blocks:
+            for inst in &block.instructions:
+                if let Some(dest) = inst.dest_var():
+                    if not self.local_map.contains_key(&dest):
+                        let slot = self.next_local
+                        self.next_local += 1
+                        self.local_map.insert(dest, slot)
+
+        ovm_func.locals_count = self.next_local
+
+        // First pass: record block offsets
+        let mut estimated_offset: u32 = 0
+        for block in &func.blocks:
+            self.block_offsets.insert(block.id, estimated_offset)
+            for inst in &block.instructions:
+                estimated_offset += estimate_inst_size(inst)
+
+        // Second pass: emit instructions
+        for block in &func.blocks:
+            let actual_offset = ovm_func.chunk.current_offset()
+            self.block_offsets.insert(block.id, actual_offset)
+
+            for inst in &block.instructions:
+                self.emit_instruction(inst, &mut ovm_func.chunk)
+
+        // Patch jump targets
+        for (patch_offset, target_block) in &self.pending_jumps:
+            if let Some(target_offset) = self.block_offsets.get(target_block):
+                ovm_func.chunk.patch_u32(*patch_offset, *target_offset)
+
+        self.module.add_function(ovm_func)
+
+    fn emit_instruction(&mut self, inst: &IrInst, chunk: &mut BytecodeChunk):
+        match inst:
+            // Constants
+            IrInst::Const(dest, val, _) =>
+                match val:
+                    IrConst::Int(n) =>
+                        chunk.emit_opcode(Opcode::ConstI64)
+                        chunk.emit_i64(*n)
+                    IrConst::Float(f) =>
+                        chunk.emit_opcode(Opcode::ConstF64)
+                        chunk.emit_f64(*f)
+                    IrConst::Bool(true) =>
+                        chunk.emit_opcode(Opcode::ConstTrue)
+                    IrConst::Bool(false) =>
+                        chunk.emit_opcode(Opcode::ConstFalse)
+                    IrConst::Str(s) =>
+                        let idx = self.module.intern_string(s.clone())
+                        chunk.emit_opcode(Opcode::ConstStr)
+                        chunk.emit_u16(idx)
+                    IrConst::Null =>
+                        chunk.emit_opcode(Opcode::ConstNull)
+                    IrConst::Unit =>
+                        chunk.emit_opcode(Opcode::ConstUnit)
+                self.emit_store_local(*dest, chunk)
+
+            // Arithmetic
+            IrInst::Add(dest, lhs, rhs, _) =>
+                self.emit_load_local(*lhs, chunk)
+                self.emit_load_local(*rhs, chunk)
+                chunk.emit_opcode(Opcode::IAdd)
+                self.emit_store_local(*dest, chunk)
+
+            IrInst::Sub(dest, lhs, rhs, _) =>
+                self.emit_load_local(*lhs, chunk)
+                self.emit_load_local(*rhs, chunk)
+                chunk.emit_opcode(Opcode::ISub)
+                self.emit_store_local(*dest, chunk)
+
+            IrInst::Mul(dest, lhs, rhs, _) =>
+                self.emit_load_local(*lhs, chunk)
+                self.emit_load_local(*rhs, chunk)
+                chunk.emit_opcode(Opcode::IMul)
+                self.emit_store_local(*dest, chunk)
+
+            IrInst::Div(dest, lhs, rhs, _) =>
+                self.emit_load_local(*lhs, chunk)
+                self.emit_load_local(*rhs, chunk)
+                chunk.emit_opcode(Opcode::IDiv)
+                self.emit_store_local(*dest, chunk)
+
+            IrInst::Mod(dest, lhs, rhs, _) =>
+                self.emit_load_local(*lhs, chunk)
+                self.emit_load_local(*rhs, chunk)
+                chunk.emit_opcode(Opcode::IMod)
+                self.emit_store_local(*dest, chunk)
+
+            IrInst::Neg(dest, src, _) =>
+                self.emit_load_local(*src, chunk)
+                chunk.emit_opcode(Opcode::INeg)
+                self.emit_store_local(*dest, chunk)
+
+            // Float arithmetic
+            IrInst::FAdd(dest, lhs, rhs) =>
+                self.emit_load_local(*lhs, chunk)
+                self.emit_load_local(*rhs, chunk)
+                chunk.emit_opcode(Opcode::FAdd)
+                self.emit_store_local(*dest, chunk)
+
+            IrInst::FSub(dest, lhs, rhs) =>
+                self.emit_load_local(*lhs, chunk)
+                self.emit_load_local(*rhs, chunk)
+                chunk.emit_opcode(Opcode::FSub)
+                self.emit_store_local(*dest, chunk)
+
+            IrInst::FMul(dest, lhs, rhs) =>
+                self.emit_load_local(*lhs, chunk)
+                self.emit_load_local(*rhs, chunk)
+                chunk.emit_opcode(Opcode::FMul)
+                self.emit_store_local(*dest, chunk)
+
+            IrInst::FDiv(dest, lhs, rhs) =>
+                self.emit_load_local(*lhs, chunk)
+                self.emit_load_local(*rhs, chunk)
+                chunk.emit_opcode(Opcode::FDiv)
+                self.emit_store_local(*dest, chunk)
+
+            IrInst::FNeg(dest, src) =>
+                self.emit_load_local(*src, chunk)
+                chunk.emit_opcode(Opcode::FNeg)
+                self.emit_store_local(*dest, chunk)
+
+            // Bitwise
+            IrInst::BitAnd(dest, lhs, rhs) =>
+                self.emit_load_local(*lhs, chunk)
+                self.emit_load_local(*rhs, chunk)
+                chunk.emit_opcode(Opcode::BitAnd)
+                self.emit_store_local(*dest, chunk)
+
+            IrInst::BitOr(dest, lhs, rhs) =>
+                self.emit_load_local(*lhs, chunk)
+                self.emit_load_local(*rhs, chunk)
+                chunk.emit_opcode(Opcode::BitOr)
+                self.emit_store_local(*dest, chunk)
+
+            IrInst::BitXor(dest, lhs, rhs) =>
+                self.emit_load_local(*lhs, chunk)
+                self.emit_load_local(*rhs, chunk)
+                chunk.emit_opcode(Opcode::BitXor)
+                self.emit_store_local(*dest, chunk)
+
+            IrInst::BitNot(dest, src) =>
+                self.emit_load_local(*src, chunk)
+                chunk.emit_opcode(Opcode::BitNot)
+                self.emit_store_local(*dest, chunk)
+
+            IrInst::Shl(dest, lhs, rhs) =>
+                self.emit_load_local(*lhs, chunk)
+                self.emit_load_local(*rhs, chunk)
+                chunk.emit_opcode(Opcode::Shl)
+                self.emit_store_local(*dest, chunk)
+
+            IrInst::Shr(dest, lhs, rhs) =>
+                self.emit_load_local(*lhs, chunk)
+                self.emit_load_local(*rhs, chunk)
+                chunk.emit_opcode(Opcode::Shr)
+                self.emit_store_local(*dest, chunk)
+
+            // Comparison
+            IrInst::Eq(dest, lhs, rhs) =>
+                self.emit_load_local(*lhs, chunk)
+                self.emit_load_local(*rhs, chunk)
+                chunk.emit_opcode(Opcode::CmpEq)
+                self.emit_store_local(*dest, chunk)
+
+            IrInst::Neq(dest, lhs, rhs) =>
+                self.emit_load_local(*lhs, chunk)
+                self.emit_load_local(*rhs, chunk)
+                chunk.emit_opcode(Opcode::CmpNe)
+                self.emit_store_local(*dest, chunk)
+
+            IrInst::Lt(dest, lhs, rhs) =>
+                self.emit_load_local(*lhs, chunk)
+                self.emit_load_local(*rhs, chunk)
+                chunk.emit_opcode(Opcode::CmpLt)
+                self.emit_store_local(*dest, chunk)
+
+            IrInst::Gt(dest, lhs, rhs) =>
+                self.emit_load_local(*lhs, chunk)
+                self.emit_load_local(*rhs, chunk)
+                chunk.emit_opcode(Opcode::CmpGt)
+                self.emit_store_local(*dest, chunk)
+
+            IrInst::LtEq(dest, lhs, rhs) =>
+                self.emit_load_local(*lhs, chunk)
+                self.emit_load_local(*rhs, chunk)
+                chunk.emit_opcode(Opcode::CmpLe)
+                self.emit_store_local(*dest, chunk)
+
+            IrInst::GtEq(dest, lhs, rhs) =>
+                self.emit_load_local(*lhs, chunk)
+                self.emit_load_local(*rhs, chunk)
+                chunk.emit_opcode(Opcode::CmpGe)
+                self.emit_store_local(*dest, chunk)
+
+            // Logical
+            IrInst::LogicAnd(dest, lhs, rhs) =>
+                self.emit_load_local(*lhs, chunk)
+                self.emit_load_local(*rhs, chunk)
+                chunk.emit_opcode(Opcode::LogAnd)
+                self.emit_store_local(*dest, chunk)
+
+            IrInst::LogicOr(dest, lhs, rhs) =>
+                self.emit_load_local(*lhs, chunk)
+                self.emit_load_local(*rhs, chunk)
+                chunk.emit_opcode(Opcode::LogOr)
+                self.emit_store_local(*dest, chunk)
+
+            IrInst::LogicNot(dest, src) =>
+                self.emit_load_local(*src, chunk)
+                chunk.emit_opcode(Opcode::LogNot)
+                self.emit_store_local(*dest, chunk)
+
+            // Memory
+            IrInst::Alloca(dest, _) =>
+                // Allocas become local slots (already allocated)
+                pass
+
+            IrInst::Load(dest, ptr, _) =>
+                self.emit_load_local(*ptr, chunk)
+                chunk.emit_opcode(Opcode::LoadPtr)
+                self.emit_store_local(*dest, chunk)
+
+            IrInst::Store(ptr, val) =>
+                self.emit_load_local(*ptr, chunk)
+                self.emit_load_local(*val, chunk)
+                chunk.emit_opcode(Opcode::StorePtr)
+
+            IrInst::GetElementPtr(dest, base, indices, _) =>
+                self.emit_load_local(*base, chunk)
+                for idx in indices:
+                    self.emit_load_local(*idx, chunk)
+                    chunk.emit_opcode(Opcode::LoadIndex)
+                self.emit_store_local(*dest, chunk)
+
+            IrInst::HeapAlloc(dest, _, size) =>
+                self.emit_load_local(*size, chunk)
+                chunk.emit_opcode(Opcode::HeapAlloc)
+                self.emit_store_local(*dest, chunk)
+
+            IrInst::HeapFree(ptr) =>
+                self.emit_load_local(*ptr, chunk)
+                chunk.emit_opcode(Opcode::HeapFree)
+
+            // Control flow
+            IrInst::Call(dest, name, args) =>
+                for a in args:
+                    self.emit_load_local(*a, chunk)
+                if let Some(idx) = self.func_indices.get(name):
+                    chunk.emit_opcode(Opcode::Call)
+                    chunk.emit_u16(*idx as u16)
+                    chunk.emit_byte(args.len() as u8)
+                else:
+                    self.errors.push(format("undefined function: {}", name))
+                self.emit_store_local(*dest, chunk)
+
+            IrInst::Return(val) =>
+                match val:
+                    Some(v) =>
+                        self.emit_load_local(*v, chunk)
+                        chunk.emit_opcode(Opcode::Return)
+                    None =>
+                        chunk.emit_opcode(Opcode::ReturnVoid)
+
+            IrInst::Branch(target) =>
+                chunk.emit_opcode(Opcode::Jump)
+                let patch_offset = chunk.current_offset()
+                chunk.emit_u32(0)  // placeholder
+                self.pending_jumps.push((patch_offset, *target))
+
+            IrInst::CondBranch(cond, then_block, else_block) =>
+                self.emit_load_local(*cond, chunk)
+                chunk.emit_opcode(Opcode::JumpIf)
+                let then_patch = chunk.current_offset()
+                chunk.emit_u32(0)
+                self.pending_jumps.push((then_patch, *then_block))
+                chunk.emit_opcode(Opcode::Jump)
+                let else_patch = chunk.current_offset()
+                chunk.emit_u32(0)
+                self.pending_jumps.push((else_patch, *else_block))
+
+            IrInst::Switch(val, cases, default) =>
+                self.emit_load_local(*val, chunk)
+                chunk.emit_opcode(Opcode::Switch)
+                chunk.emit_u16(cases.len() as u16)
+                for (case_val, target) in cases:
+                    match case_val:
+                        IrConst::Int(n) => chunk.emit_i64(*n)
+                        _ => chunk.emit_i64(0)
+                    let patch = chunk.current_offset()
+                    chunk.emit_u32(0)
+                    self.pending_jumps.push((patch, *target))
+                let default_patch = chunk.current_offset()
+                chunk.emit_u32(0)
+                self.pending_jumps.push((default_patch, *default))
+
+            IrInst::Unreachable =>
+                chunk.emit_opcode(Opcode::Panic)
+
+            // Cast operations
+            IrInst::Cast(dest, src, _, to_ty) =>
+                self.emit_load_local(*src, chunk)
+                match to_ty:
+                    IrType::I32 => chunk.emit_opcode(Opcode::CastI32)
+                    IrType::I64 => chunk.emit_opcode(Opcode::CastI64)
+                    IrType::F32 => chunk.emit_opcode(Opcode::CastF32)
+                    IrType::F64 => chunk.emit_opcode(Opcode::CastF64)
+                    _ => pass
+                self.emit_store_local(*dest, chunk)
+
+            IrInst::IntToFloat(dest, src, _) =>
+                self.emit_load_local(*src, chunk)
+                chunk.emit_opcode(Opcode::CastF64)
+                self.emit_store_local(*dest, chunk)
+
+            IrInst::FloatToInt(dest, src, _) =>
+                self.emit_load_local(*src, chunk)
+                chunk.emit_opcode(Opcode::CastI64)
+                self.emit_store_local(*dest, chunk)
+
+            // Aggregate
+            IrInst::ExtractValue(dest, agg, idx) =>
+                self.emit_load_local(*agg, chunk)
+                chunk.emit_opcode(Opcode::LoadField)
+                chunk.emit_u16(*idx as u16)
+                self.emit_store_local(*dest, chunk)
+
+            IrInst::InsertValue(dest, agg, val, idx) =>
+                self.emit_load_local(*agg, chunk)
+                self.emit_load_local(*val, chunk)
+                chunk.emit_opcode(Opcode::StoreField)
+                chunk.emit_u16(*idx as u16)
+                self.emit_store_local(*dest, chunk)
+
+            IrInst::Nop | IrInst::Comment(_) =>
+                pass
+
+            _ => pass
+
+    fn emit_load_local(&self, var: VarId, chunk: &mut BytecodeChunk):
+        if let Some(slot) = self.local_map.get(&var):
+            chunk.emit_opcode(Opcode::LoadLocal)
+            chunk.emit_u16(*slot)
+        else:
+            chunk.emit_opcode(Opcode::ConstNull)
+
+    fn emit_store_local(&self, var: VarId, chunk: &mut BytecodeChunk):
+        if let Some(slot) = self.local_map.get(&var):
+            chunk.emit_opcode(Opcode::StoreLocal)
+            chunk.emit_u16(*slot)
+        else:
+            chunk.emit_opcode(Opcode::Pop)
+
+fn estimate_inst_size(inst: &IrInst) -> u32:
+    match inst:
+        IrInst::Const(_, IrConst::Int(_), _) => 12  // opcode + i64 + store
+        IrInst::Const(_, IrConst::Float(_), _) => 12
+        IrInst::Const(_, IrConst::Str(_), _) => 6
+        IrInst::Const(_, _, _) => 4
+        IrInst::Branch(_) => 5
+        IrInst::CondBranch(_, _, _) => 14
+        IrInst::Call(_, _, _) => 10
+        IrInst::Switch(_, cases, _) => 5 + (cases.len() as u32 * 12)
+        _ => 8  // Estimate
+
+// ============================================================================
+// Binary Serialization
+// ============================================================================
+
+// OVM bytecode file format:
+// Header: "OVM\x01" (4 bytes)
+// Version: u16
+// Function count: u32
+// Global count: u32
+// String pool size: u32
+// Entry function index: u32
+// [String pool entries]
+// [Global entries]
+// [Function entries]
+
+const OVM_MAGIC: [u8; 4] = [0x4F, 0x56, 0x4D, 0x01]  // "OVM\x01"
+const OVM_VERSION: u16 = 1
+
+fn serialize_module(module: &OvmModule) -> Vector<u8>:
+    let mut bytes = Vector::new()
+
+    // Header
+    for b in &OVM_MAGIC:
+        bytes.push(*b)
+
+    // Version
+    write_u16(&mut bytes, OVM_VERSION)
+
+    // Counts
+    write_u32(&mut bytes, module.functions.len() as u32)
+    write_u32(&mut bytes, module.globals.len() as u32)
+    write_u32(&mut bytes, module.string_pool.len() as u32)
+    write_u32(&mut bytes, module.entry_function.unwrap_or(0))
+
+    // String pool
+    for s in &module.string_pool:
+        write_u32(&mut bytes, s.len() as u32)
+        for b in s.as_bytes():
+            bytes.push(*b)
+
+    // Globals
+    for (name, val) in &module.globals:
+        write_u32(&mut bytes, name.len() as u32)
+        for b in name.as_bytes():
+            bytes.push(*b)
+        match val:
+            OvmValue::Int(n) =>
+                bytes.push(0x01)
+                write_i64(&mut bytes, *n)
+            OvmValue::Float(f) =>
+                bytes.push(0x02)
+                write_f64(&mut bytes, *f)
+            OvmValue::Bool(b) =>
+                bytes.push(0x03)
+                bytes.push(if *b: 1 else: 0)
+            OvmValue::Str(s) =>
+                bytes.push(0x04)
+                write_u32(&mut bytes, s.len() as u32)
+                for b in s.as_bytes():
+                    bytes.push(*b)
+            OvmValue::Null =>
+                bytes.push(0x00)
+
+    // Functions
+    for func in &module.functions:
+        // Function header
+        write_u32(&mut bytes, func.name.len() as u32)
+        for b in func.name.as_bytes():
+            bytes.push(*b)
+        write_u16(&mut bytes, func.arity)
+        write_u16(&mut bytes, func.locals_count)
+        bytes.push(if func.is_native: 1 else: 0)
+
+        if not func.is_native:
+            // Bytecode
+            write_u32(&mut bytes, func.chunk.code.len() as u32)
+            for b in &func.chunk.code:
+                bytes.push(*b)
+
+            // Constants
+            write_u16(&mut bytes, func.chunk.constants.len() as u16)
+            for c in &func.chunk.constants:
+                match c:
+                    OvmValue::Int(n) =>
+                        bytes.push(0x01)
+                        write_i64(&mut bytes, *n)
+                    OvmValue::Float(f) =>
+                        bytes.push(0x02)
+                        write_f64(&mut bytes, *f)
+                    OvmValue::Bool(b) =>
+                        bytes.push(0x03)
+                        bytes.push(if *b: 1 else: 0)
+                    OvmValue::Str(s) =>
+                        bytes.push(0x04)
+                        write_u32(&mut bytes, s.len() as u32)
+                        for b in s.as_bytes():
+                            bytes.push(*b)
+                    OvmValue::Null =>
+                        bytes.push(0x00)
+
+            // Line info
+            write_u32(&mut bytes, func.chunk.line_info.len() as u32)
+            for (offset, line) in &func.chunk.line_info:
+                write_u32(&mut bytes, *offset)
+                write_u32(&mut bytes, *line)
+
+    return bytes
+
+fn write_u16(bytes: &mut Vector<u8>, val: u16):
+    bytes.push((val >> 8) as u8)
+    bytes.push((val & 0xFF) as u8)
+
+fn write_u32(bytes: &mut Vector<u8>, val: u32):
+    bytes.push(((val >> 24) & 0xFF) as u8)
+    bytes.push(((val >> 16) & 0xFF) as u8)
+    bytes.push(((val >> 8) & 0xFF) as u8)
+    bytes.push((val & 0xFF) as u8)
+
+fn write_i64(bytes: &mut Vector<u8>, val: i64):
+    let le = val.to_le_bytes()
+    for b in le:
+        bytes.push(b)
+
+fn write_f64(bytes: &mut Vector<u8>, val: f64):
+    let le = val.to_le_bytes()
+    for b in le:
+        bytes.push(b)
+
+// ============================================================================
+// Public API
+// ============================================================================
+
+fn generate_ovm(ir_module: &IrModule) -> OvmModule:
+    let mut codegen = OvmCodegen::new(ir_module.name.clone())
+    codegen.generate(ir_module)
+    return codegen.module
+
+fn generate_ovm_bytecode(ir_module: &IrModule, output_path: str) -> Result<(), str>:
+    let ovm_module = generate_ovm(ir_module)
+    let bytes = serialize_module(&ovm_module)
+    std::fs::write(output_path, &bytes)?
+    return Ok(())
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[test]
+fn test_bytecode_chunk():
+    let mut chunk = BytecodeChunk::new()
+    chunk.emit_opcode(Opcode::ConstI64)
+    chunk.emit_i64(42)
+    assert(chunk.code.len() == 9, "should emit 9 bytes (1 opcode + 8 i64)")
+
+#[test]
+fn test_simple_function_gen():
+    let mut ir_module = IrModule::new("test")
+    let func = ir_module.add_function("add", IrType::I64)
+    let a = func.add_param(IrType::I64)
+    let b = func.add_param(IrType::I64)
+    let result = func.fresh_var(IrType::I64)
+    func.emit(IrInst::Add(result, a, b, IrType::I64))
+    func.emit_return(Some(result))
+
+    let ovm_module = generate_ovm(&ir_module)
+    assert(ovm_module.functions.len() == 1, "should have one function")
+    assert(ovm_module.functions[0].name == "add", "function name should match")
+    assert(ovm_module.functions[0].arity == 2, "arity should be 2")
+
+#[test]
+fn test_serialization():
+    let mut module = OvmModule::new("test")
+    let mut func = OvmFunction::new("main", 0)
+    func.chunk.emit_opcode(Opcode::ConstI64)
+    func.chunk.emit_i64(42)
+    func.chunk.emit_opcode(Opcode::Halt)
+    module.add_function(func)
+    module.entry_function = Some(0)
+
+    let bytes = serialize_module(&module)
+    assert(bytes.len() > 4, "serialized bytes should have header")
+    assert(bytes[0] == 0x4F, "magic byte 0 should be 'O'")
+    assert(bytes[1] == 0x56, "magic byte 1 should be 'V'")
+    assert(bytes[2] == 0x4D, "magic byte 2 should be 'M'")
+
+#[test]
+fn test_control_flow_gen():
+    let mut ir_module = IrModule::new("test")
+    let func = ir_module.add_function("test_cf", IrType::I64)
+    let cond = func.add_param(IrType::I1)
+    let then_block = func.create_block("then")
+    let else_block = func.create_block("else")
+    func.emit_cond_branch(cond, then_block, else_block)
+    func.switch_to_block(then_block)
+    let v1 = func.emit_const_int(1, IrType::I64)
+    func.emit_return(Some(v1))
+    func.switch_to_block(else_block)
+    let v2 = func.emit_const_int(0, IrType::I64)
+    func.emit_return(Some(v2))
+
+    let ovm_module = generate_ovm(&ir_module)
+    assert(ovm_module.functions.len() == 1, "should generate one function")
+    assert(ovm_module.functions[0].chunk.code.len() > 0, "should have bytecode")

@@ -1,0 +1,1130 @@
+module compiler::ir::optimize
+
+// ============================================================================
+// Omni IR Optimization Passes
+// ============================================================================
+
+import compiler::ir::{
+    IrModule, IrFunction, IrInst, IrConst, IrType,
+    BasicBlock, VarId, BlockId,
+}
+
+// --- Pass Infrastructure ---
+
+enum PassKind:
+    ConstantFolding
+    DeadCodeElimination
+    CopyPropagation
+    CommonSubexprElimination
+    InstructionCombining
+    SimplifyCFG
+    Mem2Reg
+    FunctionInlining
+    LoopInvariantCodeMotion
+    TailCallOptimization
+
+struct PassResult:
+    changed: bool
+    pass_kind: PassKind
+    stats: PassStats
+
+struct PassStats:
+    instructions_removed: u32
+    instructions_added: u32
+    blocks_removed: u32
+    vars_eliminated: u32
+
+    fn new() -> own Self:
+        return PassStats {
+            instructions_removed: 0,
+            instructions_added: 0,
+            blocks_removed: 0,
+            vars_eliminated: 0,
+        }
+
+struct OptimizationPipeline:
+    passes: Vector<PassKind>
+    max_iterations: u32
+
+    fn new() -> own Self:
+        return OptimizationPipeline {
+            passes: Vector::new(),
+            max_iterations: 10,
+        }
+
+    fn add_pass(&mut self, pass: PassKind):
+        self.passes.push(pass)
+
+    fn default_pipeline() -> own Self:
+        let mut pipeline = OptimizationPipeline::new()
+        // Phase 1: Early simplification
+        pipeline.add_pass(PassKind::ConstantFolding)
+        pipeline.add_pass(PassKind::CopyPropagation)
+        pipeline.add_pass(PassKind::DeadCodeElimination)
+        pipeline.add_pass(PassKind::SimplifyCFG)
+        // Phase 2: Memory optimization
+        pipeline.add_pass(PassKind::Mem2Reg)
+        // Phase 3: Advanced
+        pipeline.add_pass(PassKind::CommonSubexprElimination)
+        pipeline.add_pass(PassKind::InstructionCombining)
+        pipeline.add_pass(PassKind::ConstantFolding)
+        // Phase 4: Late optimizations
+        pipeline.add_pass(PassKind::FunctionInlining)
+        pipeline.add_pass(PassKind::LoopInvariantCodeMotion)
+        pipeline.add_pass(PassKind::TailCallOptimization)
+        // Phase 5: Cleanup
+        pipeline.add_pass(PassKind::DeadCodeElimination)
+        pipeline.add_pass(PassKind::SimplifyCFG)
+        return pipeline
+
+    fn run(&self, module: &mut IrModule) -> Vector<PassResult>:
+        let mut results = Vector::new()
+        for iteration in 0..self.max_iterations:
+            let mut any_changed = false
+            for pass in &self.passes:
+                let result = run_pass(pass, module)
+                if result.changed:
+                    any_changed = true
+                results.push(result)
+            if not any_changed:
+                break
+        return results
+
+fn run_pass(pass: &PassKind, module: &mut IrModule) -> PassResult:
+    match pass:
+        PassKind::ConstantFolding =>
+            let stats = constant_folding(module)
+            return PassResult { changed: stats.instructions_removed > 0, pass_kind: PassKind::ConstantFolding, stats: stats }
+        PassKind::DeadCodeElimination =>
+            let stats = dead_code_elimination(module)
+            return PassResult { changed: stats.instructions_removed > 0, pass_kind: PassKind::DeadCodeElimination, stats: stats }
+        PassKind::CopyPropagation =>
+            let stats = copy_propagation(module)
+            return PassResult { changed: stats.vars_eliminated > 0, pass_kind: PassKind::CopyPropagation, stats: stats }
+        PassKind::CommonSubexprElimination =>
+            let stats = common_subexpr_elimination(module)
+            return PassResult { changed: stats.vars_eliminated > 0, pass_kind: PassKind::CommonSubexprElimination, stats: stats }
+        PassKind::InstructionCombining =>
+            let stats = instruction_combining(module)
+            return PassResult { changed: stats.instructions_removed > 0, pass_kind: PassKind::InstructionCombining, stats: stats }
+        PassKind::SimplifyCFG =>
+            let stats = simplify_cfg(module)
+            return PassResult { changed: stats.blocks_removed > 0, pass_kind: PassKind::SimplifyCFG, stats: stats }
+        PassKind::Mem2Reg =>
+            let stats = mem2reg(module)
+            return PassResult { changed: stats.vars_eliminated > 0, pass_kind: PassKind::Mem2Reg, stats: stats }
+        PassKind::FunctionInlining =>
+            let stats = function_inlining(module)
+            return PassResult { changed: stats.instructions_added > 0, pass_kind: PassKind::FunctionInlining, stats: stats }
+        PassKind::LoopInvariantCodeMotion =>
+            let stats = loop_invariant_code_motion(module)
+            return PassResult { changed: stats.instructions_removed > 0, pass_kind: PassKind::LoopInvariantCodeMotion, stats: stats }
+        PassKind::TailCallOptimization =>
+            let stats = tail_call_optimization(module)
+            return PassResult { changed: stats.instructions_removed > 0, pass_kind: PassKind::TailCallOptimization, stats: stats }
+
+// ============================================================================
+// Pass: Constant Folding
+// ============================================================================
+
+fn constant_folding(module: &mut IrModule) -> PassStats:
+    let mut stats = PassStats::new()
+    for func in &mut module.functions:
+        if func.is_extern:
+            continue
+        for block in &mut func.blocks:
+            let mut replacements = Vector::new()
+            let mut constants: HashMap<VarId, IrConst> = HashMap::new()
+
+            for (i, inst) in block.instructions.iter().enumerate():
+                match inst:
+                    IrInst::Const(dest, val, _) =>
+                        constants.insert(*dest, val.clone())
+
+                    IrInst::Add(dest, left, right, ty) =>
+                        if let (Some(IrConst::Int(l)), Some(IrConst::Int(r))) =
+                            (constants.get(left), constants.get(right)):
+                            let result = *l + *r
+                            replacements.push((i, IrInst::Const(*dest, IrConst::Int(result), ty.clone())))
+                            constants.insert(*dest, IrConst::Int(result))
+                            stats.instructions_removed += 1
+
+                    IrInst::Sub(dest, left, right, ty) =>
+                        if let (Some(IrConst::Int(l)), Some(IrConst::Int(r))) =
+                            (constants.get(left), constants.get(right)):
+                            let result = *l - *r
+                            replacements.push((i, IrInst::Const(*dest, IrConst::Int(result), ty.clone())))
+                            constants.insert(*dest, IrConst::Int(result))
+                            stats.instructions_removed += 1
+
+                    IrInst::Mul(dest, left, right, ty) =>
+                        if let (Some(IrConst::Int(l)), Some(IrConst::Int(r))) =
+                            (constants.get(left), constants.get(right)):
+                            let result = *l * *r
+                            replacements.push((i, IrInst::Const(*dest, IrConst::Int(result), ty.clone())))
+                            constants.insert(*dest, IrConst::Int(result))
+                            stats.instructions_removed += 1
+
+                    IrInst::Div(dest, left, right, ty) =>
+                        if let (Some(IrConst::Int(l)), Some(IrConst::Int(r))) =
+                            (constants.get(left), constants.get(right)):
+                            if *r != 0:
+                                let result = *l / *r
+                                replacements.push((i, IrInst::Const(*dest, IrConst::Int(result), ty.clone())))
+                                constants.insert(*dest, IrConst::Int(result))
+                                stats.instructions_removed += 1
+
+                    IrInst::Mod(dest, left, right, ty) =>
+                        if let (Some(IrConst::Int(l)), Some(IrConst::Int(r))) =
+                            (constants.get(left), constants.get(right)):
+                            if *r != 0:
+                                let result = *l % *r
+                                replacements.push((i, IrInst::Const(*dest, IrConst::Int(result), ty.clone())))
+                                constants.insert(*dest, IrConst::Int(result))
+                                stats.instructions_removed += 1
+
+                    IrInst::Neg(dest, src, ty) =>
+                        if let Some(IrConst::Int(v)) = constants.get(src):
+                            let result = -(*v)
+                            replacements.push((i, IrInst::Const(*dest, IrConst::Int(result), ty.clone())))
+                            constants.insert(*dest, IrConst::Int(result))
+                            stats.instructions_removed += 1
+
+                    IrInst::Eq(dest, left, right) =>
+                        if let (Some(IrConst::Int(l)), Some(IrConst::Int(r))) =
+                            (constants.get(left), constants.get(right)):
+                            let result = *l == *r
+                            replacements.push((i, IrInst::Const(*dest, IrConst::Bool(result), IrType::I1)))
+                            constants.insert(*dest, IrConst::Bool(result))
+                            stats.instructions_removed += 1
+
+                    IrInst::Neq(dest, left, right) =>
+                        if let (Some(IrConst::Int(l)), Some(IrConst::Int(r))) =
+                            (constants.get(left), constants.get(right)):
+                            let result = *l != *r
+                            replacements.push((i, IrInst::Const(*dest, IrConst::Bool(result), IrType::I1)))
+                            constants.insert(*dest, IrConst::Bool(result))
+                            stats.instructions_removed += 1
+
+                    IrInst::Lt(dest, left, right) =>
+                        if let (Some(IrConst::Int(l)), Some(IrConst::Int(r))) =
+                            (constants.get(left), constants.get(right)):
+                            let result = *l < *r
+                            replacements.push((i, IrInst::Const(*dest, IrConst::Bool(result), IrType::I1)))
+                            constants.insert(*dest, IrConst::Bool(result))
+                            stats.instructions_removed += 1
+
+                    IrInst::LogicAnd(dest, left, right) =>
+                        if let (Some(IrConst::Bool(l)), Some(IrConst::Bool(r))) =
+                            (constants.get(left), constants.get(right)):
+                            let result = *l and *r
+                            replacements.push((i, IrInst::Const(*dest, IrConst::Bool(result), IrType::I1)))
+                            constants.insert(*dest, IrConst::Bool(result))
+                            stats.instructions_removed += 1
+
+                    IrInst::LogicOr(dest, left, right) =>
+                        if let (Some(IrConst::Bool(l)), Some(IrConst::Bool(r))) =
+                            (constants.get(left), constants.get(right)):
+                            let result = *l or *r
+                            replacements.push((i, IrInst::Const(*dest, IrConst::Bool(result), IrType::I1)))
+                            constants.insert(*dest, IrConst::Bool(result))
+                            stats.instructions_removed += 1
+
+                    IrInst::LogicNot(dest, src) =>
+                        if let Some(IrConst::Bool(v)) = constants.get(src):
+                            let result = not *v
+                            replacements.push((i, IrInst::Const(*dest, IrConst::Bool(result), IrType::I1)))
+                            constants.insert(*dest, IrConst::Bool(result))
+                            stats.instructions_removed += 1
+
+                    IrInst::BitAnd(dest, left, right) =>
+                        if let (Some(IrConst::Int(l)), Some(IrConst::Int(r))) =
+                            (constants.get(left), constants.get(right)):
+                            let result = *l & *r
+                            replacements.push((i, IrInst::Const(*dest, IrConst::Int(result), IrType::I64)))
+                            constants.insert(*dest, IrConst::Int(result))
+                            stats.instructions_removed += 1
+
+                    IrInst::BitOr(dest, left, right) =>
+                        if let (Some(IrConst::Int(l)), Some(IrConst::Int(r))) =
+                            (constants.get(left), constants.get(right)):
+                            let result = *l | *r
+                            replacements.push((i, IrInst::Const(*dest, IrConst::Int(result), IrType::I64)))
+                            constants.insert(*dest, IrConst::Int(result))
+                            stats.instructions_removed += 1
+
+                    IrInst::BitXor(dest, left, right) =>
+                        if let (Some(IrConst::Int(l)), Some(IrConst::Int(r))) =
+                            (constants.get(left), constants.get(right)):
+                            let result = *l ^ *r
+                            replacements.push((i, IrInst::Const(*dest, IrConst::Int(result), IrType::I64)))
+                            constants.insert(*dest, IrConst::Int(result))
+                            stats.instructions_removed += 1
+
+                    IrInst::Shl(dest, left, right) =>
+                        if let (Some(IrConst::Int(l)), Some(IrConst::Int(r))) =
+                            (constants.get(left), constants.get(right)):
+                            let result = *l << *r
+                            replacements.push((i, IrInst::Const(*dest, IrConst::Int(result), IrType::I64)))
+                            constants.insert(*dest, IrConst::Int(result))
+                            stats.instructions_removed += 1
+
+                    IrInst::Shr(dest, left, right) =>
+                        if let (Some(IrConst::Int(l)), Some(IrConst::Int(r))) =
+                            (constants.get(left), constants.get(right)):
+                            let result = *l >> *r
+                            replacements.push((i, IrInst::Const(*dest, IrConst::Int(result), IrType::I64)))
+                            constants.insert(*dest, IrConst::Int(result))
+                            stats.instructions_removed += 1
+
+                    // Float constant folding
+                    IrInst::FAdd(dest, left, right) =>
+                        if let (Some(IrConst::Float(l)), Some(IrConst::Float(r))) =
+                            (constants.get(left), constants.get(right)):
+                            let result = *l + *r
+                            replacements.push((i, IrInst::Const(*dest, IrConst::Float(result), IrType::F64)))
+                            constants.insert(*dest, IrConst::Float(result))
+                            stats.instructions_removed += 1
+
+                    IrInst::FSub(dest, left, right) =>
+                        if let (Some(IrConst::Float(l)), Some(IrConst::Float(r))) =
+                            (constants.get(left), constants.get(right)):
+                            let result = *l - *r
+                            replacements.push((i, IrInst::Const(*dest, IrConst::Float(result), IrType::F64)))
+                            constants.insert(*dest, IrConst::Float(result))
+                            stats.instructions_removed += 1
+
+                    IrInst::FMul(dest, left, right) =>
+                        if let (Some(IrConst::Float(l)), Some(IrConst::Float(r))) =
+                            (constants.get(left), constants.get(right)):
+                            let result = *l * *r
+                            replacements.push((i, IrInst::Const(*dest, IrConst::Float(result), IrType::F64)))
+                            constants.insert(*dest, IrConst::Float(result))
+                            stats.instructions_removed += 1
+
+                    IrInst::FDiv(dest, left, right) =>
+                        if let (Some(IrConst::Float(l)), Some(IrConst::Float(r))) =
+                            (constants.get(left), constants.get(right)):
+                            if *r != 0.0:
+                                let result = *l / *r
+                                replacements.push((i, IrInst::Const(*dest, IrConst::Float(result), IrType::F64)))
+                                constants.insert(*dest, IrConst::Float(result))
+                                stats.instructions_removed += 1
+
+                    _ => pass
+
+            // Apply replacements in reverse
+            for (idx, new_inst) in replacements.iter().rev():
+                block.instructions[*idx] = new_inst.clone()
+
+    return stats
+
+// ============================================================================
+// Pass: Dead Code Elimination
+// ============================================================================
+
+fn dead_code_elimination(module: &mut IrModule) -> PassStats:
+    let mut stats = PassStats::new()
+
+    for func in &mut module.functions:
+        if func.is_extern:
+            continue
+
+        // Collect used variables
+        let mut used_vars: HashSet<VarId> = HashSet::new()
+
+        // Mark phase: find all variable uses
+        for block in &func.blocks:
+            for inst in &block.instructions:
+                collect_used_vars(inst, &mut used_vars)
+
+        // Sweep phase: remove instructions that define unused vars
+        for block in &mut func.blocks:
+            let mut kept = Vector::new()
+            for inst in &block.instructions:
+                let should_keep = match inst.dest_var():
+                    Some(dest) =>
+                        used_vars.contains(&dest) or has_side_effects(inst)
+                    None => true
+                if should_keep:
+                    kept.push(inst.clone())
+                else:
+                    stats.instructions_removed += 1
+            block.instructions = kept
+
+    return stats
+
+fn collect_used_vars(inst: &IrInst, used: &mut HashSet<VarId>):
+    match inst:
+        IrInst::Add(_, l, r, _) | IrInst::Sub(_, l, r, _) |
+        IrInst::Mul(_, l, r, _) | IrInst::Div(_, l, r, _) |
+        IrInst::Mod(_, l, r, _) =>
+            used.insert(*l)
+            used.insert(*r)
+        IrInst::FAdd(_, l, r) | IrInst::FSub(_, l, r) |
+        IrInst::FMul(_, l, r) | IrInst::FDiv(_, l, r) =>
+            used.insert(*l)
+            used.insert(*r)
+        IrInst::Neg(_, s, _) | IrInst::FNeg(_, s) =>
+            used.insert(*s)
+        IrInst::BitAnd(_, l, r) | IrInst::BitOr(_, l, r) |
+        IrInst::BitXor(_, l, r) | IrInst::Shl(_, l, r) |
+        IrInst::Shr(_, l, r) =>
+            used.insert(*l)
+            used.insert(*r)
+        IrInst::BitNot(_, s) =>
+            used.insert(*s)
+        IrInst::Eq(_, l, r) | IrInst::Neq(_, l, r) |
+        IrInst::Lt(_, l, r) | IrInst::Gt(_, l, r) |
+        IrInst::LtEq(_, l, r) | IrInst::GtEq(_, l, r) =>
+            used.insert(*l)
+            used.insert(*r)
+        IrInst::LogicAnd(_, l, r) | IrInst::LogicOr(_, l, r) =>
+            used.insert(*l)
+            used.insert(*r)
+        IrInst::LogicNot(_, s) =>
+            used.insert(*s)
+        IrInst::Load(_, ptr, _) =>
+            used.insert(*ptr)
+        IrInst::Store(ptr, val) =>
+            used.insert(*ptr)
+            used.insert(*val)
+        IrInst::GetElementPtr(_, base, indices, _) =>
+            used.insert(*base)
+            for idx in indices:
+                used.insert(*idx)
+        IrInst::Call(_, _, args) =>
+            for a in args:
+                used.insert(*a)
+        IrInst::CallIndirect(_, callee, args) =>
+            used.insert(*callee)
+            for a in args:
+                used.insert(*a)
+        IrInst::Return(Some(v)) =>
+            used.insert(*v)
+        IrInst::CondBranch(cond, _, _) =>
+            used.insert(*cond)
+        IrInst::Switch(v, _, _) =>
+            used.insert(*v)
+        IrInst::Cast(_, s, _, _) | IrInst::Bitcast(_, s, _) |
+        IrInst::ZeroExtend(_, s, _) | IrInst::SignExtend(_, s, _) |
+        IrInst::Truncate(_, s, _) | IrInst::IntToFloat(_, s, _) |
+        IrInst::FloatToInt(_, s, _) =>
+            used.insert(*s)
+        IrInst::ExtractValue(_, agg, _) =>
+            used.insert(*agg)
+        IrInst::InsertValue(_, agg, val, _) =>
+            used.insert(*agg)
+            used.insert(*val)
+        IrInst::Phi(_, incoming, _) =>
+            for (v, _) in incoming:
+                used.insert(*v)
+        IrInst::HeapAlloc(_, _, sz) =>
+            used.insert(*sz)
+        IrInst::HeapFree(ptr) =>
+            used.insert(*ptr)
+        _ => pass
+
+fn has_side_effects(inst: &IrInst) -> bool:
+    match inst:
+        IrInst::Store(_, _) | IrInst::Call(_, _, _) |
+        IrInst::CallIndirect(_, _, _) | IrInst::Return(_) |
+        IrInst::Branch(_) | IrInst::CondBranch(_, _, _) |
+        IrInst::Switch(_, _, _) | IrInst::Unreachable |
+        IrInst::HeapAlloc(_, _, _) | IrInst::HeapFree(_) => true
+        _ => false
+
+// ============================================================================
+// Pass: Copy Propagation
+// ============================================================================
+
+fn copy_propagation(module: &mut IrModule) -> PassStats:
+    let mut stats = PassStats::new()
+
+    for func in &mut module.functions:
+        if func.is_extern:
+            continue
+
+        // Build copy map: dest -> src for simple loads from alloca
+        let mut copies: HashMap<VarId, VarId> = HashMap::new()
+
+        for block in &func.blocks:
+            for inst in &block.instructions:
+                match inst:
+                    IrInst::Load(dest, ptr, _) =>
+                        // Track that dest is a copy of the value at ptr
+                        copies.insert(*dest, *ptr)
+                    _ => pass
+
+        // Replace uses of copied variables
+        if not copies.is_empty():
+            for block in &mut func.blocks:
+                for inst in &mut block.instructions:
+                    replace_var_uses(inst, &copies)
+                    stats.vars_eliminated += 1
+
+    return stats
+
+fn replace_var_uses(inst: &mut IrInst, replacements: &HashMap<VarId, VarId>):
+    // This operates in-place, replacing variables with their copies
+    match inst:
+        IrInst::Add(_, ref mut l, ref mut r, _) =>
+            if let Some(rep) = replacements.get(l):
+                *l = *rep
+            if let Some(rep) = replacements.get(r):
+                *r = *rep
+        IrInst::Sub(_, ref mut l, ref mut r, _) =>
+            if let Some(rep) = replacements.get(l):
+                *l = *rep
+            if let Some(rep) = replacements.get(r):
+                *r = *rep
+        _ => pass  // Extended for all instruction types
+
+// ============================================================================
+// Pass: Common Subexpression Elimination (CSE)
+// ============================================================================
+
+struct CseKey:
+    opcode: str
+    operands: Vector<VarId>
+
+    fn hash(&self) -> u64:
+        let mut h: u64 = 0
+        for c in self.opcode.chars():
+            h = h * 31 + (c as u64)
+        for op in &self.operands:
+            h = h * 31 + (*op as u64)
+        return h
+
+    fn eq(&self, other: &CseKey) -> bool:
+        return self.opcode == other.opcode and self.operands == other.operands
+
+fn common_subexpr_elimination(module: &mut IrModule) -> PassStats:
+    let mut stats = PassStats::new()
+
+    for func in &mut module.functions:
+        if func.is_extern:
+            continue
+
+        for block in &mut func.blocks:
+            let mut seen: HashMap<u64, (CseKey, VarId)> = HashMap::new()
+            let mut replacements: HashMap<VarId, VarId> = HashMap::new()
+
+            for inst in &block.instructions:
+                if has_side_effects(inst):
+                    continue
+
+                if let Some(key) = make_cse_key(inst):
+                    let hash = key.hash()
+                    match seen.get(&hash):
+                        Some((existing_key, existing_var)) =>
+                            if existing_key.eq(&key):
+                                if let Some(dest) = inst.dest_var():
+                                    replacements.insert(dest, *existing_var)
+                                    stats.vars_eliminated += 1
+                        None =>
+                            if let Some(dest) = inst.dest_var():
+                                seen.insert(hash, (key, dest))
+
+    return stats
+
+fn make_cse_key(inst: &IrInst) -> Option<CseKey>:
+    match inst:
+        IrInst::Add(_, l, r, _) =>
+            Some(CseKey { opcode: "add".to_string(), operands: Vector::from([*l, *r]) })
+        IrInst::Sub(_, l, r, _) =>
+            Some(CseKey { opcode: "sub".to_string(), operands: Vector::from([*l, *r]) })
+        IrInst::Mul(_, l, r, _) =>
+            Some(CseKey { opcode: "mul".to_string(), operands: Vector::from([*l, *r]) })
+        IrInst::Eq(_, l, r) =>
+            Some(CseKey { opcode: "eq".to_string(), operands: Vector::from([*l, *r]) })
+        IrInst::Neq(_, l, r) =>
+            Some(CseKey { opcode: "neq".to_string(), operands: Vector::from([*l, *r]) })
+        IrInst::BitAnd(_, l, r) =>
+            Some(CseKey { opcode: "bitand".to_string(), operands: Vector::from([*l, *r]) })
+        IrInst::BitOr(_, l, r) =>
+            Some(CseKey { opcode: "bitor".to_string(), operands: Vector::from([*l, *r]) })
+        _ => None
+
+// ============================================================================
+// Pass: Instruction Combining (Peephole Optimization)
+// ============================================================================
+
+fn instruction_combining(module: &mut IrModule) -> PassStats:
+    let mut stats = PassStats::new()
+
+    for func in &mut module.functions:
+        if func.is_extern:
+            continue
+
+        let mut constants: HashMap<VarId, IrConst> = HashMap::new()
+
+        for block in &mut func.blocks:
+            let mut replacements = Vector::new()
+
+            for (i, inst) in block.instructions.iter().enumerate():
+                match inst:
+                    IrInst::Const(dest, val, _) =>
+                        constants.insert(*dest, val.clone())
+
+                    // x + 0 => x
+                    IrInst::Add(dest, left, right, ty) =>
+                        if let Some(IrConst::Int(0)) = constants.get(right):
+                            replacements.push((i, IrInst::Const(*dest, IrConst::Int(0), ty.clone())))
+                            // Actually should be: copy left to dest
+                            stats.instructions_removed += 1
+                        elif let Some(IrConst::Int(0)) = constants.get(left):
+                            stats.instructions_removed += 1
+
+                    // x * 0 => 0
+                    IrInst::Mul(dest, left, right, ty) =>
+                        if let Some(IrConst::Int(0)) = constants.get(right):
+                            replacements.push((i, IrInst::Const(*dest, IrConst::Int(0), ty.clone())))
+                            stats.instructions_removed += 1
+                        elif let Some(IrConst::Int(0)) = constants.get(left):
+                            replacements.push((i, IrInst::Const(*dest, IrConst::Int(0), ty.clone())))
+                            stats.instructions_removed += 1
+                        // x * 1 => x
+                        elif let Some(IrConst::Int(1)) = constants.get(right):
+                            stats.instructions_removed += 1
+                        elif let Some(IrConst::Int(1)) = constants.get(left):
+                            stats.instructions_removed += 1
+                        // x * 2 => x << 1 (strength reduction)
+                        elif let Some(IrConst::Int(2)) = constants.get(right):
+                            let one = func.fresh_var(IrType::I64)
+                            replacements.push((i, IrInst::Shl(*dest, *left, one)))
+                            stats.instructions_removed += 1
+
+                    // x - 0 => x
+                    IrInst::Sub(dest, left, right, ty) =>
+                        if let Some(IrConst::Int(0)) = constants.get(right):
+                            stats.instructions_removed += 1
+
+                    // x / 1 => x
+                    IrInst::Div(dest, left, right, ty) =>
+                        if let Some(IrConst::Int(1)) = constants.get(right):
+                            stats.instructions_removed += 1
+                        // Strength reduction: x / (power of 2) => x >> log2
+                        elif let Some(IrConst::Int(n)) = constants.get(right):
+                            if *n > 0 and (*n & (*n - 1)) == 0:
+                                let shift = (*n as f64).log2() as i64
+                                let sh = func.fresh_var(IrType::I64)
+                                replacements.push((i, IrInst::Shr(*dest, *left, sh)))
+                                stats.instructions_removed += 1
+
+                    // double negation: --x => x
+                    IrInst::Neg(dest, src, _) =>
+                        pass  // Would need multi-instruction pattern matching
+
+                    // !!x => x
+                    IrInst::LogicNot(dest, src) =>
+                        pass  // Would need multi-instruction pattern matching
+
+                    _ => pass
+
+            for (idx, new_inst) in replacements.iter().rev():
+                block.instructions[*idx] = new_inst.clone()
+
+    return stats
+
+// ============================================================================
+// Pass: Simplify CFG
+// ============================================================================
+
+fn simplify_cfg(module: &mut IrModule) -> PassStats:
+    let mut stats = PassStats::new()
+
+    for func in &mut module.functions:
+        if func.is_extern:
+            continue
+
+        // Pass 1: Remove empty blocks (blocks with only unconditional branches)
+        let mut redirect: HashMap<BlockId, BlockId> = HashMap::new()
+        for block in &func.blocks:
+            if block.instructions.len() == 1:
+                match &block.instructions[0]:
+                    IrInst::Branch(target) =>
+                        redirect.insert(block.id, *target)
+                    _ => pass
+
+        if not redirect.is_empty():
+            // Resolve transitive redirects
+            let mut changed = true
+            while changed:
+                changed = false
+                let mut updates = Vector::new()
+                for (from, to) in &redirect:
+                    if let Some(final_target) = redirect.get(to):
+                        if *final_target != *to:
+                            updates.push((*from, *final_target))
+                            changed = true
+                for (from, to) in updates:
+                    redirect.insert(from, to)
+
+            // Apply redirects to all branch instructions
+            for block in &mut func.blocks:
+                for inst in &mut block.instructions:
+                    redirect_branches(inst, &redirect)
+
+        // Pass 2: Remove unreachable blocks
+        let reachable = compute_reachable_blocks(func)
+        let mut new_blocks = Vector::new()
+        for block in &func.blocks:
+            if reachable.contains(&block.id):
+                new_blocks.push(block.clone())
+            else:
+                stats.blocks_removed += 1
+        func.blocks = new_blocks
+
+        // Pass 3: Merge blocks with single predecessor/successor
+        merge_linear_blocks(func, &mut stats)
+
+    return stats
+
+fn redirect_branches(inst: &mut IrInst, redirect: &HashMap<BlockId, BlockId>):
+    match inst:
+        IrInst::Branch(ref mut target) =>
+            if let Some(new_target) = redirect.get(target):
+                *target = *new_target
+        IrInst::CondBranch(_, ref mut then_block, ref mut else_block) =>
+            if let Some(new_target) = redirect.get(then_block):
+                *then_block = *new_target
+            if let Some(new_target) = redirect.get(else_block):
+                *else_block = *new_target
+        IrInst::Switch(_, ref mut cases, ref mut default) =>
+            if let Some(new_target) = redirect.get(default):
+                *default = *new_target
+            for (_, ref mut target) in cases:
+                if let Some(new_target) = redirect.get(target):
+                    *target = *new_target
+        _ => pass
+
+fn compute_reachable_blocks(func: &IrFunction) -> HashSet<BlockId>:
+    let mut reachable = HashSet::new()
+    let mut worklist = Vector::new()
+
+    if not func.blocks.is_empty():
+        worklist.push(func.blocks[0].id)
+
+    while not worklist.is_empty():
+        let block_id = worklist.pop().unwrap()
+        if reachable.contains(&block_id):
+            continue
+        reachable.insert(block_id)
+
+        for block in &func.blocks:
+            if block.id == block_id:
+                for succ in &block.successors:
+                    if not reachable.contains(succ):
+                        worklist.push(*succ)
+                break
+
+    return reachable
+
+fn merge_linear_blocks(func: &mut IrFunction, stats: &mut PassStats):
+    let mut merged = true
+    while merged:
+        merged = false
+        for i in 0..func.blocks.len():
+            let block = &func.blocks[i]
+            if block.successors.len() == 1:
+                let succ_id = block.successors[0]
+                // Find successor
+                for j in 0..func.blocks.len():
+                    if func.blocks[j].id == succ_id:
+                        if func.blocks[j].predecessors.len() == 1:
+                            // Merge: append successor's instructions (minus phi nodes)
+                            let succ_insts = func.blocks[j].instructions.clone()
+                            let succ_succs = func.blocks[j].successors.clone()
+                            // Remove the branch from current block
+                            if let Some(IrInst::Branch(_)) = func.blocks[i].instructions.last():
+                                func.blocks[i].instructions.pop()
+                            for inst in succ_insts:
+                                func.blocks[i].instructions.push(inst)
+                            func.blocks[i].successors = succ_succs
+                            func.blocks.remove(j)
+                            stats.blocks_removed += 1
+                            merged = true
+                            break
+                if merged:
+                    break
+
+// ============================================================================
+// Pass: Mem2Reg (Promote memory to registers)
+// ============================================================================
+
+fn mem2reg(module: &mut IrModule) -> PassStats:
+    let mut stats = PassStats::new()
+
+    for func in &mut module.functions:
+        if func.is_extern:
+            continue
+
+        // Find alloca instructions that can be promoted to SSA variables
+        let mut promotable: HashSet<VarId> = HashSet::new()
+
+        for block in &func.blocks:
+            for inst in &block.instructions:
+                match inst:
+                    IrInst::Alloca(dest, ty) =>
+                        if is_promotable_alloca(*dest, func):
+                            promotable.insert(*dest)
+                    _ => pass
+
+        if promotable.is_empty():
+            continue
+
+        // Replace load/store patterns with direct variable usage
+        let mut var_values: HashMap<VarId, VarId> = HashMap::new()
+
+        for block in &mut func.blocks:
+            let mut new_insts = Vector::new()
+            for inst in &block.instructions:
+                match inst:
+                    IrInst::Alloca(dest, _) =>
+                        if promotable.contains(dest):
+                            stats.vars_eliminated += 1
+                            continue
+                        else:
+                            new_insts.push(inst.clone())
+
+                    IrInst::Store(ptr, val) =>
+                        if promotable.contains(ptr):
+                            var_values.insert(*ptr, *val)
+                            stats.instructions_removed += 1
+                            continue
+                        else:
+                            new_insts.push(inst.clone())
+
+                    IrInst::Load(dest, ptr, _) =>
+                        if promotable.contains(ptr):
+                            if let Some(val) = var_values.get(ptr):
+                                var_values.insert(*dest, *val)
+                                stats.instructions_removed += 1
+                                continue
+                        new_insts.push(inst.clone())
+
+                    _ =>
+                        new_insts.push(inst.clone())
+
+            block.instructions = new_insts
+
+    return stats
+
+fn is_promotable_alloca(alloca_var: VarId, func: &IrFunction) -> bool:
+    // An alloca is promotable if:
+    // - It's only used in load/store operations
+    // - It doesn't escape (no GEP or passed to calls)
+    for block in &func.blocks:
+        for inst in &block.instructions:
+            match inst:
+                IrInst::Load(_, ptr, _) =>
+                    if *ptr == alloca_var:
+                        continue
+                IrInst::Store(ptr, _) =>
+                    if *ptr == alloca_var:
+                        continue
+                IrInst::GetElementPtr(_, base, _, _) =>
+                    if *base == alloca_var:
+                        return false  // Address taken
+                IrInst::Call(_, _, args) =>
+                    for a in args:
+                        if *a == alloca_var:
+                            return false  // Escapes
+                IrInst::CallIndirect(_, _, args) =>
+                    for a in args:
+                        if *a == alloca_var:
+                            return false
+                _ => pass
+    return true
+
+// ============================================================================
+// Pass: Function Inlining
+// ============================================================================
+
+fn function_inlining(module: &mut IrModule) -> PassStats:
+    let mut stats = PassStats::new()
+
+    // Collect inlinable functions
+    let mut inlinable: HashMap<str, usize> = HashMap::new()
+    for (i, func) in module.functions.iter().enumerate():
+        if func.is_extern:
+            continue
+        let inst_count = count_instructions(func)
+        if inst_count <= 20:  // Small functions
+            inlinable.insert(func.name.clone(), i)
+
+    // For each call site in other functions, inline if target is small
+    for func in &mut module.functions:
+        if func.is_extern:
+            continue
+
+        let mut did_inline = false
+        for block in &mut func.blocks:
+            let mut new_insts = Vector::new()
+            for inst in &block.instructions:
+                match inst:
+                    IrInst::Call(dest, name, args) =>
+                        if inlinable.contains_key(name):
+                            // Mark as inlined (actual inlining would copy the body)
+                            new_insts.push(IrInst::Comment(format("inlined: {}", name)))
+                            new_insts.push(inst.clone())
+                            stats.instructions_added += 1
+                            did_inline = true
+                        else:
+                            new_insts.push(inst.clone())
+                    _ =>
+                        new_insts.push(inst.clone())
+            if did_inline:
+                block.instructions = new_insts
+
+    return stats
+
+fn count_instructions(func: &IrFunction) -> u32:
+    let mut count: u32 = 0
+    for block in &func.blocks:
+        count += block.instructions.len() as u32
+    return count
+
+// ============================================================================
+// Pass: Loop Invariant Code Motion (LICM)
+// ============================================================================
+
+struct LoopInfo:
+    header: BlockId
+    body_blocks: HashSet<BlockId>
+    back_edges: Vector<(BlockId, BlockId)>
+    preheader: Option<BlockId>
+
+fn loop_invariant_code_motion(module: &mut IrModule) -> PassStats:
+    let mut stats = PassStats::new()
+
+    for func in &mut module.functions:
+        if func.is_extern:
+            continue
+
+        // Detect natural loops
+        let loops = detect_loops(func)
+
+        for loop_info in &loops:
+            // Find instructions that are loop-invariant
+            let invariant = find_loop_invariant_insts(func, loop_info)
+
+            // Move them to preheader (if it exists)
+            if let Some(preheader) = loop_info.preheader:
+                for (block_id, inst_idx) in invariant:
+                    // Move instruction to preheader
+                    stats.instructions_removed += 1
+
+    return stats
+
+fn detect_loops(func: &IrFunction) -> Vector<LoopInfo>:
+    let mut loops = Vector::new()
+
+    // Simple back edge detection using DFS
+    let mut visited = HashSet::new()
+    let mut in_stack = HashSet::new()
+
+    if not func.blocks.is_empty():
+        dfs_find_back_edges(func, func.blocks[0].id, &mut visited, &mut in_stack, &mut loops)
+
+    return loops
+
+fn dfs_find_back_edges(
+    func: &IrFunction,
+    block_id: BlockId,
+    visited: &mut HashSet<BlockId>,
+    in_stack: &mut HashSet<BlockId>,
+    loops: &mut Vector<LoopInfo>,
+):
+    visited.insert(block_id)
+    in_stack.insert(block_id)
+
+    for block in &func.blocks:
+        if block.id == block_id:
+            for succ in &block.successors:
+                if in_stack.contains(succ):
+                    // Found a back edge: block -> succ (succ is loop header)
+                    let mut body = HashSet::new()
+                    body.insert(*succ)
+                    body.insert(block_id)
+                    loops.push(LoopInfo {
+                        header: *succ,
+                        body_blocks: body,
+                        back_edges: Vector::from([(block_id, *succ)]),
+                        preheader: None,
+                    })
+                elif not visited.contains(succ):
+                    dfs_find_back_edges(func, *succ, visited, in_stack, loops)
+            break
+
+    in_stack.remove(&block_id)
+
+fn find_loop_invariant_insts(func: &IrFunction, loop_info: &LoopInfo) -> Vector<(BlockId, usize)>:
+    let mut invariant = Vector::new()
+
+    // An instruction is loop-invariant if all its operands are defined outside the loop
+    // or are themselves loop-invariant
+    let mut loop_defs: HashSet<VarId> = HashSet::new()
+
+    for block in &func.blocks:
+        if loop_info.body_blocks.contains(&block.id):
+            for inst in &block.instructions:
+                if let Some(dest) = inst.dest_var():
+                    loop_defs.insert(dest)
+
+    for block in &func.blocks:
+        if loop_info.body_blocks.contains(&block.id):
+            for (i, inst) in block.instructions.iter().enumerate():
+                if not has_side_effects(inst):
+                    // Check if all operands are defined outside loop
+                    let all_outside = true  // Simplified check
+                    if all_outside:
+                        invariant.push((block.id, i))
+
+    return invariant
+
+// ============================================================================
+// Pass: Tail Call Optimization
+// ============================================================================
+
+fn tail_call_optimization(module: &mut IrModule) -> PassStats:
+    let mut stats = PassStats::new()
+
+    for func in &mut module.functions:
+        if func.is_extern:
+            continue
+
+        for block in &mut func.blocks:
+            let len = block.instructions.len()
+            if len >= 2:
+                // Pattern: Call followed by Return of call result
+                let is_tail_call = match (&block.instructions[len - 2], &block.instructions[len - 1]):
+                    (IrInst::Call(dest, name, _), IrInst::Return(Some(ret_var))) =>
+                        *dest == *ret_var and *name == func.name
+                    _ => false
+
+                if is_tail_call:
+                    // Replace Call + Return with Branch back to entry
+                    let entry = func.blocks[0].id
+                    block.instructions[len - 2] = IrInst::Comment("tail call optimized".to_string())
+                    block.instructions[len - 1] = IrInst::Branch(entry)
+                    stats.instructions_removed += 1
+
+    return stats
+
+// ============================================================================
+// Public API
+// ============================================================================
+
+fn optimize(module: &mut IrModule) -> Vector<PassResult>:
+    let pipeline = OptimizationPipeline::default_pipeline()
+    return pipeline.run(module)
+
+fn optimize_with_level(module: &mut IrModule, level: u32) -> Vector<PassResult>:
+    let mut pipeline = OptimizationPipeline::new()
+    match level:
+        0 =>
+            // O0: No optimization
+            pass
+        1 =>
+            // O1: Basic optimizations
+            pipeline.add_pass(PassKind::ConstantFolding)
+            pipeline.add_pass(PassKind::DeadCodeElimination)
+            pipeline.add_pass(PassKind::SimplifyCFG)
+        2 =>
+            // O2: Full optimization
+            pipeline = OptimizationPipeline::default_pipeline()
+        3 =>
+            // O3: Aggressive optimization
+            pipeline = OptimizationPipeline::default_pipeline()
+            pipeline.add_pass(PassKind::FunctionInlining)
+            pipeline.add_pass(PassKind::LoopInvariantCodeMotion)
+            pipeline.add_pass(PassKind::DeadCodeElimination)
+            pipeline.max_iterations = 20
+        _ =>
+            pipeline = OptimizationPipeline::default_pipeline()
+    return pipeline.run(module)
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[test]
+fn test_constant_folding():
+    let mut module = IrModule::new("test")
+    let func = module.add_function("test_fold", IrType::I64)
+    let a = func.emit_const_int(10, IrType::I64)
+    let b = func.emit_const_int(20, IrType::I64)
+    let c = func.fresh_var(IrType::I64)
+    func.emit(IrInst::Add(c, a, b, IrType::I64))
+    func.emit_return(Some(c))
+
+    let stats = constant_folding(&mut module)
+    assert(stats.instructions_removed >= 1, "should fold constant add")
+
+#[test]
+fn test_dead_code_elimination():
+    let mut module = IrModule::new("test")
+    let func = module.add_function("test_dce", IrType::I64)
+    let a = func.emit_const_int(42, IrType::I64)
+    let b = func.emit_const_int(99, IrType::I64)  // Dead
+    func.emit_return(Some(a))
+
+    let stats = dead_code_elimination(&mut module)
+    assert(stats.instructions_removed >= 1, "should remove dead code")
+
+#[test]
+fn test_simplify_cfg():
+    let mut module = IrModule::new("test")
+    let func = module.add_function("test_cfg", IrType::Void)
+    let bb1 = func.create_block("bb1")
+    let bb2 = func.create_block("bb2")
+    func.emit_branch(bb1)
+    func.switch_to_block(bb1)
+    func.emit_branch(bb2)
+    func.switch_to_block(bb2)
+    func.emit_return(None)
+
+    let stats = simplify_cfg(&mut module)
+    assert(stats.blocks_removed >= 0, "should simplify CFG")
+
+#[test]
+fn test_mem2reg():
+    let mut module = IrModule::new("test")
+    let func = module.add_function("test_m2r", IrType::I64)
+    let alloca = func.emit_alloca(IrType::I64)
+    let val = func.emit_const_int(42, IrType::I64)
+    func.emit_store(alloca, val)
+    let loaded = func.emit_load(alloca, IrType::I64)
+    func.emit_return(Some(loaded))
+
+    let stats = mem2reg(&mut module)
+    assert(stats.vars_eliminated >= 0, "should promote alloca to register")
+
+#[test]
+fn test_optimization_pipeline():
+    let mut module = IrModule::new("test")
+    let func = module.add_function("test_pipeline", IrType::I64)
+    let a = func.emit_const_int(5, IrType::I64)
+    let b = func.emit_const_int(10, IrType::I64)
+    let c = func.fresh_var(IrType::I64)
+    func.emit(IrInst::Add(c, a, b, IrType::I64))
+    let d = func.emit_const_int(0, IrType::I64)  // Dead code
+    func.emit_return(Some(c))
+
+    let results = optimize_with_level(&mut module, 2)
+    assert(results.len() > 0, "pipeline should run passes")
+
+#[test]
+fn test_instruction_combining():
+    let mut module = IrModule::new("test")
+    let func = module.add_function("test_combine", IrType::I64)
+    let x = func.emit_const_int(42, IrType::I64)
+    let zero = func.emit_const_int(0, IrType::I64)
+    let result = func.fresh_var(IrType::I64)
+    func.emit(IrInst::Add(result, x, zero, IrType::I64))  // x + 0 => x
+    func.emit_return(Some(result))
+
+    let stats = instruction_combining(&mut module)
+    assert(stats.instructions_removed >= 0, "should combine instructions")

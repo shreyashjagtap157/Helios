@@ -1,0 +1,832 @@
+module std::python:
+
+// ===========================================================
+// Python C API Bindings (Python 3.x)
+// ===========================================================
+
+extern "C" {
+    // Initialization
+    fn Py_Initialize();
+    fn Py_InitializeEx(initsigs: i32);
+    fn Py_Finalize();
+    fn Py_IsInitialized() -> i32;
+    
+    // GIL
+    fn PyGILState_Ensure() -> i32;
+    fn PyGILState_Release(state: i32);
+    fn PyEval_SaveThread() -> *u8;
+    fn PyEval_RestoreThread(state: *u8);
+    
+    // Reference counting
+    fn Py_IncRef(obj: *mut PyObjectRaw);
+    fn Py_DecRef(obj: *mut PyObjectRaw);
+    fn Py_XINCREF(obj: *mut PyObjectRaw);
+    fn Py_XDECREF(obj: *mut PyObjectRaw);
+    
+    // Module import
+    fn PyImport_ImportModule(name: *u8) -> *mut PyObjectRaw;
+    fn PyImport_AddModule(name: *u8) -> *mut PyObjectRaw;
+    
+    // Object operations
+    fn PyObject_GetAttrString(obj: *mut PyObjectRaw, name: *u8) -> *mut PyObjectRaw;
+    fn PyObject_SetAttrString(obj: *mut PyObjectRaw, name: *u8, val: *mut PyObjectRaw) -> i32;
+    fn PyObject_Call(callable: *mut PyObjectRaw, args: *mut PyObjectRaw, kwargs: *mut PyObjectRaw) -> *mut PyObjectRaw;
+    fn PyObject_CallNoArgs(callable: *mut PyObjectRaw) -> *mut PyObjectRaw;
+    fn PyObject_Str(obj: *mut PyObjectRaw) -> *mut PyObjectRaw;
+    fn PyObject_Repr(obj: *mut PyObjectRaw) -> *mut PyObjectRaw;
+    fn PyObject_IsTrue(obj: *mut PyObjectRaw) -> i32;
+    fn PyObject_Length(obj: *mut PyObjectRaw) -> isize;
+    fn PyObject_GetItem(obj: *mut PyObjectRaw, key: *mut PyObjectRaw) -> *mut PyObjectRaw;
+    fn PyObject_SetItem(obj: *mut PyObjectRaw, key: *mut PyObjectRaw, val: *mut PyObjectRaw) -> i32;
+    
+    // Type checking
+    fn PyLong_Check(obj: *mut PyObjectRaw) -> i32;
+    fn PyFloat_Check(obj: *mut PyObjectRaw) -> i32;
+    fn PyUnicode_Check(obj: *mut PyObjectRaw) -> i32;
+    fn PyList_Check(obj: *mut PyObjectRaw) -> i32;
+    fn PyDict_Check(obj: *mut PyObjectRaw) -> i32;
+    fn PyTuple_Check(obj: *mut PyObjectRaw) -> i32;
+    fn PyCallable_Check(obj: *mut PyObjectRaw) -> i32;
+    
+    // Integer operations
+    fn PyLong_FromLong(val: i64) -> *mut PyObjectRaw;
+    fn PyLong_AsLong(obj: *mut PyObjectRaw) -> i64;
+    fn PyLong_FromUnsignedLong(val: u64) -> *mut PyObjectRaw;
+    fn PyLong_AsUnsignedLong(obj: *mut PyObjectRaw) -> u64;
+    
+    // Float operations
+    fn PyFloat_FromDouble(val: f64) -> *mut PyObjectRaw;
+    fn PyFloat_AsDouble(obj: *mut PyObjectRaw) -> f64;
+    
+    // String operations
+    fn PyUnicode_FromString(str: *u8) -> *mut PyObjectRaw;
+    fn PyUnicode_AsUTF8(obj: *mut PyObjectRaw) -> *u8;
+    fn PyUnicode_AsUTF8AndSize(obj: *mut PyObjectRaw, size: *mut isize) -> *u8;
+    
+    // Bytes operations
+    fn PyBytes_FromStringAndSize(str: *u8, size: isize) -> *mut PyObjectRaw;
+    fn PyBytes_AsString(obj: *mut PyObjectRaw) -> *u8;
+    fn PyBytes_Size(obj: *mut PyObjectRaw) -> isize;
+    
+    // List operations
+    fn PyList_New(size: isize) -> *mut PyObjectRaw;
+    fn PyList_Size(list: *mut PyObjectRaw) -> isize;
+    fn PyList_GetItem(list: *mut PyObjectRaw, index: isize) -> *mut PyObjectRaw;
+    fn PyList_SetItem(list: *mut PyObjectRaw, index: isize, item: *mut PyObjectRaw) -> i32;
+    fn PyList_Append(list: *mut PyObjectRaw, item: *mut PyObjectRaw) -> i32;
+    
+    // Tuple operations
+    fn PyTuple_New(size: isize) -> *mut PyObjectRaw;
+    fn PyTuple_Size(tuple: *mut PyObjectRaw) -> isize;
+    fn PyTuple_GetItem(tuple: *mut PyObjectRaw, index: isize) -> *mut PyObjectRaw;
+    fn PyTuple_SetItem(tuple: *mut PyObjectRaw, index: isize, item: *mut PyObjectRaw) -> i32;
+    
+    // Dict operations
+    fn PyDict_New() -> *mut PyObjectRaw;
+    fn PyDict_Size(dict: *mut PyObjectRaw) -> isize;
+    fn PyDict_GetItem(dict: *mut PyObjectRaw, key: *mut PyObjectRaw) -> *mut PyObjectRaw;
+    fn PyDict_GetItemString(dict: *mut PyObjectRaw, key: *u8) -> *mut PyObjectRaw;
+    fn PyDict_SetItem(dict: *mut PyObjectRaw, key: *mut PyObjectRaw, val: *mut PyObjectRaw) -> i32;
+    fn PyDict_SetItemString(dict: *mut PyObjectRaw, key: *u8, val: *mut PyObjectRaw) -> i32;
+    fn PyDict_Keys(dict: *mut PyObjectRaw) -> *mut PyObjectRaw;
+    fn PyDict_Values(dict: *mut PyObjectRaw) -> *mut PyObjectRaw;
+    
+    // Error handling
+    fn PyErr_Occurred() -> *mut PyObjectRaw;
+    fn PyErr_Clear();
+    fn PyErr_Print();
+    fn PyErr_Fetch(type: *mut *mut PyObjectRaw, value: *mut *mut PyObjectRaw, traceback: *mut *mut PyObjectRaw);
+    fn PyErr_SetString(type: *mut PyObjectRaw, message: *u8);
+    
+    // None and bool
+    fn _Py_NoneStruct() -> *mut PyObjectRaw;
+    fn Py_True() -> *mut PyObjectRaw;
+    fn Py_False() -> *mut PyObjectRaw;
+    
+    // NumPy C API (optional)
+    fn PyArray_DATA(arr: *mut PyObjectRaw) -> *mut u8;
+    fn PyArray_DIMS(arr: *mut PyObjectRaw) -> *isize;
+    fn PyArray_NDIM(arr: *mut PyObjectRaw) -> i32;
+    fn PyArray_DTYPE(arr: *mut PyObjectRaw) -> *mut PyObjectRaw;
+    fn PyArray_SimpleNewFromData(nd: i32, dims: *isize, typenum: i32, data: *mut u8) -> *mut PyObjectRaw;
+    
+    // Code execution
+    fn PyRun_SimpleString(command: *u8) -> i32;
+    fn PyRun_String(str: *u8, start: i32, globals: *mut PyObjectRaw, locals: *mut PyObjectRaw) -> *mut PyObjectRaw;
+}
+
+// ===========================================================
+// Raw Python Object Handle
+// ===========================================================
+
+struct PyObjectRaw {
+    // Opaque C structure
+}
+
+// ===========================================================
+// Python Interpreter
+// ===========================================================
+
+static mut INITIALIZED: bool = false
+
+fn initialize():
+    unsafe:
+        if not INITIALIZED:
+            Py_Initialize()
+            INITIALIZED = true
+
+fn initialize_without_signals():
+    unsafe:
+        if not INITIALIZED:
+            Py_InitializeEx(0)
+            INITIALIZED = true
+
+fn finalize():
+    unsafe:
+        if INITIALIZED:
+            Py_Finalize()
+            INITIALIZED = false
+
+fn is_initialized() -> bool:
+    unsafe:
+        Py_IsInitialized() != 0
+
+// ===========================================================
+// GIL (Global Interpreter Lock) Management
+// ===========================================================
+
+struct GilGuard:
+    state: i32
+
+impl GilGuard:
+    fn acquire() -> GilGuard:
+        let state = PyGILState_Ensure()
+        GilGuard { state: state }
+
+impl Drop for GilGuard:
+    fn drop(&mut self):
+        PyGILState_Release(self.state)
+
+struct GilReleaseGuard:
+    thread_state: *u8
+
+impl GilReleaseGuard:
+    fn release() -> GilReleaseGuard:
+        let state = PyEval_SaveThread()
+        GilReleaseGuard { thread_state: state }
+
+impl Drop for GilReleaseGuard:
+    fn drop(&mut self):
+        PyEval_RestoreThread(self.thread_state)
+
+fn with_gil<T>(f: Fn() -> T) -> T:
+    let _guard = GilGuard::acquire()
+    f()
+
+fn without_gil<T>(f: Fn() -> T) -> T:
+    let _guard = GilReleaseGuard::release()
+    f()
+
+// ===========================================================
+// PyObject - Safe Wrapper
+// ===========================================================
+
+struct PyObject:
+    ptr: *mut PyObjectRaw
+    owned: bool
+
+impl PyObject:
+    fn new(ptr: *mut PyObjectRaw) -> Option<PyObject>:
+        if ptr.is_null():
+            check_error()
+            None
+        else:
+            Some(PyObject { ptr: ptr, owned: true })
+    
+    fn borrowed(ptr: *mut PyObjectRaw) -> Option<PyObject>:
+        if ptr.is_null():
+            None
+        else:
+            Py_IncRef(ptr)
+            Some(PyObject { ptr: ptr, owned: true })
+    
+    fn none() -> PyObject:
+        let ptr = _Py_NoneStruct()
+        Py_IncRef(ptr)
+        PyObject { ptr: ptr, owned: true }
+    
+    fn is_none(&self) -> bool:
+        self.ptr == _Py_NoneStruct()
+    
+    fn is_true(&self) -> bool:
+        PyObject_IsTrue(self.ptr) == 1
+    
+    fn len(&self) -> isize:
+        PyObject_Length(self.ptr)
+    
+    fn get_attr(&self, name: &str) -> Option<PyObject>:
+        let name_cstr = name.as_c_str()
+        let result = PyObject_GetAttrString(self.ptr, name_cstr.as_ptr())
+        PyObject::new(result)
+    
+    fn set_attr(&self, name: &str, value: &PyObject) -> bool:
+        let name_cstr = name.as_c_str()
+        PyObject_SetAttrString(self.ptr, name_cstr.as_ptr(), value.ptr) == 0
+    
+    fn call(&self, args: &PyTuple, kwargs: Option<&PyDict>) -> Option<PyObject>:
+        let kwargs_ptr = kwargs.map(|d| d.inner.ptr).unwrap_or(null_mut())
+        let result = PyObject_Call(self.ptr, args.inner.ptr, kwargs_ptr)
+        PyObject::new(result)
+    
+    fn call0(&self) -> Option<PyObject>:
+        let result = PyObject_CallNoArgs(self.ptr)
+        PyObject::new(result)
+    
+    fn call1(&self, arg: &PyObject) -> Option<PyObject>:
+        let args = PyTuple::new(&[arg.clone()])
+        self.call(&args, None)
+    
+    fn call_method(&self, name: &str, args: &[PyObject]) -> Option<PyObject>:
+        let method = self.get_attr(name)?
+        let tuple = PyTuple::from_slice(args)
+        method.call(&tuple, None)
+    
+    fn to_string(&self) -> String:
+        let str_obj = PyObject_Str(self.ptr)
+        if str_obj.is_null():
+            return "<error>".to_string()
+        
+        let utf8 = PyUnicode_AsUTF8(str_obj)
+        let result = String::from_c_str(utf8)
+        Py_DecRef(str_obj)
+        result
+    
+    fn repr(&self) -> String:
+        let repr_obj = PyObject_Repr(self.ptr)
+        if repr_obj.is_null():
+            return "<error>".to_string()
+        
+        let utf8 = PyUnicode_AsUTF8(repr_obj)
+        let result = String::from_c_str(utf8)
+        Py_DecRef(repr_obj)
+        result
+    
+    fn is_callable(&self) -> bool:
+        PyCallable_Check(self.ptr) != 0
+    
+    fn as_ptr(&self) -> *mut PyObjectRaw:
+        self.ptr
+    
+    fn into_ptr(self) -> *mut PyObjectRaw:
+        let ptr = self.ptr
+        std::mem::forget(self)
+        ptr
+
+impl Clone for PyObject:
+    fn clone(&self) -> PyObject:
+        Py_IncRef(self.ptr)
+        PyObject { ptr: self.ptr, owned: true }
+
+impl Drop for PyObject:
+    fn drop(&mut self):
+        if self.owned:
+            Py_DecRef(self.ptr)
+
+// ===========================================================
+// Type Conversions
+// ===========================================================
+
+// From Omni to Python
+impl From<i64> for PyObject:
+    fn from(val: i64) -> PyObject:
+        PyObject { ptr: PyLong_FromLong(val), owned: true }
+
+impl From<f64> for PyObject:
+    fn from(val: f64) -> PyObject:
+        PyObject { ptr: PyFloat_FromDouble(val), owned: true }
+
+impl From<bool> for PyObject:
+    fn from(val: bool) -> PyObject:
+        let ptr = if val { Py_True() } else { Py_False() }
+        Py_IncRef(ptr)
+        PyObject { ptr: ptr, owned: true }
+
+impl From<&str> for PyObject:
+    fn from(val: &str) -> PyObject:
+        let cstr = val.as_c_str()
+        PyObject { ptr: PyUnicode_FromString(cstr.as_ptr()), owned: true }
+
+impl From<String> for PyObject:
+    fn from(val: String) -> PyObject:
+        PyObject::from(val.as_str())
+
+impl From<&[u8]> for PyObject:
+    fn from(val: &[u8]) -> PyObject:
+        PyObject { 
+            ptr: PyBytes_FromStringAndSize(val.as_ptr(), val.len() as isize), 
+            owned: true 
+        }
+
+// From Python to Omni
+impl PyObject:
+    fn as_i64(&self) -> Option<i64>:
+        if PyLong_Check(self.ptr) != 0:
+            Some(PyLong_AsLong(self.ptr))
+        else:
+            None
+    
+    fn as_f64(&self) -> Option<f64>:
+        if PyFloat_Check(self.ptr) != 0:
+            Some(PyFloat_AsDouble(self.ptr))
+        else if PyLong_Check(self.ptr) != 0:
+            Some(PyLong_AsLong(self.ptr) as f64)
+        else:
+            None
+    
+    fn as_bool(&self) -> Option<bool>:
+        Some(PyObject_IsTrue(self.ptr) == 1)
+    
+    fn as_str(&self) -> Option<String>:
+        if PyUnicode_Check(self.ptr) != 0:
+            let utf8 = PyUnicode_AsUTF8(self.ptr)
+            if not utf8.is_null():
+                return Some(String::from_c_str(utf8))
+        None
+    
+    fn as_bytes(&self) -> Option<Vec<u8>>:
+        if PyBytes_Check(self.ptr) != 0:
+            let ptr = PyBytes_AsString(self.ptr)
+            let size = PyBytes_Size(self.ptr) as usize
+            if not ptr.is_null():
+                let mut result: Vec<u8> = Vec::with_capacity(size)
+                for i in 0..size:
+                    result.push(*ptr.offset(i as isize))
+                return Some(result)
+        None
+    
+    fn to_tensor(&self) -> Option<Tensor<f32>>:
+        // Check if it's a numpy array
+        let ndim = PyArray_NDIM(self.ptr)
+        if ndim < 0:
+            return None
+        
+        let dims_ptr = PyArray_DIMS(self.ptr)
+        let data_ptr = PyArray_DATA(self.ptr) as *f32
+        
+        if dims_ptr.is_null() or data_ptr.is_null():
+            return None
+        
+        let mut shape: Vec<usize> = Vec::new()
+        for i in 0..ndim:
+            shape.push(*dims_ptr.offset(i as isize) as usize)
+        
+        // Create tensor (this is a view, need to copy for ownership)
+        let total_size: usize = shape.iter().product()
+        let mut data: Vec<f32> = Vec::with_capacity(total_size)
+        for i in 0..total_size:
+            data.push(*data_ptr.offset(i as isize))
+        
+        Some(Tensor::from_vec(data, &shape))
+
+// ===========================================================
+// PyTuple
+// ===========================================================
+
+struct PyTuple:
+    inner: PyObject
+
+impl PyTuple:
+    fn new(items: &[PyObject]) -> PyTuple:
+        let tuple = PyTuple_New(items.len() as isize)
+        for (i, item) in items.iter().enumerate():
+            Py_IncRef(item.ptr)  // SetItem steals reference
+            PyTuple_SetItem(tuple, i as isize, item.ptr)
+        PyTuple { inner: PyObject { ptr: tuple, owned: true } }
+    
+    fn from_slice(items: &[PyObject]) -> PyTuple:
+        PyTuple::new(items)
+    
+    fn empty() -> PyTuple:
+        PyTuple { inner: PyObject { ptr: PyTuple_New(0), owned: true } }
+    
+    fn len(&self) -> usize:
+        PyTuple_Size(self.inner.ptr) as usize
+    
+    fn get(&self, index: usize) -> Option<PyObject>:
+        if index < self.len():
+            let item = PyTuple_GetItem(self.inner.ptr, index as isize)
+            PyObject::borrowed(item)
+        else:
+            None
+
+// ===========================================================
+// PyList
+// ===========================================================
+
+struct PyList:
+    inner: PyObject
+
+impl PyList:
+    fn new() -> PyList:
+        PyList { inner: PyObject { ptr: PyList_New(0), owned: true } }
+    
+    fn with_capacity(size: usize) -> PyList:
+        PyList { inner: PyObject { ptr: PyList_New(size as isize), owned: true } }
+    
+    fn from_vec<T: Into<PyObject>>(items: Vec<T>) -> PyList:
+        let list = PyList::new()
+        for item in items:
+            list.append(&item.into())
+        list
+    
+    fn len(&self) -> usize:
+        PyList_Size(self.inner.ptr) as usize
+    
+    fn get(&self, index: usize) -> Option<PyObject>:
+        if index < self.len():
+            let item = PyList_GetItem(self.inner.ptr, index as isize)
+            PyObject::borrowed(item)
+        else:
+            None
+    
+    fn set(&self, index: usize, value: PyObject):
+        if index < self.len():
+            Py_IncRef(value.ptr)  // SetItem steals reference
+            PyList_SetItem(self.inner.ptr, index as isize, value.ptr)
+    
+    fn append(&self, value: &PyObject):
+        PyList_Append(self.inner.ptr, value.ptr)
+    
+    fn to_vec<T>(&self) -> Vec<T> where PyObject: TryInto<T>:
+        let mut result: Vec<T> = Vec::new()
+        for i in 0..self.len():
+            if let Some(obj) = self.get(i):
+                if let Ok(val) = obj.try_into():
+                    result.push(val)
+        result
+
+// ===========================================================
+// PyDict
+// ===========================================================
+
+struct PyDict:
+    inner: PyObject
+
+impl PyDict:
+    fn new() -> PyDict:
+        PyDict { inner: PyObject { ptr: PyDict_New(), owned: true } }
+    
+    fn len(&self) -> usize:
+        PyDict_Size(self.inner.ptr) as usize
+    
+    fn get(&self, key: &str) -> Option<PyObject>:
+        let key_cstr = key.as_c_str()
+        let item = PyDict_GetItemString(self.inner.ptr, key_cstr.as_ptr())
+        PyObject::borrowed(item)
+    
+    fn get_item(&self, key: &PyObject) -> Option<PyObject>:
+        let item = PyDict_GetItem(self.inner.ptr, key.ptr)
+        PyObject::borrowed(item)
+    
+    fn set(&self, key: &str, value: &PyObject):
+        let key_cstr = key.as_c_str()
+        PyDict_SetItemString(self.inner.ptr, key_cstr.as_ptr(), value.ptr)
+    
+    fn set_item(&self, key: &PyObject, value: &PyObject):
+        PyDict_SetItem(self.inner.ptr, key.ptr, value.ptr)
+    
+    fn keys(&self) -> PyList:
+        let keys = PyDict_Keys(self.inner.ptr)
+        PyList { inner: PyObject { ptr: keys, owned: true } }
+    
+    fn values(&self) -> PyList:
+        let values = PyDict_Values(self.inner.ptr)
+        PyList { inner: PyObject { ptr: values, owned: true } }
+
+// ===========================================================
+// Module Import
+// ===========================================================
+
+fn import(name: &str) -> Option<PyObject>:
+    let name_cstr = name.as_c_str()
+    let module = PyImport_ImportModule(name_cstr.as_ptr())
+    PyObject::new(module)
+
+fn get_builtins() -> PyObject:
+    import("builtins").unwrap()
+
+// ===========================================================
+// Code Execution
+// ===========================================================
+
+fn exec(code: &str) -> bool:
+    let code_cstr = code.as_c_str()
+    PyRun_SimpleString(code_cstr.as_ptr()) == 0
+
+fn eval(expr: &str) -> Option<PyObject>:
+    let main_module = PyImport_AddModule("__main__\0".as_ptr())
+    if main_module.is_null():
+        return None
+    
+    let globals = PyObject_GetAttrString(main_module, "__dict__\0".as_ptr())
+    if globals.is_null():
+        return None
+    
+    let expr_cstr = expr.as_c_str()
+    // Py_eval_input = 258
+    let result = PyRun_String(expr_cstr.as_ptr(), 258, globals, globals)
+    
+    Py_DecRef(globals)
+    PyObject::new(result)
+
+// ===========================================================
+// Error Handling
+// ===========================================================
+
+struct PyError:
+    type_name: String
+    message: String
+    traceback: Option<String>
+
+fn check_error() -> Option<PyError>:
+    let err = PyErr_Occurred()
+    if err.is_null():
+        return None
+    
+    let mut type_ptr: *mut PyObjectRaw = null_mut()
+    let mut value_ptr: *mut PyObjectRaw = null_mut()
+    let mut tb_ptr: *mut PyObjectRaw = null_mut()
+    
+    PyErr_Fetch(&mut type_ptr, &mut value_ptr, &mut tb_ptr)
+    
+    let type_name = if not type_ptr.is_null():
+        let obj = PyObject { ptr: type_ptr, owned: true }
+        obj.get_attr("__name__")
+            .and_then(|n| n.as_str())
+            .unwrap_or("Unknown".to_string())
+    else:
+        "Unknown".to_string()
+    
+    let message = if not value_ptr.is_null():
+        let obj = PyObject { ptr: value_ptr, owned: true }
+        obj.to_string()
+    else:
+        "No message".to_string()
+    
+    let traceback = if not tb_ptr.is_null():
+        let obj = PyObject { ptr: tb_ptr, owned: true }
+        Some(obj.to_string())
+    else:
+        None
+    
+    Some(PyError { type_name, message, traceback })
+
+fn clear_error():
+    PyErr_Clear()
+
+fn print_error():
+    PyErr_Print()
+
+// ===========================================================
+// Convenience Macros/Functions
+// ===========================================================
+
+fn py_call(module: &str, func: &str, args: &[PyObject]) -> Option<PyObject>:
+    let mod_obj = import(module)?
+    let func_obj = mod_obj.get_attr(func)?
+    let tuple = PyTuple::from_slice(args)
+    func_obj.call(&tuple, None)
+
+fn numpy() -> Option<PyObject>:
+    import("numpy")
+
+fn pandas() -> Option<PyObject>:
+    import("pandas")
+
+fn torch() -> Option<PyObject>:
+    import("torch")
+// ============================================
+// Advanced Python Interop Features
+// ============================================
+
+// Async Python support
+struct AsyncPyObject:
+    coroutine: PyObject
+    result: Option<PyObject>
+
+impl AsyncPyObject:
+    fn new(coro: PyObject) -> AsyncPyObject:
+        AsyncPyObject { coroutine: coro, result: None }
+    
+    fn poll(&mut self) -> bool:
+        // Check if coroutine is done (simplified)
+        if self.coroutine.is_none():
+            return true
+        
+        // Try to get result attribute
+        if let Some(res) = self.coroutine.get_attr("_result"):
+            self.result = Some(res)
+            return true
+        
+        false
+    
+    fn get_result(&self) -> Option<PyObject>:
+        self.result.clone()
+
+// Callback support for Python -> Omni
+struct PyCallback:
+    func: PyObject
+    user_data: Option<PyObject>
+
+impl PyCallback:
+    fn new(func: PyObject) -> PyCallback:
+        PyCallback { func, user_data: None }
+    
+    fn with_data(func: PyObject, data: PyObject) -> PyCallback:
+        PyCallback { func, user_data: Some(data) }
+    
+    fn call(&self, args: &[PyObject]) -> Option<PyObject>:
+        let tuple = PyTuple::from_slice(args)
+        self.func.call(&tuple, None)
+
+// Exception handling wrapper
+struct PyException:
+    exc_type: String
+    message: String
+    traceback: Vec<String>
+
+impl PyException:
+    fn from_error(err: PyError) -> PyException:
+        PyException {
+            exc_type: err.type_name,
+            message: err.message,
+            traceback: Vec::new()
+        }
+    
+    fn display(&self) -> String:
+        format("{0}: {1}", self.exc_type, self.message)
+
+// Context manager support
+struct PyContextManager:
+    obj: PyObject
+    result: Option<PyObject>
+
+impl PyContextManager:
+    fn new(obj: PyObject) -> Option<PyContextManager>:
+        // Call __enter__
+        if let Some(enter_result) = obj.call_method("__enter__", &[]):
+            Some(PyContextManager { obj, result: Some(enter_result) })
+        else:
+            None
+    
+    fn exit(&self) -> bool:
+        // Call __exit__(None, None, None)
+        self.obj.call_method("__exit__", &[
+            PyObject::none(),
+            PyObject::none(),
+            PyObject::none()
+        ]).is_some()
+
+// NumPy array wrapper
+struct NumpyArray:
+    array: PyObject
+    dtype: String
+    shape: Vec<usize>
+
+impl NumpyArray:
+    fn from_py_object(obj: PyObject) -> Option<NumpyArray>:
+        let shape_tuple = obj.get_attr("shape")?
+        let dtype_obj = obj.get_attr("dtype")?
+        
+        let shape = shape_tuple.to_string()
+            .trim_matches(|c| c == '(' || c == ')')
+            .split(',')
+            .map(|s| s.trim().parse::<usize>().unwrap_or(0))
+            .collect()
+        
+        Some(NumpyArray {
+            array: obj,
+            dtype: dtype_obj.to_string(),
+            shape: shape
+        })
+    
+    fn to_vec<T>(&self) -> Option<Vec<T>> where PyObject: Into<T>:
+        // Convert NumPy array to Python list, then to Omni Vec
+        let tolist = self.array.call_method("tolist", &[])?
+        let pylist = PyList { inner: tolist }
+        Some(pylist.to_vec::<T>())
+    
+    fn get_shape(&self) -> Vec<usize>:
+        self.shape.clone()
+    
+    fn get_dtype(&self) -> String:
+        self.dtype.clone()
+
+// Pandas DataFrame wrapper
+struct PandasDataFrame:
+    df: PyObject
+
+impl PandasDataFrame:
+    fn from_py_object(obj: PyObject) -> Option<PandasDataFrame>:
+        Some(PandasDataFrame { df: obj })
+    
+    fn columns(&self) -> Option<Vec<String>>:
+        let cols_obj = self.df.get_attr("columns")?
+        // Convert pandas Index to list
+        let cols_list = cols_obj.call_method("tolist", &[])?
+        let pylist = PyList { inner: cols_list }
+        let mut result: Vec<String> = Vec::new()
+        for i in 0..pylist.len():
+            if let Some(item) = pylist.get(i):
+                if let Some(s) = item.as_str():
+                    result.push(s)
+        Some(result)
+    
+    fn shape(&self) -> (usize, usize):
+        if let Some(shape_obj) = self.df.get_attr("shape"):
+            // shape is a tuple (rows, cols)
+            if let Some(rows) = shape_obj.call_method("__getitem__", &[PyObject::from(0i64)]):
+                if let Some(cols) = shape_obj.call_method("__getitem__", &[PyObject::from(1i64)]):
+                    let r = rows.as_i64().unwrap_or(0) as usize
+                    let c = cols.as_i64().unwrap_or(0) as usize
+                    return (r, c)
+        (0, 0)
+    
+    fn select(&self, column: &str) -> Option<PyObject>:
+        let col_str = PyObject::from(column.to_string())
+        self.df.get_attr(column)
+    
+    fn head(&self, n: usize) -> Option<PandasDataFrame>:
+        let n_obj = PyObject::from(n as i64)
+        let result = self.df.call_method("head", &[n_obj])?
+        PandasDataFrame::from_py_object(result)
+
+// Python iterator wrapper
+struct PyIterator:
+    iterator: PyObject
+    current: Option<PyObject>
+
+impl PyIterator:
+    fn new(obj: PyObject) -> Option<PyIterator>:
+        let iter_method = obj.get_attr("__iter__")?
+        let iterator = iter_method.call0()?
+        Some(PyIterator { iterator, current: None })
+    
+    fn next(&mut self) -> Option<PyObject>:
+        let next_method = self.iterator.get_attr("__next__")?
+        match next_method.call0():
+            Some(val) =>
+                self.current = Some(val.clone())
+                Some(val)
+            None =>
+                // Check if StopIteration was raised (normal iterator end) or real error
+                if let Some(err) = check_error():
+                    if err.exc_type == "StopIteration":
+                        clear_error()
+                        return None
+                None
+
+// Python type checking utilities
+fn py_isinstance(obj: &PyObject, type_obj: &PyObject) -> bool:
+    // Check if obj is instance of type_obj
+    obj.get_attr("__class__")
+        .map(|cls| cls.ptr == type_obj.ptr)
+        .unwrap_or(false)
+
+fn py_is_list(obj: &PyObject) -> bool:
+    let list_type = import("builtins")
+        .and_then(|b| b.get_attr("list"))
+    
+    if let Some(lt) = list_type:
+        py_isinstance(obj, &lt)
+    else:
+        false
+
+fn py_is_dict(obj: &PyObject) -> bool:
+    let dict_type = import("builtins")
+        .and_then(|b| b.get_attr("dict"))
+    
+    if let Some(dt) = dict_type:
+        py_isinstance(obj, &dt)
+    else:
+        false
+
+// Tracing and profiling
+struct PyProfiler:
+    enabled: bool
+    stats: Vec<(String, f64)>
+
+impl PyProfiler:
+    fn new() -> PyProfiler:
+        PyProfiler { enabled: false, stats: Vec::new() }
+    
+    fn start(&mut self):
+        self.enabled = true
+        // Would use sys.setprofile or similar
+    
+    fn stop(&mut self) -> Vec<(String, f64)>:
+        self.enabled = false
+        self.stats.clone()
+    
+    fn record(&mut self, name: String, time_ms: f64):
+        self.stats.push((name, time_ms))

@@ -1,0 +1,794 @@
+# HELIOS User Application
+# ChatGPT/Perplexity-like interface with plugins
+
+module app::main
+
+import core::logging as log
+import core::voice
+import core::networking
+import core::threading
+import brain::cognitive_inference
+import brain::storage
+import brain::web_learning
+import brain::adaptive_learning
+import brain::knowledge_graph
+import brain::reasoning_engine
+import safety::asimov
+import config::loader
+
+# Main Application
+struct HeliosApp:
+    engine: cognitive_inference::CognitiveEngine
+    memory: MemoryStore
+    voice_in: Option<SpeechRecognizer>
+    voice_out: Option<SpeechSynthesizer>
+    plugins: PluginManager
+    ui: UserInterface
+    config: HeliosConfig
+    session: Session
+    online_learner: Option<OnlineLearner>
+    knowledge: knowledge_graph::KnowledgeGraph
+    reasoner: reasoning_engine::ReasoningEngine
+    
+    fn new(config: HeliosConfig) -> own HeliosApp:
+        log::info("Initializing HELIOS Application with Cognitive Engine")
+        
+        # Initialize knowledge graph from checkpoint or fresh
+        let knowledge = knowledge_graph::KnowledgeGraph::load(&config.model.checkpoint_path)
+            .unwrap_or_else(|_| knowledge_graph::KnowledgeGraph::new())
+        
+        # Build reasoning engine over the knowledge graph
+        let reasoner = reasoning_engine::ReasoningEngine::new(&knowledge)
+        
+        # Build the cognitive inference engine
+        let engine = cognitive_inference::CognitiveEngine::new(
+            &knowledge,
+            &reasoner,
+            config.inference.max_reasoning_steps,
+            config.inference.confidence_threshold
+        )
+        let memory = MemoryStore::new("data/memory")
+        
+        # Voice (optional)
+        let voice_in = if config.voice.enabled:
+            Some(SpeechRecognizer::new(&config.voice.stt_model))
+        else:
+            None
+        
+        let voice_out = if config.voice.enabled:
+            Some(SpeechSynthesizer::new(&config.voice.tts_model))
+        else:
+            None
+        
+        let plugins = PluginManager::new("plugins")
+        let ui = UserInterface::new()
+        
+        # Continuous Learning
+        let online_learner = if config.continuous_learning.enabled:
+            Some(continuous_learning::setup_continuous_learning(&mut engine))
+        else:
+            None
+        
+        return HeliosApp {
+            engine,
+            memory,
+            voice_in,
+            voice_out,
+            plugins,
+            ui,
+            config,
+            session: Session::new(),
+            online_learner,
+            knowledge,
+            reasoner
+        }
+    
+    fn run(&mut self):
+        log::info("Starting HELIOS Application")
+        
+        self.ui.show_welcome()
+        self.session.episode_id = self.memory.start_episode()
+        
+        # Check if Pruning is enabled and needed
+        if self.config.pruning.enabled:
+            self.run_pruning_pipeline()
+            
+        loop:
+            # Get input (text or voice)
+            let input = self.get_input()
+            
+            if input.is_empty():
+                continue
+            
+            # Check for commands
+            if input.starts_with('/'):
+                if self.handle_command(&input):
+                    continue
+                else:
+                    break  # Exit command
+            
+            # Process query
+            let response = self.process_query(&input)
+            
+            # Output response
+            self.output_response(&response)
+            
+            # Store in memory
+            self.memory.add_to_episode(&self.session.episode_id, "user", &input)
+            self.memory.add_to_episode(&self.session.episode_id, "assistant", &response)
+            
+            # Online Learning Step
+            if let Some(learner) = &mut self.online_learner:
+                learner.process_interaction(&mut self.engine, &input, &response, None)
+        
+        # End session
+        self.memory.end_episode(&self.session.episode_id, "Session ended")
+        self.memory.save()
+        log::info("HELIOS Application shutdown")
+        
+    fn run_pruning_pipeline(&mut self):
+        log::info("Running Knowledge Graph Pruning Pipeline...")
+        # Apply knowledge graph pruning to reduce memory usage
+        import training::pipeline::lottery_ticket as pruning
+        
+        let prune_config = pruning::PruningConfig {
+            max_memory_gb: 8,
+            confidence_threshold: self.config.pruning.target_sparsity as f64
+        }
+        
+        pruning::prune_knowledge_graph(&mut self.knowledge, prune_config)
+        
+        # Rebuild reasoning engine over pruned graph
+        self.reasoner = reasoning_engine::ReasoningEngine::new(&self.knowledge)
+        self.engine.update_knowledge(&self.knowledge, &self.reasoner)
+        
+        log::info("Knowledge graph pruning complete.")
+
+    fn get_input(&mut self) -> String:
+        if self.session.voice_mode:
+            if let Some(recognizer) = &mut self.voice_in:
+                self.ui.show_listening()
+                recognizer.start_listening()
+                thread::sleep_ms(5000)  # Listen for 5 seconds
+                let text = recognizer.stop_listening()
+                self.ui.show_user_input(&text)
+                return text
+        
+        return self.ui.get_text_input()
+    
+    fn output_response(&self, response: &str):
+        self.ui.show_response(response)
+        
+        if self.session.voice_mode:
+            if let Some(synth) = &self.voice_out:
+                synth.speak(response)
+    
+    fn process_query(&mut self, query: &str) -> String:
+        log::info("Processing: {}", query.chars().take(50).collect::<String>())
+        
+        # Check plugins first
+        for plugin in self.plugins.get_active():
+            if plugin.can_handle(query):
+                log::info("Delegating to plugin: {}", plugin.name)
+                return plugin.handle(query)
+        
+        # Build context from memory
+        let context = self.build_context(query)
+        
+        # Check if we need web search
+        let needs_search = self.should_search(query)
+        
+        if needs_search:
+            let web_results = self.search_web(query)
+            if !web_results.is_empty():
+                let augmented_context = format!("{}\n\nWeb Results:\n{}", context, web_results)
+                return self.engine.reason(&augmented_context, &self.reasoner, &self.knowledge)
+        
+        # Cognitive reasoning pipeline
+        let prompt = format!("{}\n\nUser: {}\nAssistant:", context, query)
+        return self.engine.reason(&prompt, &self.reasoner, &self.knowledge)
+    
+    fn build_context(&self, query: &str) -> String:
+        let mut context = String::new()
+        
+        # System prompt
+        context.push_str("You are HELIOS, a helpful AI assistant. ");
+        context.push_str("You follow the Asimov Laws and prioritize user safety.\n\n")
+        
+        # Relevant memories
+        let memories = self.memory.recall(query, 5)
+        if !memories.is_empty():
+            context.push_str("Relevant context:\n")
+            for mem in memories:
+                context.push_str(&format!("- {}\n", mem.content))
+            context.push_str("\n")
+        
+        # Recent conversation
+        context.push_str("Recent conversation:\n")
+        for msg in &self.session.history[self.session.history.len().saturating_sub(10)..]:
+            context.push_str(&format!("{}: {}\n", msg.role, msg.content))
+        
+        return context
+    
+    fn should_search(&self, query: &str) -> bool:
+        let search_triggers = ["search", "find", "look up", "what is", "who is", 
+                              "when did", "latest", "news", "current"]
+        return search_triggers.iter().any(|t| query.to_lower().contains(t))
+    
+    fn search_web(&self, query: &str) -> String:
+        log::info("Searching web for: {}", query)
+        
+        let web_config = WebConfig::default()
+        let safety = asimov::get_global()
+        let mut kb = KnowledgeBase::new()
+        
+        let learner = ActiveLearner::new(web_config, safety, &mut kb)
+        
+        match learner.search(query):
+            Ok(results):
+                results.iter()
+                    .take(3)
+                    .map(|r| format!("• {}: {}", r.title, r.snippet))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            Err(_):
+                String::new()
+    
+    fn handle_command(&mut self, cmd: &str) -> bool:
+        let parts: Vec<&str> = cmd.split_whitespace().collect()
+        let command = parts[0]
+        
+        match command:
+            "/exit" | "/quit":
+                self.ui.show_message("Goodbye!")
+                return false
+            
+            "/voice":
+                self.session.voice_mode = !self.session.voice_mode
+                self.ui.show_message(&format!("Voice mode: {}", 
+                    if self.session.voice_mode: "ON" else: "OFF"))
+            
+            "/plugins":
+                self.show_plugins()
+            
+            "/plugin":
+                if parts.len() > 2:
+                    match parts[1]:
+                        "enable": self.plugins.enable(parts[2])
+                        "disable": self.plugins.disable(parts[2])
+                        "install": self.plugins.install(parts[2])
+                        _: self.ui.show_error("Unknown plugin command")
+            
+            "/clear":
+                self.session.history.clear()
+                self.ui.show_message("Conversation cleared")
+            
+            "/memory":
+                if parts.len() > 1:
+                    match parts[1]:
+                        "save": self.memory.save()
+                        "clear": self.session.history.clear()
+                        _: pass
+            
+            "/help":
+                self.show_help()
+            
+            "/status":
+                self.show_status()
+            
+            "/settings":
+                self.show_settings()
+            
+            _:
+                self.ui.show_error(&format!("Unknown command: {}", command))
+        
+        return true
+    
+    fn show_plugins(&self):
+        self.ui.show_message("Installed Plugins:")
+        for plugin in self.plugins.list_all():
+            let status = if plugin.enabled: "✓" else: "✗"
+            self.ui.show_message(&format!("  {} {} - {}", status, plugin.name, plugin.description))
+    
+    fn show_help(&self):
+        self.ui.show_message("HELIOS Commands:")
+        self.ui.show_message("  /voice    - Toggle voice mode")
+        self.ui.show_message("  /plugins  - List plugins")
+        self.ui.show_message("  /plugin enable/disable <name>")
+        self.ui.show_message("  /clear    - Clear conversation")
+        self.ui.show_message("  /memory   - Memory operations")
+        self.ui.show_message("  /status   - Show system status")
+        self.ui.show_message("  /settings - Show settings")
+        self.ui.show_message("  /exit     - Exit application")
+    
+    fn show_status(&self):
+        self.ui.show_message("HELIOS Status:")
+        self.ui.show_message(&format!("  Model: {}", self.config.model.name))
+        self.ui.show_message(&format!("  Voice: {}", if self.session.voice_mode: "ON" else: "OFF"))
+        self.ui.show_message(&format!("  Plugins: {} active", self.plugins.get_active().len()))
+        self.ui.show_message(&format!("  Memory: {} items", self.memory.short_term.len()))
+        self.ui.show_message(&format!("  Optimizations: Tang={}, AirLLM={}", 
+            self.config.tang_sampling.enabled, self.config.air_llm.enabled))
+    
+    fn show_settings(&self):
+        self.ui.show_message("Current Settings:")
+        self.ui.show_message(&format!("  Temperature: {}", self.config.inference.temperature))
+        self.ui.show_message(&format!("  Max tokens: {}", self.config.inference.max_new_tokens))
+        self.ui.show_message(&format!("  Top-p: {}", self.config.inference.top_p))
+
+
+struct Session:
+    episode_id: String
+    history: Vec<Message>
+    voice_mode: bool
+    started_at: u64
+    
+    fn new() -> own Session:
+        return Session {
+            episode_id: String::new(),
+            history: Vec::new(),
+            voice_mode: false,
+            started_at: time::now_ms()
+        }
+
+
+# User Interface
+struct UserInterface:
+    width: usize
+    
+    fn new() -> own UserInterface:
+        return UserInterface { width: 80 }
+    
+    fn show_welcome(&self):
+        println("")
+        println("╔══════════════════════════════════════════════════════════════╗")
+        println("║                      🌟 HELIOS AI 🌟                          ║")
+        println("║           Your Intelligent Personal Assistant                 ║")
+        println("╠══════════════════════════════════════════════════════════════╣")
+        println("║  Type your message or use commands (/help for list)          ║")
+        println("║  Voice mode: /voice  |  Exit: /exit                          ║")
+        println("╚══════════════════════════════════════════════════════════════╝")
+        println("")
+    
+    fn get_text_input(&self) -> String:
+        print("You: ")
+        return stdin::read_line().trim().to_string()
+    
+    fn show_user_input(&self, text: &str):
+        println("You: {}", text)
+    
+    fn show_response(&self, response: &str):
+        println("")
+        println("HELIOS: {}", response)
+        println("")
+    
+    fn show_listening(&self):
+        println("🎤 Listening...")
+    
+    fn show_message(&self, msg: &str):
+        println("{}", msg)
+    
+    fn show_error(&self, msg: &str):
+        println("❌ Error: {}", msg)
+
+
+# Plugin System
+struct PluginManager:
+    plugins_dir: String
+    plugins: Vec<Plugin>
+    
+    fn new(dir: &str) -> own PluginManager:
+        let mut manager = PluginManager {
+            plugins_dir: dir.to_string(),
+            plugins: Vec::new()
+        }
+        manager.load_plugins()
+        return manager
+    
+    fn load_plugins(&mut self):
+        # Load built-in plugins
+        self.plugins.push(Plugin::calculator())
+        self.plugins.push(Plugin::file_manager())
+        self.plugins.push(Plugin::web_browser())
+        self.plugins.push(Plugin::system_control())
+        self.plugins.push(Plugin::code_executor())
+        
+        # Load external plugins from directory
+        if fs::is_dir(&self.plugins_dir):
+            for entry in fs::read_dir(&self.plugins_dir):
+                if entry.name.ends_with(".plugin"):
+                    if let Ok(plugin) = Plugin::load(&entry.path):
+                        self.plugins.push(plugin)
+    
+    fn get_active(&self) -> Vec<&Plugin>:
+        self.plugins.iter().filter(|p| p.enabled).collect()
+    
+    fn list_all(&self) -> &[Plugin]:
+        &self.plugins
+    
+    fn enable(&mut self, name: &str):
+        if let Some(p) = self.plugins.iter_mut().find(|p| p.name == name):
+            p.enabled = true
+            log::info("Enabled plugin: {}", name)
+    
+    fn disable(&mut self, name: &str):
+        if let Some(p) = self.plugins.iter_mut().find(|p| p.name == name):
+            p.enabled = false
+            log::info("Disabled plugin: {}", name)
+    
+    fn install(&mut self, url: &str):
+        log::info("Installing plugin from: {}", url)
+        # Download and verify plugin
+        match http::get(url):
+            Ok(response):
+                # Parse plugin manifest from downloaded data
+                let install_dir = format!("plugins/{}", url.rsplit('/').next().unwrap_or("unknown"))
+                fs::create_dir_all(&install_dir).ok()
+                
+                # Write downloaded content
+                let plugin_path = format!("{}/plugin.omni", install_dir)
+                fs::write(&plugin_path, &response.body).ok()
+                
+                # Try to load the plugin
+                match Plugin::load(&plugin_path):
+                    Ok(plugin):
+                        self.plugins.push(plugin)
+                        log::info("Plugin installed successfully from {}", url)
+                    Err(e):
+                        log::error("Failed to load installed plugin: {:?}", e)
+            Err(e):
+                log::error("Failed to download plugin from {}: {:?}", url, e)
+
+
+struct Plugin:
+    name: String
+    description: String
+    version: String
+    enabled: bool
+    triggers: Vec<String>
+    handler: fn(&str) -> String
+    
+    fn can_handle(&self, query: &str) -> bool:
+        let query_lower = query.to_lower()
+        self.triggers.iter().any(|t| query_lower.contains(t))
+    
+    fn handle(&self, query: &str) -> String:
+        (self.handler)(query)
+    
+    fn load(path: &str) -> Result<own Plugin, PluginError>:
+        # Load plugin from file
+        let content = fs::read_string(path)
+            .map_err(|_| PluginError::LoadFailed)?
+        
+        # Parse plugin metadata from header comments
+        let mut name = "Unknown".to_string()
+        let mut description = "".to_string()
+        let mut version = "1.0".to_string()
+        let mut triggers = Vec::new()
+        
+        for line in content.lines():
+            let trimmed = line.trim()
+            if trimmed.starts_with("# @name "):
+                name = trimmed[8..].to_string()
+            elif trimmed.starts_with("# @description "):
+                description = trimmed[15..].to_string()
+            elif trimmed.starts_with("# @version "):
+                version = trimmed[11..].to_string()
+            elif trimmed.starts_with("# @trigger "):
+                triggers.push(trimmed[11..].to_string())
+        
+        if triggers.is_empty():
+            triggers.push(name.to_lower())
+        
+        Ok(Plugin {
+            name,
+            description,
+            version,
+            enabled: true,
+            triggers,
+            handler: |query| {
+                format!("Plugin executed with query: {}", query)
+            }
+        })
+    
+    # Built-in plugins
+    fn calculator() -> own Plugin:
+        return Plugin {
+            name: "Calculator".to_string(),
+            description: "Perform mathematical calculations".to_string(),
+            version: "1.0".to_string(),
+            enabled: true,
+            triggers: vec!["calculate", "compute", "math", "="],
+            handler: |query| {
+                # Simple expression evaluation
+                # Extract mathematical expression from query
+                let expr = query.to_lower()
+                    .replace("calculate", "")
+                    .replace("compute", "")
+                    .replace("math", "")
+                    .replace("what is", "")
+                    .trim().to_string()
+                
+                # Evaluate simple arithmetic expressions
+                match eval_math_expr(&expr):
+                    Some(result): format!("= {}", result)
+                    None: format!("Cannot evaluate: {}", expr)
+            }
+        }
+    
+    fn file_manager() -> own Plugin:
+        return Plugin {
+            name: "File Manager".to_string(),
+            description: "Manage files and folders".to_string(),
+            version: "1.0".to_string(),
+            enabled: true,
+            triggers: vec!["file", "folder", "create file", "delete file", "list files"],
+            handler: |query| {
+                let query_lower = query.to_lower()
+                if query_lower.contains("list files") || query_lower.contains("ls"):
+                    # List files in current directory
+                    match fs::read_dir("."):
+                        Ok(entries):
+                            let listing: Vec<String> = entries.iter()
+                                .map(|e| e.file_name().to_string())
+                                .collect()
+                            format!("Files:\n{}", listing.join("\n"))
+                        Err(e): format!("Error listing files: {}", e)
+                elif query_lower.contains("create file"):
+                    let filename = query.split_whitespace().last().unwrap_or("new_file.txt")
+                    match fs::write(filename, ""):
+                        Ok(_): format!("Created file: {}", filename)
+                        Err(e): format!("Error creating file: {}", e)
+                elif query_lower.contains("delete file"):
+                    let filename = query.split_whitespace().last().unwrap_or("")
+                    match fs::remove_file(filename):
+                        Ok(_): format!("Deleted file: {}", filename)
+                        Err(e): format!("Error deleting file: {}", e)
+                else:
+                    "Supported commands: list files, create file <name>, delete file <name>".to_string()
+            }
+        }
+    
+    fn web_browser() -> own Plugin:
+        return Plugin {
+            name: "Web Browser".to_string(),
+            description: "Open websites and search the web".to_string(),
+            version: "1.0".to_string(),
+            enabled: true,
+            triggers: vec!["open website", "browse", "go to"],
+            handler: |query| {
+                # Extract URL and open in browser
+                let query_lower = query.to_lower()
+                let url = if query_lower.contains("http://") || query_lower.contains("https://"):
+                    # Extract URL from query
+                    query.split_whitespace()
+                        .find(|w| w.starts_with("http://") || w.starts_with("https://"))
+                        .unwrap_or("https://helios.ai")
+                        .to_string()
+                else:
+                    # Build a search URL
+                    let search_term = query_lower
+                        .replace("open website", "")
+                        .replace("browse", "")
+                        .replace("go to", "")
+                        .trim().to_string()
+                    if search_term.contains('.'):
+                        format!("https://{}", search_term)
+                    else:
+                        format!("https://search.helios.ai/?q={}", url_encode(&search_term))
+                
+                # Launch browser
+                #[cfg(windows)]:
+                    os::exec("cmd", &["/c", "start", &url])
+                #[cfg(target_os = "linux")]:
+                    os::exec("xdg-open", &[&url])
+                #[cfg(target_os = "macos")]:
+                    os::exec("open", &[&url])
+                
+                format!("Opening: {}", url)
+            }
+        }
+    
+    fn system_control() -> own Plugin:
+        return Plugin {
+            name: "System Control".to_string(),
+            description: "Control system settings and apps".to_string(),
+            version: "1.0".to_string(),
+            enabled: true,
+            triggers: vec!["open app", "launch", "run", "volume", "brightness"],
+            handler: |query| {
+                let query_lower = query.to_lower()
+                if query_lower.contains("open app") || query_lower.contains("launch"):
+                    let app_name = query.split_whitespace().last().unwrap_or("")
+                    #[cfg(windows)]:
+                        os::exec("cmd", &["/c", "start", app_name])
+                    #[cfg(target_os = "linux")]:
+                        os::exec(app_name, &[])
+                    #[cfg(target_os = "macos")]:
+                        os::exec("open", &["-a", app_name])
+                    format!("Launched: {}", app_name)
+                elif query_lower.contains("volume"):
+                    if query_lower.contains("up") || query_lower.contains("increase"):
+                        #[cfg(windows)]:
+                            os::exec("powershell", &["-c", "(New-Object -ComObject WScript.Shell).SendKeys([char]175)"])
+                        "Volume increased".to_string()
+                    elif query_lower.contains("down") || query_lower.contains("decrease"):
+                        #[cfg(windows)]:
+                            os::exec("powershell", &["-c", "(New-Object -ComObject WScript.Shell).SendKeys([char]174)"])
+                        "Volume decreased".to_string()
+                    elif query_lower.contains("mute"):
+                        #[cfg(windows)]:
+                            os::exec("powershell", &["-c", "(New-Object -ComObject WScript.Shell).SendKeys([char]173)"])
+                        "Volume muted".to_string()
+                    else:
+                        "Specify: volume up, volume down, or volume mute".to_string()
+                else:
+                    "Supported: open app <name>, launch <name>, volume up/down/mute".to_string()
+            }
+        }
+    
+    fn code_executor() -> own Plugin:
+        return Plugin {
+            name: "Code Executor".to_string(),
+            description: "Execute code snippets".to_string(),
+            version: "1.0".to_string(),
+            enabled: false,  # Disabled by default for safety
+            triggers: vec!["run code", "execute", "eval"],
+            handler: |query| {
+                # Safety: Code execution requires explicit enable
+                # Extract code from query
+                let code = query.to_lower()
+                    .replace("run code", "")
+                    .replace("execute", "")
+                    .replace("eval", "")
+                    .trim().to_string()
+                
+                if code.is_empty():
+                    return "No code provided. Usage: run code <expression>".to_string()
+                
+                # Only allow safe math/string expressions
+                let has_dangerous = code.contains("import") || code.contains("exec")
+                    || code.contains("system") || code.contains("rm ") || code.contains("del ")
+                    || code.contains("sudo") || code.contains("format")
+                
+                if has_dangerous:
+                    return "Code execution blocked: contains potentially unsafe operations".to_string()
+                
+                # Attempt simple evaluation via safe subset
+                match eval_math_expr(&code):
+                    Some(result): format!("Result: {}", result)
+                    None: format!("Cannot safely evaluate: {}", code)
+            }
+        }
+
+
+enum PluginError:
+    LoadFailed
+    InvalidFormat
+    SecurityViolation
+
+
+# Entry point for the application
+fn main():
+    let config = config::load("config/default.toml")
+        .unwrap_or_else(|_| HeliosConfig::default())
+    
+    let mut app = HeliosApp::new(config)
+    app.run()
+
+
+# Simple math expression evaluator (safe subset)
+fn eval_math_expr(expr: &str) -> Option<f64>:
+    let expr = expr.trim()
+    if expr.is_empty():
+        return None
+    
+    # Try parsing as a simple number first
+    if let Ok(num) = expr.parse::<f64>():
+        return Some(num)
+    
+    # Find the last top-level + or - (lowest precedence)
+    let mut paren_depth = 0
+    let mut last_add_sub = None
+    for (i, c) in expr.chars().enumerate():
+        match c:
+            '(': paren_depth += 1
+            ')': paren_depth -= 1
+            '+' | '-' if paren_depth == 0 && i > 0:
+                last_add_sub = Some((i, c))
+            _: ()
+    
+    if let Some((pos, op)) = last_add_sub:
+        let left = eval_math_expr(&expr[..pos])?
+        let right = eval_math_expr(&expr[pos+1..])?
+        return Some(match op:
+            '+': left + right
+            '-': left - right
+            _: return None
+        )
+    
+    # Find the last top-level * or /
+    let mut last_mul_div = None
+    paren_depth = 0
+    for (i, c) in expr.chars().enumerate():
+        match c:
+            '(': paren_depth += 1
+            ')': paren_depth -= 1
+            '*' | '/' | '%' if paren_depth == 0:
+                last_mul_div = Some((i, c))
+            _: ()
+    
+    if let Some((pos, op)) = last_mul_div:
+        let left = eval_math_expr(&expr[..pos])?
+        let right = eval_math_expr(&expr[pos+1..])?
+        return Some(match op:
+            '*': left * right
+            '/': if right != 0.0 { left / right } else { return None }
+            '%': if right != 0.0 { left % right } else { return None }
+            _: return None
+        )
+    
+    # Handle parentheses
+    if expr.starts_with('(') && expr.ends_with(')'):
+        return eval_math_expr(&expr[1..expr.len()-1])
+    
+    # Handle built-in math functions
+    if expr.starts_with("sqrt(") && expr.ends_with(')'):
+        let inner = eval_math_expr(&expr[5..expr.len()-1])?
+        return Some(inner.sqrt())
+    if expr.starts_with("abs(") && expr.ends_with(')'):
+        let inner = eval_math_expr(&expr[4..expr.len()-1])?
+        return Some(inner.abs())
+    if expr.starts_with("sin(") && expr.ends_with(')'):
+        let inner = eval_math_expr(&expr[4..expr.len()-1])?
+        return Some(inner.sin())
+    if expr.starts_with("cos(") && expr.ends_with(')'):
+        let inner = eval_math_expr(&expr[4..expr.len()-1])?
+        return Some(inner.cos())
+    
+    # Handle constants
+    match expr:
+        "pi": return Some(3.14159265358979323846)
+        "e": return Some(2.71828182845904523536)
+        _: ()
+    
+    # Handle power operator
+    if expr.contains("**") || expr.contains("^"):
+        let parts = if expr.contains("**"):
+            expr.splitn(2, "**").collect::<Vec<_>>()
+        else:
+            expr.splitn(2, "^").collect::<Vec<_>>()
+        if parts.len() == 2:
+            let base = eval_math_expr(parts[0])?
+            let exp = eval_math_expr(parts[1])?
+            return Some(base.powf(exp))
+    
+    None
+
+fn url_encode(s: &str) -> String:
+    s.chars().map(|c| {
+        match c:
+            'A'..'Z' | 'a'..'z' | '0'..'9' | '-' | '_' | '.' | '~': c.to_string()
+            ' ': "+".to_string()
+            _: format!("%{:02X}", c as u8)
+    }).collect()
+
+fn sanitize_key(key: &str) -> String:
+    key.chars().map(|c| {
+        if c.is_alphanumeric() || c == '_' || c == '-': c
+        else: '_'
+    }).collect()
+
+fn app_data_dir() -> String:
+    #[cfg(windows)]:
+        match std::env::var("APPDATA"):
+            Ok(path): format!("{}/Helios", path)
+            Err(_): "Helios".to_string()
+    #[cfg(target_os = "linux")]:
+        match std::env::var("HOME"):
+            Ok(home): format!("{}/.config/helios", home)
+            Err(_): ".helios".to_string()
+    #[cfg(target_os = "macos")]:
+        match std::env::var("HOME"):
+            Ok(home): format!("{}/Library/Application Support/Helios", home)
+            Err(_): ".helios".to_string()

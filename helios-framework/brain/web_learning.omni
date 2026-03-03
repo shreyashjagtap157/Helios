@@ -1,0 +1,455 @@
+# HELIOS Web Learning Module
+# Active and passive learning from the web
+
+module brain::web_learning
+
+import core::logging as log
+import system::http
+import system::fs
+import brain::cognitive_cortex
+import brain::knowledge_graph as kg
+import safety::asimov
+
+# Configuration for web learning
+struct WebConfig:
+    search_engines: Vec<SearchEngine>
+    max_results_per_query: usize
+    max_crawl_depth: usize
+    rate_limit_ms: usize
+    allowed_domains: Vec<&str>
+    blocked_domains: Vec<&str>
+    cache_dir: &str
+    
+    fn default() -> own WebConfig:
+        return WebConfig {
+            search_engines: vec![
+                SearchEngine::DuckDuckGo,
+                SearchEngine::Wikipedia,
+                SearchEngine::ArXiv
+            ],
+            max_results_per_query: 10,
+            max_crawl_depth: 2,
+            rate_limit_ms: 1000,
+            allowed_domains: vec!["*"],
+            blocked_domains: vec![
+                "*.exe", "*.zip", "malware.*"
+            ],
+            cache_dir: "cache/web"
+        }
+
+
+enum SearchEngine:
+    DuckDuckGo
+    Wikipedia
+    ArXiv
+    StackOverflow
+    GitHub
+    Custom(url: &str)
+
+
+struct SearchResult:
+    title: String
+    url: String
+    snippet: String
+    source: SearchEngine
+    relevance_score: f32
+
+
+# Active Learning: User asks a question we don't know
+struct ActiveLearner:
+    config: WebConfig
+    safety: &AsimovProtocol
+    knowledge_base: &mut KnowledgeBase
+    
+    fn new(config: WebConfig, safety: &AsimovProtocol, kb: &mut KnowledgeBase) -> own ActiveLearner:
+        log::info("Active learner initialized")
+        return ActiveLearner { config, safety, knowledge_base: kb }
+    
+    fn search(&self, query: &str) -> Result<Vec<SearchResult>, SearchError>:
+        log::info("Active search: {}", query)
+        
+        # Safety check
+        let action = Action::new(ActionType::NetworkRequest(query, "GET"))
+        match self.safety.check(&action):
+            SafetyResult::Blocked(law):
+                log::warn("Search blocked by safety: {}", law)
+                return Err(SearchError::SafetyBlocked)
+            _: pass
+        
+        let mut results = Vec::new()
+        
+        for engine in &self.config.search_engines:
+            let engine_results = self.search_engine(engine, query)?
+            results.extend(engine_results)
+        
+        # Rank by relevance
+        results.sort_by(|a, b| b.relevance_score.cmp(&a.relevance_score))
+        results.truncate(self.config.max_results_per_query)
+        
+        log::info("Found {} results", results.len())
+        return Ok(results)
+    
+    fn search_engine(&self, engine: &SearchEngine, query: &str) -> Result<Vec<SearchResult>, SearchError>:
+        let url = match engine:
+            SearchEngine::DuckDuckGo:
+                format("https://api.duckduckgo.com/?q={}&format=json", url_encode(query))
+            SearchEngine::Wikipedia:
+                format("https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={}&format=json", url_encode(query))
+            SearchEngine::ArXiv:
+                format("http://export.arxiv.org/api/query?search_query={}&max_results=10", url_encode(query))
+            SearchEngine::Custom(base):
+                format("{}?q={}", base, url_encode(query))
+            _:
+                return Ok(vec![])
+        
+        log::debug("Fetching: {}", url)
+        let response = http::get(&url)?
+        return self.parse_results(engine, &response.body)
+    
+    fn learn_from_results(&mut self, query: &str, results: &[SearchResult]) -> Result<String, LearningError>:
+        log::info("Learning from {} results for: {}", results.len(), query)
+        
+        let mut knowledge_chunks = Vec::new()
+        
+        for result in results:
+            # Fetch full content
+            let content = self.fetch_content(&result.url)?
+            
+            # Extract and clean text
+            let text = self.extract_text(&content)
+            
+            # Add to knowledge base
+            let chunk = KnowledgeChunk {
+                source: result.url.clone(),
+                query: query.to_string(),
+                content: text.clone(),
+                timestamp: time::now_ms(),
+                verified: false
+            }
+            
+            knowledge_chunks.push(chunk)
+        
+        # Store in knowledge base
+        self.knowledge_base.add_chunks(&knowledge_chunks)
+        
+        # Synthesize answer
+        let answer = self.synthesize_answer(query, &knowledge_chunks)
+        
+        log::info("Learned and synthesized answer")
+        return Ok(answer)
+    
+    fn synthesize_answer(&self, query: &str, chunks: &[KnowledgeChunk]) -> String:
+        # Combine relevant information into coherent answer
+        let context = chunks.iter()
+            .map(|c| c.content.clone())
+            .take(5)
+            .collect::<Vec<_>>()
+            .join("\n\n")
+        
+        # Use the brain to generate answer
+        return cortex::generate_with_context(query, &context)
+    
+    fn fetch_content(&self, url: &str) -> Result<String, FetchError>:
+        # Check domain against blocked list
+        for blocked in &self.config.blocked_domains:
+            if url.matches_glob(blocked):
+                return Err(FetchError::BlockedDomain)
+        
+        # Rate limiting
+        time::sleep_ms(self.config.rate_limit_ms)
+        
+        let response = http::get(url)?
+        return Ok(response.body)
+    
+    fn extract_text(&self, html: &str) -> String:
+        # Simple HTML to text extraction
+        html.strip_tags()
+            .collapse_whitespace()
+            .truncate(10000)
+
+
+# Passive Learning: Dream State - learns while idle
+struct DreamState:
+    config: WebConfig
+    safety: &AsimovProtocol
+    knowledge_base: &mut KnowledgeBase
+    consolidation_queue: Vec<LearningItem>
+    is_active: bool
+    
+    fn new(config: WebConfig, safety: &AsimovProtocol, kb: &mut KnowledgeBase) -> own DreamState:
+        log::info("Dream state module initialized")
+        return DreamState {
+            config,
+            safety,
+            knowledge_base: kb,
+            consolidation_queue: Vec::new(),
+            is_active: false
+        }
+    
+    fn start(&mut self):
+        log::info("Entering dream state - passive learning active")
+        self.is_active = true
+        self.run_loop()
+    
+    fn stop(&mut self):
+        log::info("Exiting dream state")
+        self.is_active = false
+    
+    fn run_loop(&mut self):
+        while self.is_active:
+            # Check system idle
+            if !system::is_idle():
+                time::sleep_ms(60000)  # Wait 1 minute
+                continue
+            
+            log::debug("System idle, starting passive learning cycle")
+            
+            # Get topics to explore
+            let topics = self.get_exploration_topics()
+            
+            for topic in topics:
+                if !self.is_active:
+                    break
+                
+                self.explore_topic(&topic)
+            
+            # Consolidate accumulated knowledge into the knowledge base
+            self.consolidate_knowledge()
+            
+            # Sleep before next cycle
+            time::sleep_ms(300000)  # 5 minutes
+    
+    fn get_exploration_topics(&self) -> Vec<String>:
+        # Topics from:
+        # 1. Recent user queries that had low confidence
+        # 2. Knowledge gaps identified during conversations
+        # 3. Trending topics in relevant domains
+        
+        let mut topics = Vec::new()
+        
+        # From knowledge gaps
+        topics.extend(self.knowledge_base.get_knowledge_gaps())
+        
+        # From low-confidence queries
+        topics.extend(self.knowledge_base.get_uncertain_topics())
+        
+        return topics
+    
+    fn explore_topic(&mut self, topic: &str):
+        log::info("Dream exploring: {}", topic)
+        
+        let learner = ActiveLearner::new(
+            self.config.clone(),
+            self.safety,
+            self.knowledge_base
+        )
+        
+        match learner.search(topic):
+            Ok(results):
+                for result in results:
+                    let content = learner.fetch_content(&result.url)
+                    if let Ok(text) = content:
+                        self.consolidation_queue.push(LearningItem {
+                            topic: topic.to_string(),
+                            content: text,
+                            source: result.url.clone()
+                        })
+            Err(e):
+                log::warn("Dream exploration failed: {}", e)
+    
+    fn consolidate_knowledge(&mut self):
+        if self.consolidation_queue.is_empty():
+            return
+        
+        log::info("Consolidating {} learned items into knowledge base", self.consolidation_queue.len())
+        
+        for item in &self.consolidation_queue:
+            # Extract key concepts from content
+            let concepts = self.extract_concepts(&item.content)
+            
+            for concept in concepts:
+                # Add or reinforce knowledge nodes
+                let node_id = self.knowledge_base.find_or_create_node(
+                    &concept.name,
+                    NodeType::Concept
+                )
+                
+                # Add source provenance
+                self.knowledge_base.set_node_property(
+                    node_id, "source", Value::String(item.source.clone())
+                )
+                
+                # Create relationships between topic and extracted concepts
+                if let Some(topic_node) = self.knowledge_base.find_node(&item.topic):
+                    self.knowledge_base.add_edge(
+                        topic_node.id,
+                        node_id,
+                        EdgeType::RelatedTo,
+                        concept.confidence
+                    )
+                
+                # Reinforce existing connections
+                self.knowledge_base.reinforce_node(node_id, concept.confidence)
+        
+        # Clear queue
+        self.consolidation_queue.clear()
+        
+        log::info("Knowledge consolidation complete")
+    
+    fn extract_concepts(&self, text: &str) -> Vec<ExtractedConcept>:
+        # Extract key concepts from text using pattern matching
+        let mut concepts = Vec::new()
+        
+        # Split into sentences and identify noun phrases
+        let sentences = text.split_sentences()
+        for sentence in sentences:
+            let entities = sentence.extract_entities()
+            for entity in entities:
+                concepts.push(ExtractedConcept {
+                    name: entity.text.clone(),
+                    confidence: entity.score
+                })
+        
+        return concepts
+
+
+struct LearningItem:
+    topic: String
+    content: String
+    source: String
+
+struct ExtractedConcept:
+    name: String
+    confidence: f64
+
+
+struct KnowledgeChunk:
+    source: String
+    query: String
+    content: String
+    timestamp: u64
+    verified: bool
+
+
+# Knowledge Base for storing learned information
+struct KnowledgeBase:
+    chunks: Vec<KnowledgeChunk>
+    index: HashMap<String, Vec<usize>>  # keyword -> chunk indices
+    
+    fn new() -> own KnowledgeBase:
+        return KnowledgeBase {
+            chunks: Vec::new(),
+            index: HashMap::new()
+        }
+    
+    fn add_chunks(&mut self, new_chunks: &[KnowledgeChunk]):
+        for chunk in new_chunks:
+            let idx = self.chunks.len()
+            
+            # Index by keywords
+            for word in chunk.content.split_whitespace():
+                let word_lower = word.to_lower()
+                self.index.entry(word_lower)
+                    .or_insert(Vec::new())
+                    .push(idx)
+            
+            self.chunks.push(chunk.clone())
+    
+    fn search(&self, query: &str) -> Vec<&KnowledgeChunk>:
+        let words: Vec<_> = query.split_whitespace()
+            .map(|w| w.to_lower())
+            .collect()
+        
+        let mut scores: HashMap<usize, usize> = HashMap::new()
+        
+        for word in words:
+            if let Some(indices) = self.index.get(&word):
+                for idx in indices:
+                    *scores.entry(*idx).or_insert(0) += 1
+        
+        let mut results: Vec<_> = scores.iter()
+            .sorted_by(|a, b| b.1.cmp(a.1))
+            .take(10)
+            .map(|(idx, _)| &self.chunks[*idx])
+            .collect()
+        
+        return results
+    
+    fn get_knowledge_gaps(&self) -> Vec<String>:
+        # Find topics where knowledge coverage is sparse
+        # Strategy: identify keywords with very few indexed chunks
+        let mut topic_coverage: HashMap<String, usize> = HashMap::new()
+        
+        # Count how many chunks cover each topic keyword
+        for (keyword, indices) in &self.index:
+            topic_coverage.insert(keyword.clone(), indices.len())
+        
+        # Find topics that appear in queries/context but have < 3 chunks
+        let mut gaps = Vec::new()
+        for (topic, count) in &topic_coverage:
+            if *count < 3 && topic.len() > 3:
+                # This topic has sparse coverage - it's a knowledge gap
+                gaps.push(topic.clone())
+        
+        # Sort by coverage (least covered first)
+        gaps.sort_by(|a, b| {
+            let a_count = topic_coverage.get(a).unwrap_or(&0)
+            let b_count = topic_coverage.get(b).unwrap_or(&0)
+            a_count.cmp(b_count)
+        })
+        
+        # Return top-20 gaps
+        gaps.truncate(20)
+        gaps
+    
+    fn get_uncertain_topics(&self) -> Vec<String>:
+        # Find topics where stored knowledge is contradictory or low-confidence
+        # Strategy: detect topics where chunks have conflicting information
+        let mut topic_chunks: HashMap<String, Vec<usize>> = HashMap::new()
+        
+        # Group chunks by their primary topic (first indexed keyword with >3 chars)
+        for (keyword, indices) in &self.index:
+            if keyword.len() > 3 && indices.len() >= 2:
+                topic_chunks.insert(keyword.clone(), indices.clone())
+        
+        let mut uncertain = Vec::new()
+        
+        for (topic, chunk_indices) in &topic_chunks:
+            if chunk_indices.len() < 2:
+                continue
+            
+            # Check for contradictions: chunks about the same topic 
+            # with very different content (low similarity)
+            let mut has_contradiction = false
+            for i in 0..chunk_indices.len().min(5):
+                for j in (i+1)..chunk_indices.len().min(5):
+                    let chunk_a = &self.chunks[chunk_indices[i]]
+                    let chunk_b = &self.chunks[chunk_indices[j]]
+                    
+                    # Simple contradiction detection: same topic, different sources,
+                    # low word overlap in content
+                    let words_a: Vec<_> = chunk_a.content.split_whitespace().collect()
+                    let words_b: Vec<_> = chunk_b.content.split_whitespace().collect()
+                    
+                    let shared = words_a.iter()
+                        .filter(|w| words_b.contains(w))
+                        .count()
+                    let total = words_a.len().max(words_b.len())
+                    
+                    if total > 0:
+                        let overlap = shared as f64 / total as f64
+                        if overlap < 0.15:  # Very low overlap = possible contradiction
+                            has_contradiction = true
+            
+            if has_contradiction:
+                uncertain.push(topic.clone())
+        
+        uncertain
+    
+    fn save(&self, path: &str) -> Result<(), Error>:
+        let data = json::serialize(self)
+        fs::write(path, &data)
+    
+    fn load(path: &str) -> Result<own KnowledgeBase, Error>:
+        let data = fs::read_string(path)?
+        return json::deserialize(&data)

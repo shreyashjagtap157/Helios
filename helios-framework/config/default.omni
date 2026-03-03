@@ -1,0 +1,73 @@
+// HELIOS Framework - Default Configuration
+// Configuration structs and loaders for the HELIOS system
+
+module config::default
+
+import core::logging as log
+
+// ============================================================================
+// Configuration
+// ============================================================================
+
+/// Top-level HELIOS configuration
+struct HeliosConfig:
+    name: String
+    version: String
+    max_reasoning_depth: u32
+    confidence_threshold: f64
+    safety_level: SafetyLevel
+    memory_limit_mb: u64
+    data_path: String
+    log_level: String
+    api_port: u16
+    session_timeout_ms: u64
+
+/// Safety strictness level
+enum SafetyLevel:
+    Strict
+    Standard
+    Permissive
+
+/// Load configuration from a TOML file, falling back to defaults
+fn load_config(path: String) -> HeliosConfig:
+    log::info("Loading config from: {}", path)
+
+    if !fs::exists(&path):
+        log::warn("Config file not found at {}, using defaults", path)
+        return default_config()
+
+    let data = fs::read_string(&path).unwrap_or_default()
+    let table = toml::parse(&data).unwrap_or_default()
+
+    return HeliosConfig {
+        name: table.get_string("name").unwrap_or("helios".to_string()),
+        version: table.get_string("version").unwrap_or("0.1.0".to_string()),
+        max_reasoning_depth: table.get_u32("max_reasoning_depth").unwrap_or(10),
+        confidence_threshold: table.get_f64("confidence_threshold").unwrap_or(0.6),
+        safety_level: match table.get_string("safety_level")
+            .unwrap_or_default().as_str():
+            "strict" => SafetyLevel::Strict
+            "permissive" => SafetyLevel::Permissive
+            _ => SafetyLevel::Standard
+        ,
+        memory_limit_mb: table.get_u64("memory_limit_mb").unwrap_or(1024),
+        data_path: table.get_string("data_path").unwrap_or("data/".to_string()),
+        log_level: table.get_string("log_level").unwrap_or("info".to_string()),
+        api_port: table.get_u16("api_port").unwrap_or(8080),
+        session_timeout_ms: table.get_u64("session_timeout_ms").unwrap_or(1800000)
+    }
+
+/// Create the default configuration
+fn default_config() -> HeliosConfig:
+    return HeliosConfig {
+        name: "helios".to_string(),
+        version: "0.1.0".to_string(),
+        max_reasoning_depth: 10,
+        confidence_threshold: 0.6,
+        safety_level: SafetyLevel::Standard,
+        memory_limit_mb: 1024,
+        data_path: "data/".to_string(),
+        log_level: "info".to_string(),
+        api_port: 8080,
+        session_timeout_ms: 1800000
+    }
