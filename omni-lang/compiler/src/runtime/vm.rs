@@ -25,6 +25,8 @@ pub enum VmValue {
     Array(Vec<VmValue>),
     Map(Vec<(VmValue, VmValue)>),
     Struct(String, Vec<(String, VmValue)>),
+    /// Reference to a heap-allocated object managed by the GC.
+    HeapRef(usize),
 }
 
 impl fmt::Display for VmValue {
@@ -71,6 +73,7 @@ impl fmt::Display for VmValue {
                 }
                 write!(f, "}}")
             }
+            VmValue::HeapRef(idx) => write!(f, "<heap@{}>", idx),
         }
     }
 }
@@ -93,6 +96,60 @@ pub struct CallFrame {
 }
 
 // ---------------------------------------------------------------------------
+// GC Infrastructure — Tri-color Mark-and-Sweep
+// ---------------------------------------------------------------------------
+
+/// Header for each heap-allocated object.
+#[derive(Debug, Clone)]
+pub struct GcHeader {
+    pub mark: bool,
+}
+
+/// Heap-allocated object managed by the GC.
+#[derive(Debug, Clone)]
+pub enum HeapCell {
+    Array(Vec<VmValue>),
+    Map(Vec<(VmValue, VmValue)>),
+    Struct(String, Vec<(String, VmValue)>),
+    HeapString(String),
+}
+
+impl HeapCell {
+    /// Iterate over all VmValue references contained in this heap cell.
+    fn references(&self) -> Vec<usize> {
+        let mut refs = Vec::new();
+        match self {
+            HeapCell::Array(items) => {
+                for item in items {
+                    if let VmValue::HeapRef(idx) = item {
+                        refs.push(*idx);
+                    }
+                }
+            }
+            HeapCell::Map(pairs) => {
+                for (k, v) in pairs {
+                    if let VmValue::HeapRef(idx) = k {
+                        refs.push(*idx);
+                    }
+                    if let VmValue::HeapRef(idx) = v {
+                        refs.push(*idx);
+                    }
+                }
+            }
+            HeapCell::Struct(_, fields) => {
+                for (_, v) in fields {
+                    if let VmValue::HeapRef(idx) = v {
+                        refs.push(*idx);
+                    }
+                }
+            }
+            HeapCell::HeapString(_) => {}
+        }
+        refs
+    }
+}
+
+// ---------------------------------------------------------------------------
 // OmniVM – the virtual machine
 // ---------------------------------------------------------------------------
 
@@ -106,6 +163,14 @@ pub struct OmniVM {
     pub call_stack: Vec<CallFrame>,
     /// Captured output from Print / PrintLn (useful for testing)
     pub output: Vec<String>,
+    /// GC heap: each slot is either occupied (header + cell) or free (None)
+    pub heap: Vec<Option<(GcHeader, HeapCell)>>,
+    /// Free-list of reclaimed heap indices
+    pub free_list: Vec<usize>,
+    /// Number of allocations since last GC cycle
+    pub allocations: usize,
+    /// Allocation count threshold that triggers a GC cycle
+    pub gc_threshold: usize,
 }
 
 impl OmniVM {
@@ -116,7 +181,122 @@ impl OmniVM {
             globals: HashMap::new(),
             call_stack: Vec::new(),
             output: Vec::new(),
+            heap: Vec::new(),
+            free_list: Vec::new(),
+            allocations: 0,
+            gc_threshold: 256,
         }
+    }
+
+    // -- GC methods ---------------------------------------------------------
+
+    /// Allocate a new heap cell, returning its index.
+    /// Triggers GC if allocation count exceeds threshold.
+    pub fn alloc(&mut self, cell: HeapCell) -> usize {
+        self.allocations += 1;
+
+        // Trigger GC when threshold exceeded
+        if self.allocations > self.gc_threshold {
+            self.gc_collect();
+        }
+
+        let header = GcHeader { mark: false };
+        if let Some(idx) = self.free_list.pop() {
+            self.heap[idx] = Some((header, cell));
+            idx
+        } else {
+            let idx = self.heap.len();
+            self.heap.push(Some((header, cell)));
+            idx
+        }
+    }
+
+    /// Collect all HeapRef indices reachable from the stack, locals, and globals.
+    fn gc_collect_roots(&self) -> Vec<usize> {
+        let mut roots = Vec::new();
+
+        // Scan operand stack
+        for val in &self.stack {
+            if let VmValue::HeapRef(idx) = val {
+                roots.push(*idx);
+            }
+        }
+
+        // Scan globals
+        for val in self.globals.values() {
+            if let VmValue::HeapRef(idx) = val {
+                roots.push(*idx);
+            }
+        }
+
+        // Scan call-frame locals
+        for frame in &self.call_stack {
+            for val in &frame.locals {
+                if let VmValue::HeapRef(idx) = val {
+                    roots.push(*idx);
+                }
+            }
+        }
+
+        roots
+    }
+
+    /// Run a full mark-and-sweep garbage collection cycle.
+    pub fn gc_collect(&mut self) {
+        // ── Mark phase (tri-color: gray worklist → black when done) ──
+        let mut worklist: Vec<usize> = self.gc_collect_roots();
+
+        // Clear all marks first
+        for slot in self.heap.iter_mut() {
+            if let Some((header, _)) = slot {
+                header.mark = false;
+            }
+        }
+
+        // Process worklist
+        while let Some(idx) = worklist.pop() {
+            if idx >= self.heap.len() {
+                continue;
+            }
+            if let Some((ref mut header, ref cell)) = self.heap[idx] {
+                if header.mark {
+                    continue; // already visited (black)
+                }
+                header.mark = true;
+                // Discover children (gray → add to worklist)
+                for child_idx in cell.references() {
+                    if child_idx < self.heap.len() {
+                        if let Some((ref child_header, _)) = self.heap[child_idx] {
+                            if !child_header.mark {
+                                worklist.push(child_idx);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Sweep phase ──
+        for idx in 0..self.heap.len() {
+            let should_free = if let Some((ref header, _)) = self.heap[idx] {
+                !header.mark
+            } else {
+                false
+            };
+            if should_free {
+                self.heap[idx] = None;
+                self.free_list.push(idx);
+            }
+        }
+
+        // Reset allocation counter, double threshold
+        self.allocations = 0;
+        self.gc_threshold = self.gc_threshold.saturating_mul(2).max(256);
+    }
+
+    /// Dereference a HeapRef to get a clone of the heap cell.
+    pub fn heap_get(&self, idx: usize) -> Option<&HeapCell> {
+        self.heap.get(idx).and_then(|slot| slot.as_ref().map(|(_, cell)| cell))
     }
 
     // -- Helper methods -----------------------------------------------------
@@ -147,6 +327,7 @@ impl OmniVM {
             VmValue::Array(a) => !a.is_empty(),
             VmValue::Map(m) => !m.is_empty(),
             VmValue::Struct(_, _) => true,
+            VmValue::HeapRef(_) => true,
         }
     }
 
@@ -744,6 +925,7 @@ impl OmniVM {
                         VmValue::Array(_) => "array",
                         VmValue::Map(_) => "map",
                         VmValue::Struct(name, _) => name.as_str(),
+                        VmValue::HeapRef(_) => "heap_ref",
                     };
                     self.push(VmValue::String(type_name.to_string()));
                 }
@@ -1480,5 +1662,128 @@ mod tests {
         let mut vm = OmniVM::new();
         vm.execute(&module).unwrap();
         assert_eq!(vm.globals["result"], VmValue::String("no".into()));
+    }
+
+    // -- 24. GC: collect unreachable -----------------------------------------
+
+    #[test]
+    fn test_gc_collects_unreachable() {
+        let mut vm = OmniVM::new();
+        // Allocate 2000 objects in a loop (simulate via direct alloc)
+        for _ in 0..2000 {
+            let _idx = vm.alloc(HeapCell::Array(vec![]));
+            // do NOT keep a reference — object is immediately unreachable
+        }
+        vm.gc_collect();
+        let live = vm.heap.iter().filter(|c| c.is_some()).count();
+        assert_eq!(live, 0, "all objects should be collected");
+    }
+
+    // -- 25. GC: keep reachable objects alive --------------------------------
+
+    #[test]
+    fn test_gc_keeps_reachable() {
+        let mut vm = OmniVM::new();
+        // Allocate an object and keep it on the stack
+        let idx = vm.alloc(HeapCell::HeapString("keep me".to_string()));
+        vm.stack.push(VmValue::HeapRef(idx));
+
+        // Allocate unreachable objects
+        for _ in 0..500 {
+            let _dead = vm.alloc(HeapCell::Array(vec![]));
+        }
+
+        vm.gc_collect();
+
+        // The reachable object should survive
+        assert!(vm.heap[idx].is_some());
+        // All others should be collected
+        let live = vm.heap.iter().filter(|c| c.is_some()).count();
+        assert_eq!(live, 1, "only the referenced object should survive");
+    }
+
+    // -- 26. GC: transitive references preserved -----------------------------
+
+    #[test]
+    fn test_gc_transitive_references() {
+        let mut vm = OmniVM::new();
+
+        // Create a chain: root -> child -> grandchild
+        let grandchild = vm.alloc(HeapCell::HeapString("grandchild".to_string()));
+        let child = vm.alloc(HeapCell::Array(vec![VmValue::HeapRef(grandchild)]));
+        let root = vm.alloc(HeapCell::Struct(
+            "Node".to_string(),
+            vec![("child".to_string(), VmValue::HeapRef(child))],
+        ));
+
+        // Only the root is on the stack
+        vm.stack.push(VmValue::HeapRef(root));
+
+        // Allocate garbage
+        for _ in 0..200 {
+            let _dead = vm.alloc(HeapCell::Array(vec![]));
+        }
+
+        vm.gc_collect();
+
+        // All three should survive (transitive mark)
+        assert!(vm.heap[root].is_some(), "root should survive");
+        assert!(vm.heap[child].is_some(), "child should survive");
+        assert!(vm.heap[grandchild].is_some(), "grandchild should survive");
+
+        // Only 3 live objects
+        let live = vm.heap.iter().filter(|c| c.is_some()).count();
+        assert_eq!(live, 3);
+    }
+
+    // -- 27. GC: free-list reuse ---------------------------------------------
+
+    #[test]
+    fn test_gc_free_list_reuse() {
+        let mut vm = OmniVM::new();
+        vm.gc_threshold = usize::MAX; // Disable auto-GC
+
+        // Allocate and immediately discard
+        let idx0 = vm.alloc(HeapCell::Array(vec![]));
+        let idx1 = vm.alloc(HeapCell::Array(vec![]));
+
+        vm.gc_collect();
+        assert_eq!(vm.free_list.len(), 2);
+
+        // Next allocation should reuse a free slot
+        let reused = vm.alloc(HeapCell::HeapString("reused".to_string()));
+        assert!(reused == idx0 || reused == idx1, "should reuse a freed slot");
+    }
+
+    // -- 28. GC: globals as roots --------------------------------------------
+
+    #[test]
+    fn test_gc_globals_as_roots() {
+        let mut vm = OmniVM::new();
+        let idx = vm.alloc(HeapCell::HeapString("global obj".to_string()));
+        vm.globals.insert("my_global".to_string(), VmValue::HeapRef(idx));
+
+        // Allocate garbage
+        for _ in 0..100 {
+            let _dead = vm.alloc(HeapCell::Array(vec![]));
+        }
+
+        vm.gc_collect();
+
+        assert!(vm.heap[idx].is_some(), "object referenced from globals should survive");
+        let live = vm.heap.iter().filter(|c| c.is_some()).count();
+        assert_eq!(live, 1);
+    }
+
+    // -- 29. GC: threshold doubles after collection --------------------------
+
+    #[test]
+    fn test_gc_threshold_doubles() {
+        let mut vm = OmniVM::new();
+        let initial = vm.gc_threshold;
+        vm.gc_collect();
+        assert_eq!(vm.gc_threshold, initial * 2);
+        vm.gc_collect();
+        assert_eq!(vm.gc_threshold, initial * 4);
     }
 }

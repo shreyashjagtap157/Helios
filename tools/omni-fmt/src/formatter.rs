@@ -239,8 +239,8 @@ impl OmniFormatter {
             .replace("::{ ", "::{")
             .replace(" }", "}")
             .replace(" ,", ",")
-            .replace(",  ", ", ")
-            .replace(", ", ", ");
+            .replace(", ", ",")     // normalize: remove all spaces after commas
+            .replace(",", ", ");    // then add exactly one space after each comma
         
         normalized
     }

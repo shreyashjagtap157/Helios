@@ -1,0 +1,22 @@
+import core::logging as log
+
+struct Greeter:
+    name: str
+    count: int
+    
+    fn new(name: str) -> Greeter:
+        log::debug("Creating greeter for {}", name)
+        return Greeter { name: name, count: 0 }
+    
+    fn greet(self) -> str:
+        self.count += 1
+        log::info("Greeting #{}", self.count)
+        return format("Hello, {}!", self.name)
+
+fn main():
+    log::info("Starting")
+    let mut g = Greeter::new("World")
+    for i in 0..3:
+        let msg = g.greet()
+        println(msg)
+    log::info("Done: {}", g.count)

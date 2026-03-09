@@ -1,0 +1,3 @@
+fn main():
+    let x = format("Hello, {}!", "World")
+    println(x)

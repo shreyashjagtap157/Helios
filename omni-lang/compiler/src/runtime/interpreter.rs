@@ -1723,6 +1723,8 @@ pub struct Interpreter {
     global_scope: Rc<RefCell<Scope>>,
     /// Stores the last return value for unwinding
     return_value: Option<RuntimeValue>,
+    /// Stores the mutated `self` after a &mut self method call
+    last_mutated_self: Option<RuntimeValue>,
 }
 
 pub struct Scope {
@@ -1753,6 +1755,10 @@ pub enum RuntimeValue {
     StructInstance {
         type_name: String,
         fields: HashMap<String, RuntimeValue>,
+    },
+    Module {
+        name: String,
+        members: HashMap<String, RuntimeValue>,
     },
 }
 
@@ -1785,6 +1791,7 @@ impl RuntimeValue {
             RuntimeValue::GBox(_) => "gbox",
             RuntimeValue::StructDef { .. } => "struct_def",
             RuntimeValue::StructInstance { .. } => "struct",
+            RuntimeValue::Module { .. } => "module",
         }
     }
 
@@ -1808,6 +1815,7 @@ impl RuntimeValue {
             RuntimeValue::Function(f) => format!("<function {}>", f.name),
             RuntimeValue::NativeFunction(name) => format!("<builtin {}>", name),
             RuntimeValue::StructDef { name, .. } => format!("<struct {}>", name),
+            RuntimeValue::Module { name, .. } => format!("<module {}>", name),
             RuntimeValue::StructInstance { type_name, fields } => {
                 let items: Vec<String> = fields.iter()
                     .map(|(k, v)| format!("{}: {}", k, v.display_string()))
@@ -1845,6 +1853,7 @@ impl Interpreter {
             ovm: OvmInterpreter::new(),
             global_scope: Rc::new(RefCell::new(Scope::new())),
             return_value: None,
+            last_mutated_self: None,
         }
     }
 
@@ -1998,8 +2007,45 @@ impl Interpreter {
                         },
                     );
                 }
-                crate::parser::ast::Item::Import(_) => {
-                    // Import handling (simplified: just register the import)
+                crate::parser::ast::Item::Import(import_decl) => {
+                    // Determine the alias or last segment as the binding name
+                    let bind_name = import_decl.alias.clone()
+                        .unwrap_or_else(|| import_decl.path.last().cloned().unwrap_or_default());
+                    let full_path = import_decl.path.join("::");
+                    
+                    // Create a module stub with native functions based on the module path
+                    let mut members = HashMap::new();
+                    match full_path.as_str() {
+                        "core::logging" => {
+                            members.insert("debug".to_string(), RuntimeValue::NativeFunction("__log_debug".to_string()));
+                            members.insert("info".to_string(), RuntimeValue::NativeFunction("__log_info".to_string()));
+                            members.insert("warn".to_string(), RuntimeValue::NativeFunction("__log_warn".to_string()));
+                            members.insert("error".to_string(), RuntimeValue::NativeFunction("__log_error".to_string()));
+                            members.insert("trace".to_string(), RuntimeValue::NativeFunction("__log_trace".to_string()));
+                        }
+                        "core::math" => {
+                            members.insert("sqrt".to_string(), RuntimeValue::NativeFunction("__math_sqrt".to_string()));
+                            members.insert("abs".to_string(), RuntimeValue::NativeFunction("__math_abs".to_string()));
+                            members.insert("pow".to_string(), RuntimeValue::NativeFunction("__math_pow".to_string()));
+                            members.insert("min".to_string(), RuntimeValue::NativeFunction("__math_min".to_string()));
+                            members.insert("max".to_string(), RuntimeValue::NativeFunction("__math_max".to_string()));
+                            members.insert("floor".to_string(), RuntimeValue::NativeFunction("__math_floor".to_string()));
+                            members.insert("ceil".to_string(), RuntimeValue::NativeFunction("__math_ceil".to_string()));
+                            members.insert("pi".to_string(), RuntimeValue::NativeFunction("__math_pi".to_string()));
+                        }
+                        "core::json" => {
+                            members.insert("parse".to_string(), RuntimeValue::NativeFunction("__json_parse".to_string()));
+                            members.insert("stringify".to_string(), RuntimeValue::NativeFunction("__json_stringify".to_string()));
+                        }
+                        _ => {
+                            // Generic module stub — functions will be no-ops
+                            eprintln!("warning: unresolved import '{}', using stub module", full_path);
+                        }
+                    }
+                    self.global_scope.borrow_mut().set(
+                        bind_name,
+                        RuntimeValue::Module { name: full_path, members },
+                    );
                 }
                 _ => {}
             }
@@ -2323,7 +2369,15 @@ impl Interpreter {
                 for arg in args {
                     eval_args.push(self.eval_expr(arg)?);
                 }
-                self.call_method(&obj, method, &eval_args)
+                self.last_mutated_self = None;
+                let result = self.call_method(&obj, method, &eval_args)?;
+                // Write back mutated self to the receiver variable
+                if let Some(mutated) = self.last_mutated_self.take() {
+                    if let Expression::Identifier(var_name) = receiver.as_ref() {
+                        self.global_scope.borrow_mut().set(var_name.clone(), mutated);
+                    }
+                }
+                Ok(result)
             },
             Expression::Field(obj, field) => {
                 let val = self.eval_expr(obj)?;
@@ -2400,7 +2454,7 @@ impl Interpreter {
                 })
             },
             Expression::Path(expr, member_name) => {
-                // Handle Struct::method() static/associated function calls
+                // Handle Struct::method() and Module::function() lookups
                 let base = self.eval_expr(expr)?;
                 match base {
                     RuntimeValue::StructDef { ref name, ref methods, .. } => {
@@ -2409,6 +2463,15 @@ impl Interpreter {
                             Ok(RuntimeValue::Function(Box::new(method.clone())))
                         } else {
                             Err(anyhow!("No static method '{}' on struct '{}'", member_name, name))
+                        }
+                    }
+                    RuntimeValue::Module { ref members, ref name } => {
+                        if let Some(member) = members.get(member_name) {
+                            Ok(member.clone())
+                        } else {
+                            // Return a no-op native function for unknown module members
+                            eprintln!("warning: unknown member '{}' on module '{}'", member_name, name);
+                            Ok(RuntimeValue::NativeFunction(format!("__noop_{}", member_name)))
                         }
                     }
                     _ => Err(anyhow!("Cannot resolve path '::{}' on {:?}", member_name, base)),
@@ -2468,9 +2531,12 @@ impl Interpreter {
         }
 
         let saved_scope = self.global_scope.clone();
-        self.global_scope = func_scope;
+        self.global_scope = func_scope.clone();
 
         let result = self.eval_block(&func.body);
+
+        // Capture the mutated self before restoring scope
+        self.last_mutated_self = func_scope.borrow().get("self");
 
         self.global_scope = saved_scope;
 
@@ -2581,8 +2647,19 @@ impl Interpreter {
                 }
             }
             "format" => {
-                let parts: Vec<String> = args.iter().map(|a| a.display_string()).collect();
-                Ok(RuntimeValue::String(parts.join("")))
+                // format("template {} with {}", arg1, arg2) — replaces {} placeholders
+                if let Some(RuntimeValue::String(template)) = args.first() {
+                    let mut result = template.clone();
+                    for arg in &args[1..] {
+                        if let Some(pos) = result.find("{}") {
+                            result.replace_range(pos..pos + 2, &arg.display_string());
+                        }
+                    }
+                    Ok(RuntimeValue::String(result))
+                } else {
+                    let parts: Vec<String> = args.iter().map(|a| a.display_string()).collect();
+                    Ok(RuntimeValue::String(parts.join("")))
+                }
             }
             "input" => {
                 if let Some(prompt) = args.first() {
@@ -2594,7 +2671,126 @@ impl Interpreter {
                 std::io::stdin().read_line(&mut line).map_err(|e| anyhow!("Failed to read input: {}", e))?;
                 Ok(RuntimeValue::String(line.trim_end().to_string()))
             }
+            // ── Logging module functions ──
+            "__log_debug" => {
+                let msg = Self::format_log_args(args);
+                eprintln!("[DEBUG] {}", msg);
+                Ok(RuntimeValue::Null)
+            }
+            "__log_info" => {
+                let msg = Self::format_log_args(args);
+                eprintln!("[INFO] {}", msg);
+                Ok(RuntimeValue::Null)
+            }
+            "__log_warn" => {
+                let msg = Self::format_log_args(args);
+                eprintln!("[WARN] {}", msg);
+                Ok(RuntimeValue::Null)
+            }
+            "__log_error" => {
+                let msg = Self::format_log_args(args);
+                eprintln!("[ERROR] {}", msg);
+                Ok(RuntimeValue::Null)
+            }
+            "__log_trace" => {
+                let msg = Self::format_log_args(args);
+                eprintln!("[TRACE] {}", msg);
+                Ok(RuntimeValue::Null)
+            }
+            // ── Math module functions ──
+            "__math_sqrt" => {
+                match args.first() {
+                    Some(RuntimeValue::Float(f)) => Ok(RuntimeValue::Float(f.sqrt())),
+                    Some(RuntimeValue::Integer(i)) => Ok(RuntimeValue::Float((*i as f64).sqrt())),
+                    _ => Err(anyhow!("sqrt() requires a numeric argument")),
+                }
+            }
+            "__math_abs" => {
+                match args.first() {
+                    Some(RuntimeValue::Float(f)) => Ok(RuntimeValue::Float(f.abs())),
+                    Some(RuntimeValue::Integer(i)) => Ok(RuntimeValue::Integer(i.abs())),
+                    _ => Err(anyhow!("abs() requires a numeric argument")),
+                }
+            }
+            "__math_pow" => {
+                match (args.get(0), args.get(1)) {
+                    (Some(RuntimeValue::Float(b)), Some(RuntimeValue::Float(e))) => Ok(RuntimeValue::Float(b.powf(*e))),
+                    (Some(RuntimeValue::Integer(b)), Some(RuntimeValue::Integer(e))) => Ok(RuntimeValue::Integer(b.pow(*e as u32))),
+                    (Some(RuntimeValue::Float(b)), Some(RuntimeValue::Integer(e))) => Ok(RuntimeValue::Float(b.powf(*e as f64))),
+                    (Some(RuntimeValue::Integer(b)), Some(RuntimeValue::Float(e))) => Ok(RuntimeValue::Float((*b as f64).powf(*e))),
+                    _ => Err(anyhow!("pow() requires two numeric arguments")),
+                }
+            }
+            "__math_min" => {
+                match (args.get(0), args.get(1)) {
+                    (Some(RuntimeValue::Integer(a)), Some(RuntimeValue::Integer(b))) => Ok(RuntimeValue::Integer(*a.min(b))),
+                    (Some(RuntimeValue::Float(a)), Some(RuntimeValue::Float(b))) => Ok(RuntimeValue::Float(a.min(*b))),
+                    _ => Err(anyhow!("min() requires two numeric arguments")),
+                }
+            }
+            "__math_max" => {
+                match (args.get(0), args.get(1)) {
+                    (Some(RuntimeValue::Integer(a)), Some(RuntimeValue::Integer(b))) => Ok(RuntimeValue::Integer(*a.max(b))),
+                    (Some(RuntimeValue::Float(a)), Some(RuntimeValue::Float(b))) => Ok(RuntimeValue::Float(a.max(*b))),
+                    _ => Err(anyhow!("max() requires two numeric arguments")),
+                }
+            }
+            "__math_floor" => {
+                match args.first() {
+                    Some(RuntimeValue::Float(f)) => Ok(RuntimeValue::Integer(f.floor() as i64)),
+                    Some(RuntimeValue::Integer(i)) => Ok(RuntimeValue::Integer(*i)),
+                    _ => Err(anyhow!("floor() requires a numeric argument")),
+                }
+            }
+            "__math_ceil" => {
+                match args.first() {
+                    Some(RuntimeValue::Float(f)) => Ok(RuntimeValue::Integer(f.ceil() as i64)),
+                    Some(RuntimeValue::Integer(i)) => Ok(RuntimeValue::Integer(*i)),
+                    _ => Err(anyhow!("ceil() requires a numeric argument")),
+                }
+            }
+            "__math_pi" => {
+                Ok(RuntimeValue::Float(std::f64::consts::PI))
+            }
+            // ── JSON module functions ──
+            "__json_parse" => {
+                match args.first() {
+                    Some(RuntimeValue::String(s)) => {
+                        // Simplified JSON parsing — return the string as-is for now
+                        Ok(RuntimeValue::String(s.clone()))
+                    }
+                    _ => Err(anyhow!("json::parse() requires a string argument")),
+                }
+            }
+            "__json_stringify" => {
+                match args.first() {
+                    Some(val) => Ok(RuntimeValue::String(val.display_string())),
+                    None => Err(anyhow!("json::stringify() requires an argument")),
+                }
+            }
+            _ if name.starts_with("__noop_") => {
+                // No-op stub for unknown module functions
+                Ok(RuntimeValue::Null)
+            }
             _ => Err(anyhow!("Unknown builtin function: {}", name)),
+        }
+    }
+
+    /// Format log arguments with {} placeholder substitution
+    fn format_log_args(args: &[RuntimeValue]) -> String {
+        if args.is_empty() {
+            return String::new();
+        }
+        if let RuntimeValue::String(template) = &args[0] {
+            let mut result = template.clone();
+            for arg in &args[1..] {
+                if let Some(pos) = result.find("{}") {
+                    result.replace_range(pos..pos + 2, &arg.display_string());
+                }
+            }
+            result
+        } else {
+            args.iter().map(|a| a.display_string()).collect::<Vec<_>>().join(" ")
         }
     }
 

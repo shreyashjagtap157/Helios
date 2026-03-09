@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "omni-fmt",
+    "omni-lsp",
+    "omni-dap",
+    "opm",
+]
+resolver = "2"

@@ -22,6 +22,7 @@ pub mod optimizer;
 pub mod parser;
 pub mod runtime;
 pub mod semantic;
+pub mod brain;
 
 // Re-export key types
 pub use diagnostics::{
