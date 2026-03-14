@@ -10,14 +10,14 @@ import core::net
 import core::io
 import core::thread
 import core::json
-import helios::cognitive as cognitive
+import helios::runtime as runtime
 
 # ──────────────────────────────────────────────────────────────
 # Server Entry Point
 # ──────────────────────────────────────────────────────────────
 
 # Start the API server on given port
-fn run_server(helios: &mut Helios, port: Int):
+fn run_server(helios: &mut runtime::Helios, port: Int):
     let listener = net::TcpListener::bind("127.0.0.1", port)
     io::println("Helios API server listening on port {}", port)
 
@@ -34,7 +34,7 @@ fn run_server(helios: &mut Helios, port: Int):
 # ──────────────────────────────────────────────────────────────
 
 # Handle one connection: read length-prefixed JSON, process, respond
-fn handle_connection(helios: &mut Helios, conn: net::TcpStream):
+fn handle_connection(helios: &mut runtime::Helios, conn: net::TcpStream):
     loop:
         # 4-byte big-endian length prefix
         let len_bytes = conn.read_exact(4)
@@ -63,14 +63,14 @@ fn handle_connection(helios: &mut Helios, conn: net::TcpStream):
 # Request Dispatcher
 # ──────────────────────────────────────────────────────────────
 
-fn dispatch_request(helios: &mut Helios, req: json::Value) -> json::Value:
+fn dispatch_request(helios: &mut runtime::Helios, req: json::Value) -> json::Value:
     match req["action"].as_str():
         "query":
             let text = req["text"].as_str()
             let result = helios.process_input(text)
             json::object({"status": "ok", "response": result.text})
         "status":
-            json::object({"status": "ok", "running": true})
+            json::object({"status": "ok", "report": helios.status_report()})
         "stop":
             helios.stop()
             json::object({"status": "ok"})
@@ -80,8 +80,21 @@ fn dispatch_request(helios: &mut Helios, req: json::Value) -> json::Value:
         "learn":
             let topic = req["topic"].as_str()
             let content = req["content"].as_str()
-            helios.learn(topic, content)
-            json::object({"status": "ok", "learned": topic})
+            match helios.learn(topic, content):
+                Ok(id):
+                    json::object({"status": "ok", "learned": topic, "id": id})
+                Err(message):
+                    json::object({"status": "error", "message": message})
+        "verify":
+            let id = req.get("id").and_then(|value| value.as_int()).unwrap_or(0) as u64
+            let verified_by = req["verified_by"].as_str()
+            let notes = req["notes"].as_str()
+            let sources = req.get("sources").and_then(|value| value.as_int()).unwrap_or(1) as usize
+            match helios.verify_fact(id, verified_by, notes, sources):
+                Ok(_):
+                    json::object({"status": "ok", "verified": id})
+                Err(message):
+                    json::object({"status": "error", "message": message})
         _:
             json::object({"status": "error", "message": "Unknown action"})
 
@@ -90,7 +103,7 @@ fn dispatch_request(helios: &mut Helios, req: json::Value) -> json::Value:
 # ──────────────────────────────────────────────────────────────
 
 # Unix socket variant for Linux/macOS IPC
-fn run_unix_socket(helios: &mut Helios, path: &str):
+fn run_unix_socket(helios: &mut runtime::Helios, path: &str):
     let listener = net::UnixListener::bind(path)
     io::println("Helios Unix socket at {}", path)
     loop:
@@ -102,7 +115,7 @@ fn run_unix_socket(helios: &mut Helios, path: &str):
                 break
 
 # Named pipe variant for Windows IPC
-fn run_named_pipe(helios: &mut Helios, pipe_name: &str):
+fn run_named_pipe(helios: &mut runtime::Helios, pipe_name: &str):
     let pipe = net::NamedPipe::create(pipe_name)
     io::println("Helios named pipe at {}", pipe_name)
     loop:

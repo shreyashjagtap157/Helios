@@ -9,7 +9,7 @@ import core::threading::{spawn, Channel}
 import brain::reasoning_engine::{ReasoningEngine, Proposition}
 import brain::cognitive_inference::{CognitiveInferenceEngine, InferenceResult}
 import helios::cognitive::{CognitiveProcessor}
-import helios::knowledge::{KnowledgeStore}
+import helios::knowledge::{InformationUnit, KnowledgeStore}
 import helios::experience::{ExperienceLog}
 import helios::capability::{CapabilityRegistry}
 import helios::input::{InputProcessor, ParsedInput}
@@ -219,7 +219,7 @@ struct CognitiveCortex:
     
     # Knowledge management
     fn store_knowledge(&mut self, content: &str, source: &str):
-        let unit = InformationUnit::new(content, SourceType::User(source.to_string()))
+        let unit = InformationUnit::from_user_statement(content)
         self.knowledge.store(unit)
     
     fn query_knowledge(&self, query: &str) -> Vec<InformationUnit>:

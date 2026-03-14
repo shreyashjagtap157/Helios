@@ -1,200 +1,879 @@
-// HELIOS Framework - Capability System
-// Extensible capability registry for HELIOS actions
+# Helios Capability Registry
+# Broader typed capability surface for file, code, and knowledge-adjacent actions
 
 module helios::capability
 
 import core::collections::HashMap
-import core::logging as log
+import core::fs
+import core::io
+import core::serialize
 
-// ============================================================================
-// Types
-// ============================================================================
 
-/// Permission level required to execute a capability
-enum Permission:
-    None
-    UserApproval
-    DeveloperOnly
-    SystemLevel
+struct CapabilityRegistry:
+    capabilities: HashMap<String, Capability>
+    by_category: HashMap<String, Vec<String>>
+    builtin: Vec<String>
+    user_defined: Vec<String>
+    storage_path: Option<String>
 
-/// A named, executable capability that HELIOS can perform
+    fn new() -> own CapabilityRegistry:
+        let mut registry = CapabilityRegistry:
+            capabilities: HashMap::new(),
+            by_category: HashMap::new(),
+            builtin: Vec::new(),
+            user_defined: Vec::new(),
+            storage_path: None
+
+        registry.register_builtins()
+        registry
+
+    fn default() -> own CapabilityRegistry:
+        CapabilityRegistry::new()
+
+    fn open_or_create(path: &str) -> own CapabilityRegistry:
+        CapabilityRegistry::load(path)
+            .unwrap_or_else(|_| CapabilityRegistry::new_at(path))
+
+    fn new_at(path: &str) -> own CapabilityRegistry:
+        fs::create_dir_all(path).ok()
+
+        let mut registry = CapabilityRegistry::new()
+        registry.storage_path = Some(path.to_string())
+        registry.save()
+        registry
+
+    fn load(path: &str) -> Result<own CapabilityRegistry, IoError>:
+        let data_path = format("{}/capabilities.json", path)
+
+        if !fs::exists(&data_path):
+            return Err(IoError::NotFound(data_path))
+
+        let data = fs::read_string(&data_path)?
+        let mut registry: CapabilityRegistry = serialize::from_json(&data)?
+        registry.storage_path = Some(path.to_string())
+        registry.rebuild_indexes()
+        registry.register_builtins()
+
+        Ok(registry)
+
+    fn save(&self):
+        if let Some(ref path) = self.storage_path:
+            fs::create_dir_all(path).ok()
+            let data_path = format("{}/capabilities.json", path)
+            let data = serialize::to_json(self)
+
+            if let Err(e) = fs::write_string(&data_path, &data):
+                io::eprintln("Failed to save capabilities: {}", e)
+
+    fn has(&self, name: &str) -> bool:
+        self.capabilities.contains_key(name)
+
+    fn get(&self, name: &str) -> Option<&Capability>:
+        self.capabilities.get(name)
+
+    fn find_capability(&self, name: &str) -> Option<&Capability>:
+        self.get(name)
+
+    fn count(&self) -> usize:
+        self.capabilities.len()
+
+    fn list_all(&self) -> Vec<&Capability>:
+        self.capabilities.values().collect()
+
+    fn list_capabilities(&self) -> Vec<String>:
+        let mut summaries: Vec<String> = self.capabilities.values()
+            .map(|cap| cap.summary())
+            .collect()
+        summaries.sort()
+        summaries
+
+    fn list_by_category(&self, category: &str) -> Vec<&Capability>:
+        self.by_category.get(category)
+            .map(|names| {
+                names.iter()
+                    .filter_map(|name| self.capabilities.get(name))
+                    .collect()
+            })
+            .unwrap_or_default()
+
+    fn register(&mut self, capability: Capability):
+        self.capabilities.insert(capability.name.clone(), capability)
+        self.rebuild_indexes()
+        self.save()
+
+    fn register_user_defined(&mut self, mut capability: Capability):
+        capability.builtin = false
+        self.register(capability)
+
+    fn execute(
+        &self,
+        name: &str,
+        params: &HashMap<String, Value>,
+        context: &ExecutionContext
+    ) -> CapabilityResult:
+        let capability = match self.capabilities.get(name):
+            Some(cap): cap
+            None: return CapabilityResult::Error(format("Capability '{}' not found", name))
+
+        capability.execute_values(params, context)
+
+    fn execute_string_args(
+        &self,
+        name: &str,
+        args: &HashMap<String, String>,
+        context: &ExecutionContext
+    ) -> CapabilityResult:
+        let capability = match self.capabilities.get(name):
+            Some(cap): cap
+            None: return CapabilityResult::Error(format("Capability '{}' not found", name))
+
+        let params = match capability.coerce_string_map(args):
+            Ok(values): values
+            Err(e): return CapabilityResult::Error(e)
+
+        capability.execute_values(&params, context)
+
+    fn register_builtins(&mut self):
+        self.ensure_builtin(Capability::builtin(
+            "read_file",
+            "Read the contents of a file exactly as stored on disk.",
+            "file",
+            vec![
+                Parameter::required("path", ParamType::String, "Path to the file to read.")
+            ],
+            ReturnType::String,
+            "read_file"
+        ))
+
+        self.ensure_builtin(Capability::builtin(
+            "write_file",
+            "Write string content to a file. This requires explicit approval in higher-level flows.",
+            "file",
+            vec![
+                Parameter::required("path", ParamType::String, "Path to the file to write."),
+                Parameter::required("content", ParamType::String, "Content to write.")
+            ],
+            ReturnType::Bool,
+            "write_file"
+        ).requiring_confirmation())
+
+        self.ensure_builtin(Capability::builtin(
+            "list_directory",
+            "List the entries in a directory.",
+            "file",
+            vec![
+                Parameter::optional("path", ParamType::String, "Directory path. Defaults to the current directory.")
+            ],
+            ReturnType::List(Box::new(ReturnType::String)),
+            "list_directory"
+        ))
+
+        self.ensure_builtin(Capability::builtin(
+            "search_files",
+            "Search for file names matching a glob-like pattern.",
+            "file",
+            vec![
+                Parameter::required("directory", ParamType::String, "Directory to search."),
+                Parameter::required("pattern", ParamType::String, "Glob-style pattern."),
+                Parameter::optional("recursive", ParamType::Bool, "Whether to recurse into subdirectories.")
+            ],
+            ReturnType::List(Box::new(ReturnType::String)),
+            "search_files"
+        ))
+
+        self.ensure_builtin(Capability::builtin(
+            "search_in_file",
+            "Search a text file for lines containing a query.",
+            "file",
+            vec![
+                Parameter::required("path", ParamType::String, "File to search."),
+                Parameter::required("query", ParamType::String, "Text to search for."),
+                Parameter::optional("regex", ParamType::Bool, "Reserved for future regex support.")
+            ],
+            ReturnType::List(Box::new(ReturnType::Object)),
+            "search_in_file"
+        ))
+
+        self.ensure_builtin(Capability::builtin(
+            "calculate",
+            "Evaluate a mathematical expression using exact symbolic parsing rules.",
+            "math",
+            vec![
+                Parameter::required("expression", ParamType::String, "Mathematical expression to evaluate.")
+            ],
+            ReturnType::Number,
+            "calculate"
+        ))
+
+        self.ensure_builtin(Capability::builtin(
+            "summarize_text",
+            "Create a short extractive summary from explicit text.",
+            "text",
+            vec![
+                Parameter::required("text", ParamType::String, "Text to summarize."),
+                Parameter::optional("max_lines", ParamType::Number, "Maximum number of summary lines.")
+            ],
+            ReturnType::String,
+            "summarize_text"
+        ))
+
+        self.ensure_builtin(Capability::builtin(
+            "analyze_code",
+            "Produce a basic structural summary for source code without model fitting.",
+            "code",
+            vec![
+                Parameter::required("code", ParamType::String, "Source code to analyze."),
+                Parameter::optional("language", ParamType::String, "Programming language hint.")
+            ],
+            ReturnType::Object,
+            "analyze_code"
+        ))
+
+    fn ensure_builtin(&mut self, capability: Capability):
+        if !self.capabilities.contains_key(&capability.name):
+            self.capabilities.insert(capability.name.clone(), capability)
+            self.rebuild_indexes()
+
+    fn rebuild_indexes(&mut self):
+        self.by_category.clear()
+        self.builtin.clear()
+        self.user_defined.clear()
+
+        for capability in self.capabilities.values():
+            self.by_category.entry(capability.category.clone())
+                .or_default()
+                .push(capability.name.clone())
+
+            if capability.builtin:
+                self.builtin.push(capability.name.clone())
+            else:
+                self.user_defined.push(capability.name.clone())
+
+
 struct Capability:
     name: String
     description: String
-    handler: String
-    permissions: Permission
     category: String
+    parameters: Vec<Parameter>
+    returns: ReturnType
+    executor_name: String
+    builtin: bool
+    requires_confirmation: bool
     enabled: bool
+    unavailable_reason: Option<String>
 
-    fn new(name: String, description: String, handler: String) -> Capability:
-        return Capability {
-            name: name,
-            description: description,
-            handler: handler,
-            permissions: Permission::None,
-            category: "general".to_string(),
-            enabled: true
-        }
+    fn builtin(
+        name: &str,
+        description: &str,
+        category: &str,
+        parameters: Vec<Parameter>,
+        returns: ReturnType,
+        executor_name: &str
+    ) -> own Capability:
+        Capability:
+            name: name.to_string(),
+            description: description.to_string(),
+            category: category.to_string(),
+            parameters,
+            returns,
+            executor_name: executor_name.to_string(),
+            builtin: true,
+            requires_confirmation: false,
+            enabled: true,
+            unavailable_reason: None
 
-    fn with_permission(mut self, perm: Permission) -> Capability:
-        self.permissions = perm
-        return self
+    fn custom(
+        name: &str,
+        description: &str,
+        category: &str,
+        parameters: Vec<Parameter>,
+        returns: ReturnType,
+        executor_name: &str
+    ) -> own Capability:
+        Capability:
+            name: name.to_string(),
+            description: description.to_string(),
+            category: category.to_string(),
+            parameters,
+            returns,
+            executor_name: executor_name.to_string(),
+            builtin: false,
+            requires_confirmation: false,
+            enabled: true,
+            unavailable_reason: None
 
-    fn with_category(mut self, category: String) -> Capability:
-        self.category = category
-        return self
+    fn requiring_confirmation(mut self) -> own Capability:
+        self.requires_confirmation = true
+        self
 
-/// Result of executing a capability
+    fn disabled(mut self, reason: &str) -> own Capability:
+        self.enabled = false
+        self.unavailable_reason = Some(reason.to_string())
+        self
+
+    fn summary(&self) -> String:
+        let mut summary = format("{} [{}] - {}", self.name, self.category, self.description)
+
+        if self.requires_confirmation:
+            summary.push_str(" (approval required)")
+
+        if let Some(ref reason) = self.unavailable_reason:
+            summary.push_str(&format!(" (unavailable: {})", reason))
+
+        summary
+
+    fn is_available(&self) -> bool:
+        self.enabled && self.unavailable_reason.is_none()
+
+    fn execute(&self, args: &HashMap<String, String>) -> Result<String, String>:
+        let values = self.coerce_string_map(args)?
+        let context = ExecutionContext::default()
+
+        match self.execute_values(&values, &context):
+            CapabilityResult::Success(value): Ok(value.to_pretty_string())
+            CapabilityResult::Error(message): Err(message)
+            CapabilityResult::NeedsConfirmation(message): Err(message)
+            CapabilityResult::PermissionDenied(message): Err(message)
+
+    fn execute_values(
+        &self,
+        params: &HashMap<String, Value>,
+        context: &ExecutionContext
+    ) -> CapabilityResult:
+        if !self.enabled:
+            return CapabilityResult::Error(format("Capability '{}' is disabled", self.name))
+
+        if let Some(ref reason) = self.unavailable_reason:
+            return CapabilityResult::Error(format("Capability '{}' is unavailable: {}", self.name, reason))
+
+        if self.requires_confirmation && !context.user_approved:
+            return CapabilityResult::NeedsConfirmation(format(
+                "Capability '{}' requires explicit approval",
+                self.name
+            ))
+
+        if let Err(e) = self.validate_params(params):
+            return CapabilityResult::Error(e)
+
+        dispatch_executor(&self.executor_name, params, context)
+
+    fn validate_params(&self, params: &HashMap<String, Value>) -> Result<(), String>:
+        for parameter in &self.parameters:
+            if parameter.required && !params.contains_key(&parameter.name):
+                return Err(format("Missing required parameter: {}", parameter.name))
+
+            if let Some(value) = params.get(&parameter.name):
+                if !parameter.param_type.matches(value):
+                    return Err(format(
+                        "Parameter '{}' has the wrong type for capability '{}'",
+                        parameter.name,
+                        self.name
+                    ))
+
+        Ok(())
+
+    fn coerce_string_map(&self, args: &HashMap<String, String>) -> Result<HashMap<String, Value>, String>:
+        let mut values = HashMap::new()
+
+        for parameter in &self.parameters:
+            if let Some(raw) = args.get(&parameter.name):
+                values.insert(parameter.name.clone(), parameter.param_type.parse_value(raw)?)
+            elif parameter.required:
+                return Err(format("Missing required parameter: {}", parameter.name))
+
+        Ok(values)
+
+
+struct Parameter:
+    name: String
+    param_type: ParamType
+    required: bool
+    description: String
+
+    fn required(name: &str, param_type: ParamType, description: &str) -> own Parameter:
+        Parameter:
+            name: name.to_string(),
+            param_type,
+            required: true,
+            description: description.to_string()
+
+    fn optional(name: &str, param_type: ParamType, description: &str) -> own Parameter:
+        Parameter:
+            name: name.to_string(),
+            param_type,
+            required: false,
+            description: description.to_string()
+
+
+enum ParamType:
+    String
+    Number
+    Bool
+    List(Box<ParamType>)
+    Object
+
+    fn matches(&self, value: &Value) -> bool:
+        match (self, value):
+            (ParamType::String, Value::String(_)): true
+            (ParamType::Number, Value::Number(_)): true
+            (ParamType::Bool, Value::Bool(_)): true
+            (ParamType::List(_), Value::List(_)): true
+            (ParamType::Object, Value::Object(_)): true
+            _: false
+
+    fn parse_value(&self, raw: &str) -> Result<Value, String>:
+        match self:
+            ParamType::String:
+                Ok(Value::String(raw.to_string()))
+
+            ParamType::Number:
+                match raw.trim().parse::<f64>():
+                    Ok(number): Ok(Value::Number(number))
+                    Err(_): Err(format("Expected a number, got '{}'", raw))
+
+            ParamType::Bool:
+                let lowered = raw.trim().to_lowercase()
+                match lowered.as_str():
+                    "true" | "yes" | "1" | "on": Ok(Value::Bool(true))
+                    "false" | "no" | "0" | "off": Ok(Value::Bool(false))
+                    _: Err(format("Expected a bool, got '{}'", raw))
+
+            ParamType::List(inner):
+                let mut values = Vec::new()
+                for item in raw.split(','):
+                    values.push(inner.parse_value(item.trim())?)
+                Ok(Value::List(values))
+
+            ParamType::Object:
+                let mut object = HashMap::new()
+                object.insert("value".to_string(), Value::String(raw.to_string()))
+                Ok(Value::Object(object))
+
+
+enum ReturnType:
+    String
+    Number
+    Bool
+    List(Box<ReturnType>)
+    Object
+    Void
+
+
 enum CapabilityResult:
-    Success(value: Any)
-    Error(message: String)
-    PermissionDenied(reason: String)
-    NotFound(name: String)
+    Success(Value)
+    Error(String)
+    NeedsConfirmation(String)
+    PermissionDenied(String)
 
-// ============================================================================
-// Capability Registry
-// ============================================================================
 
-/// Registry of all capabilities available to HELIOS.
-/// Provides registration, lookup, and execution dispatching.
-struct CapabilityRegistry:
-    capabilities: HashMap<String, Capability>
-    categories: HashMap<String, Vec<String>>
+enum Value:
+    String(String)
+    Number(f64)
+    Bool(bool)
+    List(Vec<Value>)
+    Object(HashMap<String, Value>)
+    Null
 
-    fn new() -> CapabilityRegistry:
-        log::info("Initializing CapabilityRegistry")
-        let mut registry = CapabilityRegistry {
-            capabilities: HashMap::new(),
-            categories: HashMap::new()
-        }
-        registry.register_builtins()
-        return registry
+    fn as_string(&self) -> String:
+        match self:
+            Value::String(text): text.clone()
+            Value::Number(number): number.to_string()
+            Value::Bool(flag): flag.to_string()
+            Value::List(items):
+                items.iter()
+                    .map(|item| item.as_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            Value::Object(map):
+                map.iter()
+                    .map(|(key, value)| format("{}={}", key, value.as_string()))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            Value::Null: String::new()
 
-    /// Register a new capability
-    fn register(&mut self, cap: Capability):
-        log::debug("Registering capability: {}", cap.name)
-        let name = cap.name.clone()
-        let category = cap.category.clone()
-        self.capabilities.insert(name.clone(), cap)
-        self.categories.entry(category).or_default().push(name)
+    fn as_number(&self) -> f64:
+        match self:
+            Value::Number(number): *number
+            Value::String(text): text.parse().unwrap_or(0.0)
+            Value::Bool(flag): if *flag { 1.0 } else { 0.0 }
+            _: 0.0
 
-    /// Execute a capability by name with arguments
-    fn execute(&self, name: String, args: HashMap<String, Any>) -> CapabilityResult:
-        log::debug("Executing capability: {}", name)
+    fn as_bool(&self) -> bool:
+        match self:
+            Value::Bool(flag): *flag
+            Value::String(text):
+                let lowered = text.to_lowercase()
+                lowered == "true" || lowered == "yes" || lowered == "1" || lowered == "on"
+            Value::Number(number): *number != 0.0
+            Value::List(items): !items.is_empty()
+            Value::Object(map): !map.is_empty()
+            Value::Null: false
 
-        let cap = match self.capabilities.get(&name):
-            Some(c) => c
-            None => return CapabilityResult::NotFound(name)
+    fn as_list(&self) -> Vec<Value>:
+        match self:
+            Value::List(items): items.clone()
+            _: Vec::new()
 
-        if !cap.enabled:
-            return CapabilityResult::Error("Capability is disabled".to_string())
+    fn to_pretty_string(&self) -> String:
+        match self:
+            Value::String(text): text.clone()
+            Value::Number(number): number.to_string()
+            Value::Bool(flag): flag.to_string()
+            Value::List(items):
+                items.iter()
+                    .map(|item| item.to_pretty_string())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            Value::Object(map):
+                map.iter()
+                    .map(|(key, value)| format("{}: {}", key, value.to_pretty_string()))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            Value::Null: "null".to_string()
 
-        // Enforce permission checks
-        match cap.permissions:
-            Permission::DeveloperOnly:
-                return CapabilityResult::PermissionDenied(
-                    "Developer authentication required".to_string())
-            Permission::SystemLevel:
-                return CapabilityResult::PermissionDenied(
-                    "System-level access required".to_string())
-            _:
-                pass
 
-        // Dispatch to the appropriate handler
-        return self.dispatch(&cap.handler, args)
+struct ExecutionContext:
+    session_id: u64
+    user_approved: bool
+    dry_run: bool
+    working_directory: Option<String>
+    timeout_ms: Option<u64>
 
-    /// Check if a capability exists
-    fn has(&self, name: &str) -> bool:
-        return self.capabilities.contains_key(name)
+    fn default() -> ExecutionContext:
+        ExecutionContext:
+            session_id: 0,
+            user_approved: false,
+            dry_run: false,
+            working_directory: None,
+            timeout_ms: None
 
-    /// Get a capability by name
-    fn get(&self, name: &str) -> Option<&Capability>:
-        return self.capabilities.get(name)
+    fn for_session(session_id: u64) -> ExecutionContext:
+        ExecutionContext:
+            session_id,
+            user_approved: false,
+            dry_run: false,
+            working_directory: None,
+            timeout_ms: None
 
-    /// List all registered capabilities
-    fn list(&self) -> Vec<&Capability>:
-        return self.capabilities.values().collect()
+    fn approved(mut self) -> ExecutionContext:
+        self.user_approved = true
+        self
 
-    /// List capabilities in a specific category
-    fn list_by_category(&self, category: &str) -> Vec<&Capability>:
-        match self.categories.get(category):
-            Some(names) =>
-                return names.iter()
-                    .filter_map(|n| self.capabilities.get(n))
-                    .collect()
-            None =>
-                return Vec::new()
 
-    /// Register the built-in capabilities
-    fn register_builtins(&mut self):
-        self.register(
-            Capability::new(
-                "search".to_string(),
-                "Search the knowledge base".to_string(),
-                "builtin_search".to_string()
-            ).with_category("knowledge".to_string())
+struct GrowthProposal:
+    name: String
+    description: String
+    changes: Vec<String>
+    risks: String
+    reversible: bool
+    capability: Capability
+
+
+struct ModificationProposal:
+    modification_type: String
+    reason: String
+    changes: Vec<Change>
+    consequences: Vec<String>
+    reversible: bool
+
+
+struct Change:
+    before: String
+    after: String
+    location: String
+
+
+enum ModificationType:
+    AddCapability
+    ModifyBehavior
+    UpdateKnowledge
+    ChangeConfig
+
+
+fn dispatch_executor(
+    executor_name: &str,
+    params: &HashMap<String, Value>,
+    context: &ExecutionContext
+) -> CapabilityResult:
+    match executor_name:
+        "read_file": execute_read_file(params)
+        "write_file": execute_write_file(params, context)
+        "list_directory": execute_list_directory(params)
+        "search_files": execute_search_files(params)
+        "search_in_file": execute_search_in_file(params)
+        "calculate": execute_calculate(params)
+        "summarize_text": execute_summarize_text(params)
+        "analyze_code": execute_analyze_code(params)
+        _:
+            CapabilityResult::Error(format("Unknown capability executor '{}'", executor_name))
+
+
+fn execute_read_file(params: &HashMap<String, Value>) -> CapabilityResult:
+    let path = params.get("path")
+        .map(|value| value.as_string())
+        .unwrap_or_default()
+
+    match fs::read_string(&path):
+        Ok(content): CapabilityResult::Success(Value::String(content))
+        Err(e): CapabilityResult::Error(e.to_string())
+
+
+fn execute_write_file(params: &HashMap<String, Value>, context: &ExecutionContext) -> CapabilityResult:
+    if context.dry_run:
+        return CapabilityResult::Success(Value::String("Dry run: file write skipped".to_string()))
+
+    let path = params.get("path")
+        .map(|value| value.as_string())
+        .unwrap_or_default()
+    let content = params.get("content")
+        .map(|value| value.as_string())
+        .unwrap_or_default()
+
+    match fs::write_string(&path, &content):
+        Ok(_): CapabilityResult::Success(Value::Bool(true))
+        Err(e): CapabilityResult::Error(e.to_string())
+
+
+fn execute_list_directory(params: &HashMap<String, Value>) -> CapabilityResult:
+    let path = params.get("path")
+        .map(|value| value.as_string())
+        .unwrap_or(".".to_string())
+
+    match fs::read_dir(&path):
+        Ok(entries):
+            let list = entries.iter()
+                .map(|entry| Value::String(entry.name.clone()))
+                .collect()
+            CapabilityResult::Success(Value::List(list))
+        Err(e):
+            CapabilityResult::Error(e.to_string())
+
+
+fn execute_search_files(params: &HashMap<String, Value>) -> CapabilityResult:
+    let directory = params.get("directory")
+        .map(|value| value.as_string())
+        .unwrap_or(".".to_string())
+    let pattern = params.get("pattern")
+        .map(|value| value.as_string())
+        .unwrap_or("*".to_string())
+    let recursive = params.get("recursive")
+        .map(|value| value.as_bool())
+        .unwrap_or(true)
+
+    let mut matches = Vec::new()
+    collect_matching_files(&directory, &pattern, recursive, &mut matches)
+
+    CapabilityResult::Success(Value::List(
+        matches.iter()
+            .map(|path| Value::String(path.clone()))
+            .collect()
+    ))
+
+
+fn collect_matching_files(base: &str, pattern: &str, recursive: bool, matches: &mut Vec<String>):
+    match fs::read_dir(base):
+        Ok(entries):
+            for entry in entries:
+                if entry.name.matches_glob(pattern):
+                    matches.push(entry.path.clone())
+
+                if recursive && fs::is_dir(&entry.path):
+                    collect_matching_files(&entry.path, pattern, recursive, matches)
+        Err(_):
+            ()
+
+
+fn execute_search_in_file(params: &HashMap<String, Value>) -> CapabilityResult:
+    let path = params.get("path")
+        .map(|value| value.as_string())
+        .unwrap_or_default()
+    let query = params.get("query")
+        .map(|value| value.as_string())
+        .unwrap_or_default()
+    let lowered_query = query.to_lowercase()
+
+    match fs::read_string(&path):
+        Ok(content):
+            let mut results = Vec::new()
+
+            for (index, line) in content.lines().enumerate():
+                if line.to_lowercase().contains(&lowered_query):
+                    let mut hit = HashMap::new()
+                    hit.insert("line".to_string(), Value::Number((index + 1) as f64))
+                    hit.insert("content".to_string(), Value::String(line.to_string()))
+                    results.push(Value::Object(hit))
+
+            CapabilityResult::Success(Value::List(results))
+        Err(e):
+            CapabilityResult::Error(e.to_string())
+
+
+fn execute_calculate(params: &HashMap<String, Value>) -> CapabilityResult:
+    let expression = params.get("expression")
+        .map(|value| value.as_string())
+        .unwrap_or_default()
+
+    match eval_math_expr(&expression):
+        Some(result): CapabilityResult::Success(Value::Number(result))
+        None: CapabilityResult::Error(format("Could not evaluate expression '{}'", expression))
+
+
+fn execute_summarize_text(params: &HashMap<String, Value>) -> CapabilityResult:
+    let text = params.get("text")
+        .map(|value| value.as_string())
+        .unwrap_or_default()
+    let max_lines = params.get("max_lines")
+        .map(|value| value.as_number() as usize)
+        .unwrap_or(3)
+
+    let mut selected = Vec::new()
+    for line in text.lines():
+        let trimmed = line.trim()
+        if !trimmed.is_empty():
+            selected.push(trimmed.to_string())
+        if selected.len() >= max_lines:
+            break
+
+    if selected.is_empty():
+        return CapabilityResult::Success(Value::String(String::new()))
+
+    CapabilityResult::Success(Value::String(selected.join("\n")))
+
+
+fn execute_analyze_code(params: &HashMap<String, Value>) -> CapabilityResult:
+    let code = params.get("code")
+        .map(|value| value.as_string())
+        .unwrap_or_default()
+    let language = params.get("language")
+        .map(|value| value.as_string())
+        .unwrap_or_else(|| detect_language(&code))
+
+    let line_count = code.lines().count()
+    let non_empty = code.lines()
+        .filter(|line| !line.trim().is_empty())
+        .count()
+    let comment_lines = code.lines()
+        .filter(|line| {
+            let trimmed = line.trim()
+            trimmed.starts_with("#") || trimmed.starts_with("//")
+        })
+        .count()
+    let fn_count = code.matches("fn ").count()
+    let import_count = code.matches("import ").count()
+
+    let mut summary = HashMap::new()
+    summary.insert("language".to_string(), Value::String(language))
+    summary.insert("lines".to_string(), Value::Number(line_count as f64))
+    summary.insert("non_empty_lines".to_string(), Value::Number(non_empty as f64))
+    summary.insert("comment_lines".to_string(), Value::Number(comment_lines as f64))
+    summary.insert("functions".to_string(), Value::Number(fn_count as f64))
+    summary.insert("imports".to_string(), Value::Number(import_count as f64))
+    summary.insert(
+        "has_tests".to_string(),
+        Value::Bool(code.contains("assert") || code.contains("test"))
+    )
+
+    CapabilityResult::Success(Value::Object(summary))
+
+
+fn detect_language(code: &str) -> String:
+    if code.contains("module ") && code.contains("fn "):
+        return "omni".to_string()
+
+    if code.contains("fn ") && code.contains("let "):
+        return "rust_like".to_string()
+
+    if code.contains("def ") && code.contains(":"):
+        return "python".to_string()
+
+    if code.contains("function ") || code.contains("const "):
+        return "javascript".to_string()
+
+    "text".to_string()
+
+
+fn eval_math_expr(expr: &str) -> Option<f64>:
+    let expr = expr.trim()
+    if expr.is_empty():
+        return None
+
+    if let Ok(number) = expr.parse::<f64>():
+        return Some(number)
+
+    let mut paren_depth = 0
+    let mut last_add_sub = None
+    for (index, ch) in expr.chars().enumerate():
+        match ch:
+            '(': paren_depth += 1
+            ')': paren_depth -= 1
+            '+' | '-' if paren_depth == 0 && index > 0:
+                last_add_sub = Some((index, ch))
+            _: ()
+
+    if let Some((position, operator)) = last_add_sub:
+        let left = eval_math_expr(&expr[..position])?
+        let right = eval_math_expr(&expr[position + 1..])?
+
+        return Some(match operator:
+            '+': left + right
+            '-': left - right
+            _: return None
         )
-        self.register(
-            Capability::new(
-                "calculate".to_string(),
-                "Perform mathematical calculations".to_string(),
-                "builtin_calculate".to_string()
-            ).with_category("math".to_string())
-        )
-        self.register(
-            Capability::new(
-                "summarize".to_string(),
-                "Summarize text content".to_string(),
-                "builtin_summarize".to_string()
-            ).with_category("text".to_string())
-        )
-        self.register(
-            Capability::new(
-                "translate".to_string(),
-                "Translate text between languages".to_string(),
-                "builtin_translate".to_string()
-            ).with_category("text".to_string())
-        )
-        self.register(
-            Capability::new(
-                "code_generate".to_string(),
-                "Generate code from a description".to_string(),
-                "builtin_code_generate".to_string()
-            ).with_category("development".to_string())
-             .with_permission(Permission::UserApproval)
+
+    let mut last_mul_div = None
+    paren_depth = 0
+    for (index, ch) in expr.chars().enumerate():
+        match ch:
+            '(': paren_depth += 1
+            ')': paren_depth -= 1
+            '*' | '/' | '%' if paren_depth == 0:
+                last_mul_div = Some((index, ch))
+            _: ()
+
+    if let Some((position, operator)) = last_mul_div:
+        let left = eval_math_expr(&expr[..position])?
+        let right = eval_math_expr(&expr[position + 1..])?
+
+        return Some(match operator:
+            '*': left * right
+            '/': if right != 0.0 { left / right } else { return None }
+            '%': if right != 0.0 { left % right } else { return None }
+            _: return None
         )
 
-    /// Dispatch execution to handler functions
-    fn dispatch(&self, handler: &str, args: HashMap<String, Any>) -> CapabilityResult:
-        match handler:
-            "builtin_search" =>
-                return self.handle_search(args)
-            "builtin_calculate" =>
-                return self.handle_calculate(args)
-            "builtin_summarize" =>
-                return self.handle_summarize(args)
-            "builtin_translate" =>
-                return self.handle_translate(args)
-            "builtin_code_generate" =>
-                return self.handle_code_generate(args)
-            _ =>
-                return CapabilityResult::Error(format("Unknown handler: {}", handler))
+    if expr.starts_with('(') && expr.ends_with(')'):
+        return eval_math_expr(&expr[1..expr.len() - 1])
 
-    fn handle_search(&self, args: HashMap<String, Any>) -> CapabilityResult:
-        return CapabilityResult::Success("Search results placeholder")
+    if expr.starts_with("sqrt(") && expr.ends_with(')'):
+        let inner = eval_math_expr(&expr[5..expr.len() - 1])?
+        return Some(inner.sqrt())
 
-    fn handle_calculate(&self, args: HashMap<String, Any>) -> CapabilityResult:
-        return CapabilityResult::Success("Calculation result placeholder")
+    if expr.starts_with("abs(") && expr.ends_with(')'):
+        let inner = eval_math_expr(&expr[4..expr.len() - 1])?
+        return Some(inner.abs())
 
-    fn handle_summarize(&self, args: HashMap<String, Any>) -> CapabilityResult:
-        return CapabilityResult::Success("Summary placeholder")
+    if expr.starts_with("sin(") && expr.ends_with(')'):
+        let inner = eval_math_expr(&expr[4..expr.len() - 1])?
+        return Some(inner.sin())
 
-    fn handle_translate(&self, args: HashMap<String, Any>) -> CapabilityResult:
-        return CapabilityResult::Success("Translation placeholder")
+    if expr.starts_with("cos(") && expr.ends_with(')'):
+        let inner = eval_math_expr(&expr[4..expr.len() - 1])?
+        return Some(inner.cos())
 
-    fn handle_code_generate(&self, args: HashMap<String, Any>) -> CapabilityResult:
-        return CapabilityResult::Success("Generated code placeholder")
+    match expr:
+        "pi": return Some(3.14159265358979323846)
+        "e": return Some(2.71828182845904523536)
+        _: ()
 
-    /// Get count of registered capabilities
-    fn count(&self) -> usize:
-        return self.capabilities.len()
+    if expr.contains("**") || expr.contains("^"):
+        let parts = if expr.contains("**"):
+            expr.splitn(2, "**").collect::<Vec<_>>()
+        else:
+            expr.splitn(2, "^").collect::<Vec<_>>()
+
+        if parts.len() == 2:
+            let base = eval_math_expr(parts[0])?
+            let exponent = eval_math_expr(parts[1])?
+            return Some(base.powf(exponent))
+
+    None

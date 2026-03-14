@@ -1,18 +1,16 @@
-// HELIOS Framework - Service Layer
-// Application service managing lifecycle, configuration, requests, and metrics
+# HELIOS Canonical Service Layer
+# Service wrapper over the shared runtime and API surfaces
 
 module helios::service
 
 import core::collections::HashMap
-import core::logging as log
-import helios::cognitive::HeliosCognitive
-import config::default as cfg
+import core::io
+import core::thread
+import core::system
+import helios::api
+import helios::runtime as runtime
 
-// ============================================================================
-// Types
-// ============================================================================
 
-/// Service lifecycle state
 enum ServiceState:
     Stopped
     Starting
@@ -20,7 +18,7 @@ enum ServiceState:
     Stopping
     Error(message: String)
 
-/// An incoming request from a user or API
+
 struct Request:
     id: u64
     input: String
@@ -28,135 +26,142 @@ struct Request:
     timestamp: u64
     metadata: HashMap<String, String>
 
-/// Response returned by the service
+
 struct ServiceResponse:
     request_id: u64
     output: String
     status: String
     processing_time_ms: u64
 
-/// Service health information
+
 struct HealthStatus:
     state: ServiceState
     uptime_ms: u64
     requests_handled: u64
     memory_usage_mb: f64
 
-// ============================================================================
-// HELIOS Service
-// ============================================================================
 
-/// The main HELIOS service that wraps the cognitive engine.
-/// Manages lifecycle, request handling, configuration, and metrics.
+struct ServiceConfig:
+    name: String
+    api_port: u16
+    health_interval_ms: u64
+
+    fn default() -> ServiceConfig:
+        ServiceConfig:
+            name: "helios".to_string(),
+            api_port: 8765,
+            health_interval_ms: 1000
+
+    fn with_port(mut self, api_port: u16) -> ServiceConfig:
+        self.api_port = api_port
+        self
+
+
 struct HeliosService:
-    cognitive: HeliosCognitive
-    config: cfg::HeliosConfig
+    runtime: runtime::Helios
+    config: ServiceConfig
     state: ServiceState
     start_time: u64
     requests_handled: u64
     request_counter: u64
 
-    fn new(config: cfg::HeliosConfig) -> HeliosService:
-        log::info("Creating HeliosService")
-        return HeliosService {
-            cognitive: HeliosCognitive::new(),
-            config: config,
+    fn new(config: ServiceConfig) -> own HeliosService:
+        HeliosService:
+            runtime: runtime::Helios::open_default(),
+            config,
             state: ServiceState::Stopped,
             start_time: 0,
             requests_handled: 0,
             request_counter: 0
-        }
 
-    /// Start the service and all subsystems
+    fn default() -> own HeliosService:
+        HeliosService::new(ServiceConfig::default())
+
     fn start(&mut self):
-        log::info("Starting HELIOS service...")
+        if matches!(self.state, ServiceState::Running):
+            return
+
         self.state = ServiceState::Starting
-
-        // Initialize cognitive engine
-        log::info("Configuration: {}", self.config.name)
-        self.cognitive = HeliosCognitive::new()
-
         self.start_time = time::now_ms()
         self.state = ServiceState::Running
-        log::info("HELIOS service started successfully")
 
-    /// Stop the service gracefully, persisting state
     fn stop(&mut self):
-        log::info("Stopping HELIOS service...")
+        if matches!(self.state, ServiceState::Stopped):
+            return
+
         self.state = ServiceState::Stopping
-
-        // Consolidate memory before shutdown
-        self.cognitive.memory.consolidate()
-
-        // Persist memory to disk
-        if let Err(e) = self.cognitive.memory.save(&self.config.data_path):
-            log::error("Failed to save memory: {}", e)
-
+        self.runtime.stop()
         self.state = ServiceState::Stopped
-        log::info("HELIOS service stopped (handled {} requests)", self.requests_handled)
 
-    /// Handle an incoming request through the cognitive engine
     fn handle_request(&mut self, req: Request) -> ServiceResponse:
         let start = time::now_ms()
         self.request_counter += 1
-        log::debug("Handling request #{} from session {}", req.id, req.session_id)
 
-        // Verify service is running
-        if !matches!(self.state, ServiceState::Running):
-            return ServiceResponse {
+        if !self.is_healthy():
+            return ServiceResponse:
                 request_id: req.id,
                 output: "Service is not running".to_string(),
                 status: "error".to_string(),
                 processing_time_ms: 0
-            }
 
-        // Build cognitive input
-        let input = helios::cognitive::UserInput {
-            text: req.input,
-            session_id: req.session_id,
-            timestamp: req.timestamp,
-            metadata: req.metadata
-        }
-
-        // Process through cognitive engine
-        let response = self.cognitive.process_input(input)
+        let response = self.runtime.process_input(&req.input)
         self.requests_handled += 1
 
-        let elapsed = time::now_ms() - start
-        log::debug("Request #{} completed in {}ms (confidence: {:.2})",
-            req.id, elapsed, response.confidence)
-
-        return ServiceResponse {
+        ServiceResponse:
             request_id: req.id,
             output: response.text,
             status: "ok".to_string(),
-            processing_time_ms: elapsed
-        }
+            processing_time_ms: time::now_ms() - start
 
-    /// Get current service health status
     fn health(&self) -> HealthStatus:
-        let uptime = if self.start_time > 0:
+        let uptime_ms = if self.start_time > 0:
             time::now_ms() - self.start_time
         else:
             0
 
-        return HealthStatus {
+        HealthStatus:
             state: self.state.clone(),
-            uptime_ms: uptime,
+            uptime_ms,
             requests_handled: self.requests_handled,
             memory_usage_mb: system::memory_usage_mb()
-        }
 
-    /// Check if the service is healthy and running
     fn is_healthy(&self) -> bool:
-        return matches!(self.state, ServiceState::Running)
+        matches!(self.state, ServiceState::Running)
 
-    /// Total number of requests handled since start
     fn total_requests(&self) -> u64:
-        return self.requests_handled
+        self.requests_handled
 
-    /// Uptime in seconds
     fn uptime_seconds(&self) -> f64:
         if self.start_time == 0:
             return 0.0
-        return (time::now_ms() - self.start_time) as f64 / 1000.0
+
+        (time::now_ms() - self.start_time) as f64 / 1000.0
+
+    fn run_foreground(&mut self):
+        self.start()
+        io::println("HELIOS service '{}' running in foreground mode.", self.config.name)
+        io::println("Press Ctrl+C to stop.")
+
+        system::on_interrupt(|| {
+            io::println("\nInterrupt received. Shutting down HELIOS service...")
+            self.stop()
+        })
+
+        while self.is_healthy():
+            thread::sleep_ms(self.config.health_interval_ms as u32)
+
+    fn run_api(&mut self):
+        self.start()
+        io::println(
+            "HELIOS service '{}' listening on port {}.",
+            self.config.name,
+            self.config.api_port
+        )
+        api::run_server(&mut self.runtime, self.config.api_port as Int)
+        self.stop()
+
+
+fn run_as_service(service: &mut HeliosService):
+    let os_name = system::os().unwrap_or("unknown".to_string())
+    io::println("Starting HELIOS service on {}.", os_name)
+    service.run_api()

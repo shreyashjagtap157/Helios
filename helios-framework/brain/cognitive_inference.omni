@@ -200,7 +200,7 @@ struct CognitiveInferenceEngine:
         # Check for conflicts with existing knowledge
         var conflicts = Vec::new()
         for unit in &units:
-            if let Some(existing) = knowledge.find_similar(&unit.content, 0.9):
+            if let Some(existing) = knowledge.find_similar_content(&unit.content, 0.9):
                 if existing.content != unit.content:
                     conflicts.push(ConflictInfo:
                         new_info: unit.content.clone(),

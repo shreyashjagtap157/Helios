@@ -1,7 +1,0 @@
-arch=X86_64
-simd=Avx2
-cores=8
-memory=0
-gpu=false
-gc_mode=generational
-thread_count=8

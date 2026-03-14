@@ -67,10 +67,15 @@ Thumbs.db
 .DS_Store
 desktop.ini
 
-# Exclude markdown files except README and Claude
+# Exclude markdown files except README, Claude, docs, and status reports
 *.md
 !README.md
 !Claude.md
+!docs/*.md
+!IMPLEMENTATION_STATUS_REPORT.md
 
 # Exclude deployment scripts
 *.ps1
+
+# Legacy archives (too large for git)
+legacy/*.zip

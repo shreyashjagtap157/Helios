@@ -1,47 +1,74 @@
-// HELIOS Framework - Entry Point
-// Initializes and starts the HELIOS cognitive service
+# HELIOS Canonical Entry Point
+# Thin wrapper over the shared canonical HELIOS runtime
 
 module main
 
-import core::logging as log
-import helios::cognitive::HeliosCognitive
-import helios::service::{HeliosService, ServiceState}
-import helios::capability::CapabilityRegistry
-import brain::reasoning_engine::ReasoningEngine
-import brain::knowledge_graph::KnowledgeGraph
-import brain::memory_architecture::MemorySystem
-import brain::adaptive_learning::LearningEngine
-import safety::asimov::SafetyFramework
-import config::default::{HeliosConfig, load_config, default_config}
+import core::io
+import core::system
+import helios::service as service
+import helios::runtime as runtime
 
-/// HELIOS main entry point
+
 fn main():
-    log::info("=== HELIOS Cognitive Framework ===")
-    log::info("Version 0.1.0")
+    let args = system::args()
 
-    // Load configuration from file or fall back to defaults
-    let config = load_config("config/default.toml".to_string())
-    log::info("Configuration loaded: {}", config.name)
+    if args.contains("--service") || args.contains("--api"):
+        let mut svc = service::HeliosService::default()
+        svc.run_api()
+        return
 
-    // Create and start the service
-    let mut service = HeliosService::new(config)
-    service.start()
+    let mut helios = runtime::Helios::open_default()
 
-    log::info("HELIOS is ready.")
-    log::info("Listening on port {}", service.config.api_port)
+    if args.contains("--repl"):
+        run_repl(&mut helios)
+        helios.stop()
+        return
 
-    // Main service loop
+    if args.contains("--capabilities"):
+        io::println("{}", helios.capabilities_report())
+        helios.stop()
+        return
+
+    io::println("{}", helios.status_report())
+    helios.stop()
+
+
+fn run_repl(helios: &mut runtime::Helios):
+    io::println("HELIOS interactive mode")
+    io::println("Commands: help, status, capabilities, remember <subject>: <content>, verify <id> <reviewer>: <notes>, ask <topic>")
+    io::println("Built-ins: read <path>, ls [path], grep <path> <query>, find-files <dir> <pattern>, calc <expr>, quit")
+    io::println("")
+
     loop:
-        match service.health().state:
-            ServiceState::Running:
-                // Service is healthy — continue
-                thread::sleep(100)
-            ServiceState::Error(msg):
-                log::error("Service error: {}", msg)
-                break
-            _:
-                break
+        io::print("helios> ")
+        io::flush()
 
-    // Graceful shutdown
-    service.stop()
-    log::info("=== HELIOS shutdown complete ===")
+        let line = io::read_line().trim().to_string()
+        if line.is_empty():
+            continue
+
+        if line == "quit" || line == "exit":
+            break
+
+        if line == "help":
+            print_help()
+            continue
+
+        let response = helios.process_input(&line)
+        if !response.text.is_empty():
+            io::println("{}", response.text)
+
+
+fn print_help():
+    io::println("help")
+    io::println("status")
+    io::println("capabilities")
+    io::println("remember <subject>: <content>")
+    io::println("verify <id> <reviewer>: <notes>")
+    io::println("ask <topic>")
+    io::println("read <path>")
+    io::println("ls [path]")
+    io::println("grep <path> <query>")
+    io::println("find-files <directory> <pattern>")
+    io::println("calc <expression>")
+    io::println("quit")
