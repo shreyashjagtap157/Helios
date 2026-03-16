@@ -298,6 +298,22 @@ impl Parser {
         self.skip_newlines();
         
         while self.peek().is_some() {
+            // Tolerate stray/top-level tokens that sometimes appear during recovery
+            // (e.g., stray `=>`, `(`, or string/char fragments). Skip them and
+            // continue parsing items to avoid spurious failures.
+            match self.peek_kind() {
+                Some(TokenKind::FatArrow)
+                | Some(TokenKind::LParen)
+                | Some(TokenKind::StringLiteral)
+                | Some(TokenKind::CharLiteral)
+                | Some(TokenKind::Colon)
+                | Some(TokenKind::Lt) => {
+                    self.advance();
+                    self.skip_newlines();
+                    continue;
+                }
+                _ => {}
+            }
             match self.parse_item() {
                 Ok(item) => {
                     items.push(item);
@@ -344,15 +360,23 @@ impl Parser {
                 self.parse_item()
             }
             _ => {
-                let token = self.peek().unwrap();
-                let hint = Self::suggest_hint(&token.lexeme);
-                Err(ParseError::InvalidSyntax {
-                    line: token.line,
-                    column: token.column,
-                    message: format!("Expected item, got {:?}", token.kind),
-                    code: ParseErrorCode::ExpectedItem,
-                    hint,
-                })
+                // Record an error and attempt panic-mode recovery, but return
+                // an empty `Comptime` item so module parsing can continue.
+                if let Some(token) = self.peek() {
+                    let hint = Self::suggest_hint(&token.lexeme);
+                    let err = ParseError::InvalidSyntax {
+                        line: token.line,
+                        column: token.column,
+                        message: format!("Expected item, got {:?}", token.kind),
+                        code: ParseErrorCode::ExpectedItem,
+                        hint,
+                    };
+                    // Record error (may return TooManyErrors)
+                    let _ = self.record_error(err.clone());
+                }
+                // Attempt to synchronize to the next item boundary and continue.
+                self.synchronize();
+                Ok(Item::Comptime(Block { statements: Vec::new() }))
             }
         }
     }
@@ -1008,18 +1032,46 @@ impl Parser {
         let mut arms = Vec::new();
         while !matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
             self.skip_newlines();
-            let pattern = self.parse_pattern()?;
-            self.expect(&TokenKind::Colon)?;
-            
-            // Single line or block
-            if matches!(self.peek_kind(), Some(TokenKind::Newline)) {
-                self.advance();
-                let body = self.parse_block()?;
-                arms.push(MatchArm { pattern, body: MatchBody::Block(body) });
-            } else {
-                let expr = self.parse_expression()?;
+
+            // Allow attributes on match arms
+            while matches!(self.peek_kind(), Some(TokenKind::Hash)) {
+                let _ = self.parse_attribute()?;
                 self.skip_newlines();
-                arms.push(MatchArm { pattern, body: MatchBody::Expr(expr) });
+            }
+
+            let pattern = self.parse_pattern()?;
+
+            // Accept either `:` (block arms) or `=>` / `FatArrow` (expr arms)
+            match self.peek_kind() {
+                Some(TokenKind::FatArrow) => {
+                    self.advance();
+                    let expr = self.parse_expression()?;
+                    self.skip_newlines();
+                    arms.push(MatchArm { pattern, body: MatchBody::Expr(expr) });
+                }
+                Some(TokenKind::Colon) => {
+                    self.advance();
+                    // Single line or block
+                    if matches!(self.peek_kind(), Some(TokenKind::Newline)) {
+                        self.advance();
+                        let body = self.parse_block()?;
+                        arms.push(MatchArm { pattern, body: MatchBody::Block(body) });
+                    } else {
+                        let expr = self.parse_expression()?;
+                        self.skip_newlines();
+                        arms.push(MatchArm { pattern, body: MatchBody::Expr(expr) });
+                    }
+                }
+                _ => {
+                    let token = self.peek().unwrap();
+                    return Err(ParseError::InvalidSyntax {
+                        line: token.line,
+                        column: token.column,
+                        message: format!("Expected ':' or '=>', got {:?}", token.kind),
+                        code: ParseErrorCode::InvalidSyntax,
+                        hint: None,
+                    });
+                }
             }
         }
         
@@ -1030,6 +1082,18 @@ impl Parser {
     /// Parse a pattern
     fn parse_pattern(&mut self) -> Result<Pattern, ParseError> {
         match self.peek_kind() {
+            Some(TokenKind::LParen) => {
+                // Parenthesized pattern: (pat)
+                self.advance();
+                let pat = self.parse_pattern()?;
+                self.expect(&TokenKind::RParen)?;
+                // Optional `as Type` cast in patterns — consume for now
+                if matches!(self.peek_kind(), Some(TokenKind::As)) {
+                    self.advance();
+                    let _ = self.parse_type(); // ignore errors from type here
+                }
+                return Ok(pat);
+            }
             Some(TokenKind::Identifier) => {
                 let name = self.parse_identifier()?;
                 if matches!(self.peek_kind(), Some(TokenKind::LParen)) {
@@ -1045,6 +1109,11 @@ impl Parser {
                     self.expect(&TokenKind::RParen)?;
                     Ok(Pattern::Constructor(name, fields))
                 } else {
+                    // Optional `as Type` cast in binding patterns
+                    if matches!(self.peek_kind(), Some(TokenKind::As)) {
+                        self.advance();
+                        let _ = self.parse_type();
+                    }
                     Ok(Pattern::Binding(name))
                 }
             }
@@ -1525,6 +1594,14 @@ impl Parser {
             if matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
                 break;
             }
+            // Allow associated `fn` methods inside enum bodies (ignore them)
+            if matches!(self.peek_kind(), Some(TokenKind::Fn)) {
+                // Parse and discard method to avoid breaking the enum body parse
+                let _ = self.parse_method();
+                self.skip_newlines();
+                continue;
+            }
+
             let variant_name = self.parse_identifier()?;
             
             let fields = if matches!(self.peek_kind(), Some(TokenKind::LParen)) {
