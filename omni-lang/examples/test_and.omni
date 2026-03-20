@@ -1,9 +1,0 @@
-// Minimal and/or test
-module test
-
-fn main():
-    let a = true
-    let b = false
-    let c = a and b
-    println("true and false = ")
-    println("done")

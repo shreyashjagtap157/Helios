@@ -23,6 +23,7 @@ pub mod parser;
 pub mod runtime;
 pub mod semantic;
 pub mod brain;
+pub mod monitor;
 
 // Re-export key types
 pub use diagnostics::{

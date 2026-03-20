@@ -15,6 +15,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use crate::monitor;
 use crate::parser::ast;
 
 // ---------------------------------------------------------------------------
@@ -451,7 +452,9 @@ impl InferenceEngine {
         let mut env = TypeEnv::new();
 
         // -- First pass: collect struct definitions and function signatures --
-        for item in &module.items {
+        for item in module.items.iter() {
+            // Keep the monitor alive during module registration.
+            monitor::update_heartbeat();
             match item {
                 ast::Item::Struct(sdef) => {
                     self.register_struct(sdef);
@@ -475,7 +478,9 @@ impl InferenceEngine {
         }
 
         // -- Second pass: infer function bodies --
-        for item in &module.items {
+        for item in module.items.iter() {
+            // Keep the monitor alive during inference.
+            monitor::update_heartbeat();
             if let ast::Item::Function(func) = item {
                 self.infer_function(func, &mut env);
             }
@@ -1359,7 +1364,9 @@ impl InferenceEngine {
     fn solve_constraints(&mut self) {
         // Take constraints out so we can iterate without borrow conflicts
         let constraints = std::mem::take(&mut self.constraints);
-        for c in &constraints {
+        for c in constraints.iter() {
+            // Ensure the runtime monitor sees progress even for small constraint sets.
+            monitor::update_heartbeat();
             match c {
                 Constraint::Equal(t1, t2, origin) => {
                     let a = self.substitution.apply(t1);
@@ -1616,7 +1623,10 @@ impl InferenceEngine {
             .result
             .variable_types
             .iter()
-            .map(|(name, ty)| (name.clone(), self.substitution.apply(ty)))
+            .map(|(name, ty)| {
+                monitor::update_heartbeat();
+                (name.clone(), self.substitution.apply(ty))
+            })
             .collect();
         self.result.variable_types = var_types;
 
@@ -1624,7 +1634,10 @@ impl InferenceEngine {
             .result
             .function_types
             .iter()
-            .map(|(name, ty)| (name.clone(), self.substitution.apply(ty)))
+            .map(|(name, ty)| {
+                monitor::update_heartbeat();
+                (name.clone(), self.substitution.apply(ty))
+            })
             .collect();
         self.result.function_types = fn_types;
 
@@ -1633,9 +1646,13 @@ impl InferenceEngine {
             .struct_types
             .iter()
             .map(|(name, fields)| {
+                monitor::update_heartbeat();
                 let resolved_fields: Vec<(std::string::String, Type)> = fields
                     .iter()
-                    .map(|(fn_, ft)| (fn_.clone(), self.substitution.apply(ft)))
+                    .map(|(fn_, ft)| {
+                        monitor::update_heartbeat();
+                        (fn_.clone(), self.substitution.apply(ft))
+                    })
                     .collect();
                 (name.clone(), resolved_fields)
             })
@@ -1646,7 +1663,10 @@ impl InferenceEngine {
             .result
             .expr_types
             .iter()
-            .map(|(k, ty)| (k.clone(), self.substitution.apply(ty)))
+            .map(|(k, ty)| {
+                monitor::update_heartbeat();
+                (k.clone(), self.substitution.apply(ty))
+            })
             .collect();
         self.result.expr_types = expr_types;
     }

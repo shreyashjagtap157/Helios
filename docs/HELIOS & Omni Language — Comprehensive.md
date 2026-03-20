@@ -144,7 +144,7 @@ The `InformationUnit` is the single atomic container for all knowledge in HELIOS
 
 ```omni
 # Canonical InformationUnit — the sole knowledge atom
-struct InformationUnit:
+struct InformationUnit:ac
     # Identity
     id:               u64               # Globally unique, assigned at creation, never reused
     global_uuid:      [u8; 16]          # UUID v4, for cross-instance identity matching

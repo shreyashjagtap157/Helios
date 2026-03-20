@@ -10,6 +10,12 @@ mod semantic;
 mod ir;
 mod runtime;
 mod codegen;
+mod monitor;
+use sysinfo::{System, SystemExt, ProcessExt};
+use std::fs::File;
+// `pprof` is only available on Unix targets (native signal-based sampling).
+#[cfg(unix)]
+use pprof::ProfilerGuard;
 
 use clap::{Parser, ValueEnum};
 use std::path::PathBuf;
@@ -77,6 +83,10 @@ struct Args {
     #[arg(short, long)]
     verbose: bool,
 
+    /// Enable in-process runtime monitor (heartbeat, token/item counters)
+    #[arg(long)]
+    monitor: bool,
+
     /// Optimization level (0-3)
     #[arg(short = 'O', long, default_value = "2")]
     opt_level: u8,
@@ -112,6 +122,105 @@ fn main() -> Result<()> {
 
     log::info!("HELIOS Omni Compiler/Runtime v2.0.0 (Cognitive Framework)");
     log::info!("Target: {:?}", args.target);
+
+    // Ensure diagnostics directory exists and spawn a lightweight monitor thread when verbose mode is enabled.
+    let _ = std::fs::create_dir_all("diagnostics");
+    // Diagnostics files (monitor dumps, profiles) will be written into `diagnostics/`.
+    // The monitor logs process CPU and memory once per second so we can
+    // detect stalls, heavy allocations, and confirm the compiler is making
+    // forward progress at runtime without an external script.
+    // Spawn the monitor thread when `--monitor` is enabled. This monitor
+    // reads lightweight counters updated by the parser and logs a heartbeat.
+    let monitor_handle = if args.monitor {
+        monitor::enable();
+        Some(std::thread::spawn(|| {
+            // Create profiler guard for in-process sampling (keeps sampling while alive)
+            #[cfg(unix)]
+            let guard = ProfilerGuard::new(100).ok();
+            #[cfg(not(unix))]
+            let guard: Option<()> = None; // profiler not available on non-unix targets
+            let mut sys = System::new_all();
+            let pid = sysinfo::get_current_pid().unwrap_or_else(|_| sysinfo::Pid::from(0));
+            let mut prev_tokens = 0usize;
+            let mut prev_items = 0usize;
+            let mut prev_last = 0u64;
+            let mut stagnant_count = 0usize;
+            while monitor::enabled() {
+                // Snapshot internal counters
+                let (tokens, items, last) = monitor::snapshot();
+                // Sample OS-level process metrics when available
+                if cfg!(target_os = "windows") {
+                    sys.refresh_process(pid);
+                } else {
+                    sys.refresh_process(pid);
+                }
+                    if let Some(p) = sys.process(pid) {
+                        log::info!("monitor: tokens={} items={} cpu={:.2}% mem={} KB virt={} KB last_hb={}", tokens, items, p.cpu_usage(), p.memory(), p.virtual_memory(), last);
+                        // Detect stagnation: internal counters unchanged for several samples
+                        if tokens == prev_tokens && items == prev_items && last == prev_last {
+                            stagnant_count += 1;
+                        } else {
+                            stagnant_count = 0;
+                        }
+                        // If we've seen no internal progress for 8 seconds, write a dump
+                        if stagnant_count >= 8 {
+                            // include rich parser snapshot
+                            let (cur, preview, errors) = monitor::rich_snapshot();
+                            let dump = format!(
+                                "STALLED: tokens={} items={} cpu={:.2}% last_hb={} parser_cur={}\npreview:\n{}\nerrors:\n{}\n",
+                                tokens,
+                                items,
+                                p.cpu_usage(),
+                                last,
+                                cur,
+                                preview.join("\n"),
+                                errors.join("\n")
+                            );
+                            let fname = format!("diagnostics/monitor_stall_{}.log", chrono::Utc::now().format("%Y%m%dT%H%M%S"));
+                            let _ = std::fs::write(&fname, dump.as_bytes());
+                            log::warn!("monitor: detected stall; wrote {}", fname);
+                            // Also attempt to write an in-process CPU flamegraph snapshot if profiling is active
+                            #[cfg(unix)]
+                            {
+                                if let Some(g) = &guard {
+                                    if let Ok(report) = g.report().build() {
+                                        let fg_name = format!("diagnostics/monitor_flame_{}.svg", chrono::Utc::now().format("%Y%m%dT%H%M%S"));
+                                        match File::create(&fg_name) {
+                                            Ok(mut f) => {
+                                                if let Err(e) = report.flamegraph(&mut f) {
+                                                    log::error!("monitor: failed to write flamegraph {}: {}", fg_name, e);
+                                                } else {
+                                                    log::warn!("monitor: wrote flamegraph {}", fg_name);
+                                                }
+                                            }
+                                            Err(e) => {
+                                                log::error!("monitor: failed to create flamegraph file {}: {}", fg_name, e);
+                                            }
+                                        }
+                                    } else {
+                                        log::debug!("monitor: profiler report not ready yet");
+                                    }
+                                }
+                            }
+                            #[cfg(not(unix))]
+                            {
+                                log::debug!("monitor: in-process profiler not available on this platform (non-Unix)");
+                            }
+                            stagnant_count = 0; // reset after writing a dump
+                        }
+                        prev_tokens = tokens;
+                        prev_items = items;
+                        prev_last = last;
+                    } else {
+                        log::info!("monitor: tokens={} items={} process {} not found last_hb={}", tokens, items, std::process::id(), last);
+                    }
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+            log::info!("monitor: shutting down");
+        }))
+    } else {
+        None
+    };
 
     // Hardware detection for adaptive compilation
     if args.hardware_adaptive {
@@ -149,7 +258,11 @@ fn main() -> Result<()> {
         // Compilation pipeline
         compile(&source, &args)?;
     }
-
+    // If the monitor thread is running, signal it to stop and join.
+    if let Some(h) = monitor_handle {
+        monitor::disable();
+        let _ = h.join();
+    }
     Ok(())
 }
 
@@ -157,13 +270,17 @@ fn compile(source: &str, args: &Args) -> Result<()> {
     // Phase 1: Lexical analysis
     log::debug!("Phase 1: Lexical analysis");
     let tokens = lexer::tokenize(source)?;
+    // heartbeat: tokens produced
+    monitor::update_heartbeat();
     
     // Phase 2: Parsing
     log::debug!("Phase 2: Parsing");
+    monitor::update_heartbeat();
     let ast = parser::parse(tokens)?;
 
     // Phase 2.5: Type inference (fatal for concrete mismatches)
     log::debug!("Phase 2.5: Type inference");
+    monitor::update_heartbeat();
     let type_result = semantic::type_inference::check_types(&ast);
     match type_result {
         Ok(result) => {
@@ -195,6 +312,7 @@ fn compile(source: &str, args: &Args) -> Result<()> {
 
     // Phase 2.6: Borrow checking (warnings for ownership violations)
     log::debug!("Phase 2.6: Borrow checking");
+    monitor::update_heartbeat();
     let borrow_errors = semantic::borrow_check::BorrowChecker::check_module(&ast);
     if !borrow_errors.is_empty() {
         for e in &borrow_errors {
@@ -204,10 +322,12 @@ fn compile(source: &str, args: &Args) -> Result<()> {
 
     // Phase 3: Semantic analysis
     log::debug!("Phase 3: Semantic analysis");
+    monitor::update_heartbeat();
     let typed_ast = semantic::analyze(ast)?;
 
     // Phase 4: IR generation
     log::debug!("Phase 4: IR generation");
+    monitor::update_heartbeat();
     let omni_ir = ir::generate(typed_ast).map_err(|e| anyhow::anyhow!("{}", e))?;
     
     if args.emit_ir {
@@ -220,6 +340,7 @@ fn compile(source: &str, args: &Args) -> Result<()> {
 
     // Phase 5: Code generation with target selection
     log::debug!("Phase 5: Code generation (target: {:?})", args.target);
+    monitor::update_heartbeat();
     let output_path = args.output.clone()
         .unwrap_or_else(|| args.input.with_extension(""));
     

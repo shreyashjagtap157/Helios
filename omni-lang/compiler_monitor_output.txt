@@ -7,38 +7,33 @@ warning: value assigned to `executable` is never read
     = help: maybe it is overwritten before being read?
     = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
 
-warning: `omnc` (lib) generated 1 warning
-warning: unused import: `crate::semantic::constraints::*`
-  --> src\semantic\edge_cases.rs:11:5
+warning: value assigned to `pos` is never read
+   --> src\runtime\bytecode.rs:725:30
+    |
+725 |         let mut pos: usize = 0;
+    |                              ^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: unused import: `crate::parser::ast::Statement`
+    --> src\runtime\interpreter.rs:2078:13
+     |
+2078 |         use crate::parser::ast::Statement;
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `BinaryOp`
+    --> src\runtime\interpreter.rs:2177:54
+     |
+2177 |                 use crate::parser::ast::{Expression, BinaryOp};
+     |                                                      ^^^^^^^^
+
+warning: unused import: `CompiledFunction`
+  --> src\runtime\vm.rs:11:23
    |
-11 | use crate::semantic::constraints::*;
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
-
-warning: unused import: `HashSet`
- --> src\semantic\lifetimes.rs:9:33
-  |
-9 | use std::collections::{HashMap, HashSet};
-  |                                 ^^^^^^^
-
-warning: unused import: `std::collections::HashSet`
- --> src\semantic\properties.rs:8:5
-  |
-8 | use std::collections::HashSet;
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
-
-warning: unused import: `IrType`
- --> src\codegen\dwarf.rs:6:29
-  |
-6 | use crate::ir::{IrFunction, IrType};
-  |                             ^^^^^^
-
-warning: unused imports: `IrConst` and `IrValue`
-  --> src\codegen\exception_handling.rs:11:26
-   |
-11 | use crate::ir::{IrBlock, IrConst, IrFunction, IrInstruction, IrTerminator, IrType, IrValue};
-   |                          ^^^^^^^                                                   ^^^^^^^
+11 | use super::bytecode::{CompiledFunction, OpCode, OvmModule, Value};
+   |                       ^^^^^^^^^^^^^^^^
 
 warning: unused import: `std::collections::HashMap`
   --> src\codegen\exception_handling.rs:13:5
@@ -47,70 +42,10 @@ warning: unused import: `std::collections::HashMap`
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 warning: unused import: `IrBlock`
- --> src\codegen\gpu_advanced.rs:5:54
-  |
-5 | use crate::ir::{IrModule, IrFunction, IrInstruction, IrBlock, IrType};
-  |                                                      ^^^^^^^
-
-warning: unused import: `std::collections::HashMap`
- --> src\codegen\gpu_advanced.rs:6:5
-  |
-6 | use std::collections::HashMap;
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
-
-warning: unused import: `std::path::Path`
-  --> src\codegen\gpu_binary.rs:14:5
-   |
-14 | use std::path::Path;
-   |     ^^^^^^^^^^^^^^^
-
-warning: unused import: `warn`
-  --> src\codegen\gpu_binary.rs:15:24
-   |
-15 | use log::{debug, info, warn};
-   |                        ^^^^
-
-warning: unused import: `error`
-  --> src\codegen\gpu_dispatch.rs:18:30
-   |
-18 | use log::{debug, info, warn, error};
-   |                              ^^^^^
-
-warning: unused import: `IrBinOp`
- --> src\codegen\gpu_fusion.rs:6:72
-  |
-6 | use crate::ir::{IrModule, IrFunction, IrBlock, IrInstruction, IrValue, IrBinOp};
-  |                                                                        ^^^^^^^
-
-warning: unused import: `Stdio`
- --> src\codegen\gpu_hardware.rs:8:29
-  |
-8 | use std::process::{Command, Stdio};
-  |                             ^^^^^
-
-warning: unused imports: `Arc`, `Mutex`, and `RwLock`
-  --> src\codegen\jit.rs:16:17
-   |
-16 | use std::sync::{Arc, Mutex, RwLock};
-   |                 ^^^  ^^^^^  ^^^^^^
-
-warning: unused imports: `Command` and `Stdio`
- --> src\codegen\native_linker.rs:8:20
-  |
-8 | use std::process::{Command, Stdio};
-  |                    ^^^^^^^  ^^^^^
-
-warning: unused import: `IrBlock`
   --> src\codegen\native_codegen.rs:19:27
    |
 19 |     IrModule, IrFunction, IrBlock, IrInstruction, IrTerminator,
    |                           ^^^^^^^
-
-warning: unused import: `warn`
-  --> src\codegen\native_codegen.rs:24:24
-   |
-24 | use log::{debug, info, warn};
-   |                        ^^^^
 
 warning: unnecessary parentheses around assigned value
     --> src\codegen\native_codegen.rs:1322:29
@@ -137,43 +72,19 @@ help: remove these parentheses
 1325 +                     word |= rel as u32 & 0x3FFFFFF;
      |
 
-warning: unused import: `Architecture`
-  --> src\codegen\native_extended.rs:10:45
-   |
-10 | use crate::codegen::native_codegen::{AluOp, Architecture, MachineInst};
-   |                                             ^^^^^^^^^^^^
-
-warning: unused imports: `IrBinOp`, `IrBlock`, `IrConst`, `IrFunction`, `IrInstruction`, `IrTerminator`, `IrType`, and `IrValue`
+warning: unused imports: `IrFunction`, `IrInstruction`, `IrTerminator`, `IrType`, and `IrValue`
   --> src\codegen\native_extended.rs:12:5
    |
-12 |     IrBinOp, IrBlock, IrConst, IrFunction, IrInstruction, IrTerminator, IrType, IrValue,
-   |     ^^^^^^^  ^^^^^^^  ^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^^^^^  ^^^^^^  ^^^^^^^
-
-warning: unused import: `debug`
-  --> src\codegen\native_extended.rs:14:11
-   |
-14 | use log::{debug, info};
-   |           ^^^^^
-
-warning: unused import: `trace`
- --> src\codegen\opt\licm.rs:4:18
-  |
-4 | use log::{debug, trace};
-  |                  ^^^^^
-
-warning: unused variable: `scope_to_exit`
-  --> src\semantic\borrow_check.rs:53:13
-   |
-53 |         let scope_to_exit = self.current_scope;
-   |             ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_scope_to_exit`
-   |
-   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+12 |     IrFunction, IrInstruction, IrTerminator, IrType, IrValue,
+   |     ^^^^^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^^^^^  ^^^^^^  ^^^^^^^
 
 warning: unused variable: `base_type`
    --> src\semantic\constraints.rs:212:9
     |
 212 |         base_type: &InferenceType,
     |         ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_base_type`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
 
 warning: unused variable: `trait_name`
    --> src\semantic\constraints.rs:287:44
@@ -182,21 +93,21 @@ warning: unused variable: `trait_name`
     |                                            ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_trait_name`
 
 warning: unused variable: `args`
-  --> src\semantic\edge_cases.rs:56:33
+  --> src\semantic\edge_cases.rs:55:33
    |
-56 |             Type::Generic(name, args) => {
+55 |             Type::Generic(name, args) => {
    |                                 ^^^^ help: if this is intentional, prefix it with an underscore: `_args`
 
 warning: unused variable: `trait_bounds`
-  --> src\semantic\edge_cases.rs:74:9
+  --> src\semantic\edge_cases.rs:73:9
    |
-74 |         trait_bounds: &[String],
+73 |         trait_bounds: &[String],
    |         ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_trait_bounds`
 
 warning: variable does not need to be mutable
-   --> src\semantic\edge_cases.rs:101:13
+   --> src\semantic\edge_cases.rs:100:13
     |
-101 |         let mut result = base_type.clone();
+100 |         let mut result = base_type.clone();
     |             ----^^^^^^
     |             |
     |             help: remove this `mut`
@@ -204,27 +115,27 @@ warning: variable does not need to be mutable
     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
 
 warning: unused variable: `generic`
-   --> src\semantic\edge_cases.rs:104:17
+   --> src\semantic\edge_cases.rs:103:17
     |
-104 |         for (i, generic) in generics.iter().enumerate() {
+103 |         for (i, generic) in generics.iter().enumerate() {
     |                 ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_generic`
 
 warning: unused variable: `type_var_name`
-   --> src\semantic\edge_cases.rs:105:17
+   --> src\semantic\edge_cases.rs:104:17
     |
-105 |             let type_var_name = format!("T{}", i);
+104 |             let type_var_name = format!("T{}", i);
     |                 ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_type_var_name`
 
 warning: unused variable: `lifetime`
-   --> src\semantic\edge_cases.rs:177:9
+   --> src\semantic\edge_cases.rs:176:9
     |
-177 |         lifetime: &str,
+176 |         lifetime: &str,
     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_lifetime`
 
 warning: unused variable: `container`
-   --> src\semantic\properties.rs:307:5
+   --> src\semantic\properties.rs:306:5
     |
-307 |     container: &PropertyContainer,
+306 |     container: &PropertyContainer,
     |     ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_container`
 
 warning: unused variable: `ty`
@@ -233,50 +144,95 @@ warning: unused variable: `ty`
 288 |         ty: &Type,
     |         ^^ help: if this is intentional, prefix it with an underscore: `_ty`
 
-warning: unused variable: `expr`
-    --> src\semantic\mod.rs:1293:43
+warning: unused variable: `elem`
+    --> src\semantic\type_inference.rs:1272:26
      |
-1293 |                     Statement::Expression(expr) => {
+1272 |             (Type::Array(elem), "map") => {
+     |                          ^^^^ help: if this is intentional, prefix it with an underscore: `_elem`
+
+warning: unused variable: `name`
+    --> src\semantic\type_inference.rs:1317:39
+     |
+1317 |             ast::Pattern::Constructor(name, sub_pats) => {
+     |                                       ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `e`
+    --> src\semantic\type_inference.rs:1382:40
+     |
+1382 | ...                   if let Err(e) = self.unify(&resolved_field_ty, ft) {
+     |                                  ^ help: if this is intentional, prefix it with an underscore: `_e`
+
+warning: unused variable: `e`
+    --> src\semantic\type_inference.rs:1390:44
+     |
+1390 | ...                   if let Err(e) = self.unify(&resolved_field_ty, ft) {
+     |                                  ^ help: if this is intentional, prefix it with an underscore: `_e`
+
+warning: unused variable: `e`
+    --> src\semantic\type_inference.rs:1412:36
+     |
+1412 |                         if let Err(e) = self.unify(&resolved_ret, ret_ty) {
+     |                                    ^ help: if this is intentional, prefix it with an underscore: `_e`
+
+warning: unused variable: `err`
+    --> src\semantic\type_inference.rs:1432:44
+     |
+1432 | ...                   if let Err(err) = self.unify(&a, &e) {
+     |                                  ^^^ help: if this is intentional, prefix it with an underscore: `_err`
+
+warning: unused variable: `expr`
+    --> src\semantic\mod.rs:1296:43
+     |
+1296 |                     Statement::Expression(expr) => {
      |                                           ^^^^ help: if this is intentional, prefix it with an underscore: `_expr`
 
 warning: unused variable: `type_param`
-    --> src\semantic\mod.rs:2153:46
+    --> src\semantic\mod.rs:2157:46
      |
-2153 |     fn check_generic_trait_bounds(&mut self, type_param: &str, bounds: &[String], concrete_type: &Type) -> Result<(), SemanticError> {
+2157 |     fn check_generic_trait_bounds(&mut self, type_param: &str, bounds: &[String], concrete_type: &Type) -> Result<(), SemanticError> {
      |                                              ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_type_param`
 
 warning: unused variable: `e`
-    --> src\semantic\mod.rs:2194:23
+    --> src\semantic\mod.rs:2198:23
      |
-2194 |             .map_err(|e| SemanticError::MoveError { name: name.to_string() })?;
+2198 |             .map_err(|e| SemanticError::MoveError { name: name.to_string() })?;
      |                       ^ help: if this is intentional, prefix it with an underscore: `_e`
 
 warning: variable does not need to be mutable
-    --> src\semantic\mod.rs:2265:21
+    --> src\semantic\mod.rs:2269:21
      |
-2265 |                 let mut substitutor = StatementSubstitutor::new(subst.clone());
+2269 |                 let mut substitutor = StatementSubstitutor::new(subst.clone());
      |                     ----^^^^^^^^^^^
      |                     |
      |                     help: remove this `mut`
 
 warning: unused variable: `bounds`
-    --> src\semantic\mod.rs:2217:72
+    --> src\semantic\mod.rs:2221:72
      |
-2217 |         let bounds_to_check: Vec<(String, String, Type)> = if let Some(bounds) = self.generic_bounds.get(func_name) {
+2221 |         let bounds_to_check: Vec<(String, String, Type)> = if let Some(bounds) = self.generic_bounds.get(func_name) {
      |                                                                        ^^^^^^ help: if this is intentional, prefix it with an underscore: `_bounds`
 
-warning: variable does not need to be mutable
-   --> src\runtime\mod.rs:119:21
+warning: value assigned to `pos` is never read
+   --> src\runtime\bytecode.rs:725:30
     |
-119 |                 let mut dummy_func = crate::ir::IrFunction {
+725 |         let mut pos: usize = 0;
+    |                              ^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> src\runtime\mod.rs:122:21
+    |
+122 |                 let mut dummy_func = crate::ir::IrFunction {
     |                     ----^^^^^^^^^^
     |                     |
     |                     help: remove this `mut`
 
 warning: unused variable: `source`
-   --> src\runtime\mod.rs:112:23
+   --> src\runtime\mod.rs:115:23
     |
-112 |             if let Ok(source) = std::fs::read_to_string(&change.path) {
+115 |             if let Ok(source) = std::fs::read_to_string(&change.path) {
     |                       ^^^^^^ help: if this is intentional, prefix it with an underscore: `_source`
 
 warning: unused variable: `funcs`
@@ -312,21 +268,21 @@ warning: unused variable: `bi`
     |                  ^^ help: if this is intentional, prefix it with an underscore: `_bi`
 
 warning: unused variable: `compute_capability`
-   --> src\codegen\gpu_advanced.rs:235:9
+   --> src\codegen\gpu_advanced.rs:234:9
     |
-235 |         compute_capability: (u32, u32),
+234 |         compute_capability: (u32, u32),
     |         ^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_compute_capability`
 
 warning: unused variable: `dest`
-   --> src\codegen\gpu_binary.rs:142:44
+   --> src\codegen\gpu_binary.rs:141:44
     |
-142 |                     IrInstruction::BinOp { dest, op, left, right } => {
+141 |                     IrInstruction::BinOp { dest, op, left, right } => {
     |                                            ^^^^ help: try ignoring the field: `dest: _`
 
 warning: unused variable: `dest`
-   --> src\codegen\gpu_binary.rs:150:43
+   --> src\codegen\gpu_binary.rs:149:43
     |
-150 |                     IrInstruction::Load { dest, ptr, ty } => {
+149 |                     IrInstruction::Load { dest, ptr, ty } => {
     |                                           ^^^^ help: try ignoring the field: `dest: _`
 
 warning: unused variable: `kernel`
@@ -430,6 +386,14 @@ warning: unused variable: `max_ic`
      |
 1293 |         let max_ic = config.max_ic_entries;
      |             ^^^^^^ help: if this is intentional, prefix it with an underscore: `_max_ic`
+
+warning: value assigned to `executable` is never read
+   --> src\codegen\native_linker.rs:784:30
+    |
+784 |         let mut executable = Vec::new();
+    |                              ^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
 
 warning: unused variable: `incoming`
    --> src\codegen\native_codegen.rs:825:47
@@ -550,5 +514,7 @@ help: use `'_` for type paths
 253 |     fn get_symbol<T>(&self, name: &[u8]) -> Result<Symbol<'_, T>, String> {
     |                                                           +++
 
-warning: `omnc` (bin "omnc") generated 85 warnings (1 duplicate) (run `cargo fix --bin "omnc" -p omnc` to apply 75 suggestions)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.80s
+[2026-03-17T05:52:42Z INFO  omnc] HELIOS Omni Compiler/Runtime v2.0.0 (Cognitive Framework)
+[2026-03-17T05:52:42Z INFO  omnc] Target: Ovm
+[2026-03-17T05:52:42Z INFO  omnc] Compiling: "..\\..\\omni\\compiler\\main.omni"
+Error: The system cannot find the path specified. (os error 3)

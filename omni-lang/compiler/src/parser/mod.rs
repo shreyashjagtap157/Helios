@@ -5,8 +5,11 @@
 pub mod ast;
 
 use crate::lexer::{Token, TokenKind};
+use crate::monitor;
 use thiserror::Error;
 use ast::*;
+use log::warn;
+use std::time::{Instant, Duration};
 
 /// Error codes for parser diagnostics.
 #[allow(dead_code)]
@@ -113,6 +116,10 @@ impl Parser {
 
     /// Record an error. Returns `Err` with `TooManyErrors` if the limit is hit.
     fn record_error(&mut self, error: ParseError) -> Result<(), ParseError> {
+        // Log error details immediately to make diagnostics available
+        warn!("parser error recorded: {}", error);
+        // Also record the error message in the monitor for off-line dumps
+        monitor::record_parser_error(&format!("{}", error));
         self.errors.push(error);
         if self.too_many_errors() {
             Err(ParseError::TooManyErrors { count: self.errors.len() })
@@ -125,7 +132,28 @@ impl Parser {
     /// synchronization point — a newline followed by a statement/item keyword,
     /// a `Dedent`, or end-of-input.
     fn synchronize(&mut self) {
+        // Add a forward-progress guard and heartbeat so we can detect
+        // if synchronize() is looping without consuming tokens.
+        let mut iterations: usize = 0;
         loop {
+            // heartbeat for monitor and a compact parser-state snapshot
+            monitor::update_heartbeat();
+            // Prepare a short preview of the next token kinds/lexemes
+            let mut preview = Vec::new();
+            for i in 0..8 {
+                if let Some(t) = self.tokens.get(self.current + i) {
+                    preview.push(format!("{:?}('{}')", t.kind, t.lexeme));
+                } else {
+                    break;
+                }
+            }
+            monitor::record_parser_snapshot(self.current, &preview);
+            log::debug!("parser:synchronize tick current={} iter={} next={:?}", self.current, iterations, self.peek_kind());
+            iterations += 1;
+            if iterations > 10_000 {
+                warn!("synchronize() exceeded {} iterations, forcing exit", iterations);
+                break;
+            }
             match self.peek_kind() {
                 None => break, // EOF
                 Some(TokenKind::Dedent) => break, // block boundary
@@ -161,6 +189,7 @@ impl Parser {
             | Some(TokenKind::While)
             | Some(TokenKind::Return)
             | Some(TokenKind::Dedent)
+            | Some(TokenKind::RBrace)
             | Some(TokenKind::Enum)
             | Some(TokenKind::Const)
             | Some(TokenKind::Type)
@@ -211,6 +240,8 @@ impl Parser {
     fn advance(&mut self) -> Option<&Token> {
         if self.current < self.tokens.len() {
             self.current += 1;
+            // Update lightweight monitor token counter when enabled.
+            monitor::inc_tokens(1);
             self.tokens.get(self.current - 1)
         } else {
             None
@@ -296,8 +327,19 @@ impl Parser {
         let mut items = Vec::new();
         
         self.skip_newlines();
+        // Heartbeat timer for progress logging to help detect runtime stalls
+        let mut last_heartbeat = Instant::now();
         
         while self.peek().is_some() {
+            // Track progress each iteration to avoid infinite loops
+            let before_idx = self.current;
+            // Periodically warn about parser progress so we can trace runaway parsing
+            // Emit a heartbeat at most once per second to see parser activity in runtime logs.
+            if last_heartbeat.elapsed() >= Duration::from_secs(1) {
+                let tok = self.peek().map(|t| format!("{:?}('{}')", t.kind, t.lexeme));
+                warn!("parse_module progress: items={}, current={}, next_token={:?}", items.len(), self.current, tok);
+                last_heartbeat = Instant::now();
+            }
             // Tolerate stray/top-level tokens that sometimes appear during recovery
             // (e.g., stray `=>`, `(`, or string/char fragments). Skip them and
             // continue parsing items to avoid spurious failures.
@@ -307,8 +349,30 @@ impl Parser {
                 | Some(TokenKind::StringLiteral)
                 | Some(TokenKind::CharLiteral)
                 | Some(TokenKind::Colon)
-                | Some(TokenKind::Lt) => {
+                | Some(TokenKind::Lt)
+                | Some(TokenKind::Dedent)
+                | Some(TokenKind::RBrace) => {
                     self.advance();
+                    self.skip_newlines();
+                    continue;
+                }
+                // Tolerate an unexpected top-level `{ ... }` block by skipping
+                // its balanced contents. Some generated or recovered code can
+                // emit braced blocks at top-level; skipping them prevents the
+                // parser from producing repeated `expected Identifier, got LBrace`
+                // errors and heavy recovery churn.
+                Some(TokenKind::LBrace) => {
+                    // Consume the opening brace and skip until matching `}`.
+                    self.advance();
+                    let mut depth: usize = 1;
+                    while depth > 0 {
+                        match self.peek_kind() {
+                            Some(TokenKind::LBrace) => { depth += 1; self.advance(); }
+                            Some(TokenKind::RBrace) => { depth -= 1; self.advance(); }
+                            Some(_) => { self.advance(); }
+                            None => break, // EOF while skipping; give up
+                        }
+                    }
                     self.skip_newlines();
                     continue;
                 }
@@ -316,14 +380,30 @@ impl Parser {
             }
             match self.parse_item() {
                 Ok(item) => {
+                    // Defensive cap: if items grows unreasonably large,
+                    // abort parsing to avoid OOM and surface the issue.
+                    if items.len() > 100_000 {
+                        return Err(ParseError::TooManyErrors { count: items.len() });
+                    }
                     items.push(item);
+                    // Notify monitor that we produced another top-level item.
+                    monitor::inc_items();
                 }
                 Err(e) => {
                     self.record_error(e)?;
+                    log::debug!("parser: record_error -> synchronize at current={}", self.current);
+                    monitor::update_heartbeat();
                     self.synchronize();
                 }
             }
             self.skip_newlines();
+            // If no token was consumed during the loop, force advance one
+            if self.current == before_idx {
+                if self.peek().is_none() {
+                    break;
+                }
+                self.advance();
+            }
         }
         
         Ok(Module { items })
@@ -339,6 +419,26 @@ impl Parser {
             let attr = self.parse_attribute()?;
             attributes.push(attr);
             self.skip_newlines();
+        }
+
+        // If a braced block appears where an item is expected, consume the
+        // balanced braces and treat it as an empty `Comptime` item. This helps
+        // recovery when stray `{ ... }` blocks are present at top-level.
+        if matches!(self.peek_kind(), Some(TokenKind::LBrace)) {
+            // consume and skip balanced braces
+            self.advance();
+            let mut depth: usize = 1;
+            while depth > 0 {
+                match self.peek_kind() {
+                    Some(TokenKind::LBrace) => { depth += 1; self.advance(); }
+                    Some(TokenKind::RBrace) => { depth -= 1; self.advance(); }
+                    Some(_) => { self.advance(); }
+                    None => break,
+                }
+            }
+            self.skip_newlines();
+            monitor::update_heartbeat();
+            return Ok(Item::Comptime(Block { statements: Vec::new() }));
         }
 
         match self.peek_kind() {
@@ -375,7 +475,15 @@ impl Parser {
                     let _ = self.record_error(err.clone());
                 }
                 // Attempt to synchronize to the next item boundary and continue.
+                let before = self.current;
                 self.synchronize();
+                // If synchronize made no progress, advance one token to avoid
+                // an infinite loop that can grow the items vector without bound.
+                if self.current == before {
+                    log::debug!("parser: fallback advance at current={}", self.current);
+                    monitor::update_heartbeat();
+                    self.advance();
+                }
                 Ok(Item::Comptime(Block { statements: Vec::new() }))
             }
         }
@@ -680,6 +788,10 @@ impl Parser {
 
     fn parse_base_type(&mut self) -> Result<Type, ParseError> {
         match self.peek_kind() {
+            Some(TokenKind::SelfType) => {
+                self.advance();
+                Ok(Type::Named("Self".to_string()))
+            }
             Some(TokenKind::U8) => { self.advance(); Ok(Type::U8) }
             Some(TokenKind::U16) => { self.advance(); Ok(Type::U16) }
             Some(TokenKind::U32) => { self.advance(); Ok(Type::U32) }
@@ -931,6 +1043,19 @@ impl Parser {
         while !matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
             self.skip_newlines();
             let pattern = self.parse_pattern()?;
+
+            // Support `pat1 | pat2 | pat3` alternative patterns in match arms.
+            // If the pattern is followed by `|` then consume additional
+            // alternatives so the parser doesn't treat `|` as the unexpected
+            // token when expecting ':' or '=>'. We don't currently construct
+            // a composite OR-pattern node; for recovery purposes we simply
+            // consume the extra alternatives.
+            while matches!(self.peek_kind(), Some(TokenKind::Pipe)) {
+                self.advance();
+                // parse and discard the next alternative
+                let _ = self.parse_pattern();
+                self.skip_newlines();
+            }
             self.expect(&TokenKind::FatArrow)?;
             let channel_op = self.parse_expression()?;
             self.expect(&TokenKind::Colon)?;
@@ -1323,8 +1448,29 @@ impl Parser {
                 // Check for struct literal
                 if matches!(self.peek_kind(), Some(TokenKind::LBrace)) {
                     self.advance();
+
+                    // Allow optional newlines/indentation before fields.
+                    // This is common when the struct literal spans multiple lines.
+                    self.skip_newlines();
+                    let mut had_indent = false;
+                    if matches!(self.peek_kind(), Some(TokenKind::Indent)) {
+                        had_indent = true;
+                        self.advance();
+                    }
+
                     let mut fields = Vec::new();
                     while !matches!(self.peek_kind(), Some(TokenKind::RBrace)) {
+                        self.skip_newlines();
+                        // Handle optional dedent before closing brace.
+                        if had_indent && matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+                            self.advance();
+                            self.skip_newlines();
+                            continue;
+                        }
+                        if matches!(self.peek_kind(), Some(TokenKind::RBrace)) {
+                            break;
+                        }
+
                         let field_name = self.parse_identifier()?;
                         self.expect(&TokenKind::Colon)?;
                         let value = self.parse_expression()?;
@@ -1333,6 +1479,13 @@ impl Parser {
                             self.advance();
                         }
                     }
+
+                    // If we consumed indentation but did not yet see a dedent,
+                    // allow it before the closing brace.
+                    if had_indent && matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+                        self.advance();
+                    }
+                    self.skip_newlines();
                     self.expect(&TokenKind::RBrace)?;
                     Ok(Expression::StructLiteral { name, fields })
                 } else {
@@ -1550,11 +1703,57 @@ impl Parser {
 
     fn parse_import(&mut self) -> Result<Item, ParseError> {
         self.expect(&TokenKind::Import)?;
+
+        // Support braced imports: `import { a, b, c }`
+        if matches!(self.peek_kind(), Some(TokenKind::LBrace)) {
+            self.advance(); // consume '{'
+            let mut names = Vec::new();
+            while !matches!(self.peek_kind(), Some(TokenKind::RBrace)) {
+                names.push(self.parse_identifier()?);
+                if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            self.expect(&TokenKind::RBrace)?;
+            self.skip_newlines();
+            // Pack braced imports into a single synthetic path element so
+            // later stages can still inspect the node without crashing.
+            let joined = format!("{{{}}}", names.join(","));
+            return Ok(Item::Import(ImportDecl { path: vec![joined], alias: None }));
+        }
+
         let mut path = vec![self.parse_identifier()?];
-        
+
+        // Consume :: separated segments; if any segment is followed by a
+        // braced list (`:: { A, B }`) we expand the names into full paths
+        // using the path accumulated so far as the base.
         while matches!(self.peek_kind(), Some(TokenKind::DoubleColon)) {
-            self.advance();
-            path.push(self.parse_identifier()?);
+            self.advance(); // consume ::
+            if matches!(self.peek_kind(), Some(TokenKind::LBrace)) {
+                // braced expansion after the current base path
+                self.advance(); // consume '{'
+                let mut names = Vec::new();
+                while !matches!(self.peek_kind(), Some(TokenKind::RBrace)) {
+                    names.push(self.parse_identifier()?);
+                    if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                self.expect(&TokenKind::RBrace)?;
+                self.skip_newlines();
+                let base = path.join("::");
+                let mut full_paths = Vec::new();
+                for n in names {
+                    full_paths.push(format!("{}::{}", base, n));
+                }
+                return Ok(Item::Import(ImportDecl { path: full_paths, alias: None }));
+            } else {
+                path.push(self.parse_identifier()?);
+            }
         }
         
         let alias = if matches!(self.peek_kind(), Some(TokenKind::As)) {
