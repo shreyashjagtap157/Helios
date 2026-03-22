@@ -79,3 +79,4 @@ desktop.ini
 
 # Legacy archives (too large for git)
 legacy/*.zip
+.gitnexus
