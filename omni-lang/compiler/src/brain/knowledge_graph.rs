@@ -2,8 +2,8 @@
 //!
 //! Supports: Dijkstra shortest path, cycle detection, forward-chaining rule inference.
 
-use std::collections::{HashMap, HashSet, BinaryHeap};
 use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashMap, HashSet};
 
 /// A weighted directed knowledge graph.
 #[derive(Debug, Clone)]
@@ -28,7 +28,10 @@ impl Eq for DijkstraState {}
 impl Ord for DijkstraState {
     fn cmp(&self, other: &Self) -> Ordering {
         // Reverse ordering for min-heap
-        other.cost.partial_cmp(&self.cost).unwrap_or(Ordering::Equal)
+        other
+            .cost
+            .partial_cmp(&self.cost)
+            .unwrap_or(Ordering::Equal)
     }
 }
 
@@ -50,7 +53,9 @@ impl KnowledgeGraph {
 
     /// Add a node to the graph.
     pub fn add_node(&mut self, name: &str) {
-        self.adjacency.entry(name.to_string()).or_insert_with(Vec::new);
+        self.adjacency
+            .entry(name.to_string())
+            .or_insert_with(Vec::new);
     }
 
     /// Add a weighted directed edge from `from` to `to`.
@@ -163,22 +168,20 @@ impl KnowledgeGraph {
 
     /// Add a fact (predicate, subject) to the knowledge base.
     pub fn add_fact(&mut self, predicate: &str, subject: &str) {
-        self.facts.insert((predicate.to_string(), subject.to_string()));
+        self.facts
+            .insert((predicate.to_string(), subject.to_string()));
     }
 
     /// Check if a fact exists.
     pub fn has_fact(&self, predicate: &str, subject: &str) -> bool {
-        self.facts.contains(&(predicate.to_string(), subject.to_string()))
+        self.facts
+            .contains(&(predicate.to_string(), subject.to_string()))
     }
 
     /// Add a forward-chaining rule.
     /// premises: list of (predicate, variable) pairs — variables start with "?"
     /// conclusion: (predicate, variable) pair
-    pub fn add_rule(
-        &mut self,
-        premises: Vec<(&str, &str)>,
-        conclusion: (&str, &str),
-    ) {
+    pub fn add_rule(&mut self, premises: Vec<(&str, &str)>, conclusion: (&str, &str)) {
         let premises_owned: Vec<(String, String)> = premises
             .into_iter()
             .map(|(p, v)| (p.to_string(), v.to_string()))
@@ -207,17 +210,13 @@ impl KnowledgeGraph {
                 if variables.len() == 1 {
                     let var_name = variables.into_iter().next().unwrap();
                     // Find all subjects that match ALL premises for this variable
-                    let all_subjects: HashSet<&str> = self
-                        .facts
-                        .iter()
-                        .map(|(_, s)| s.as_str())
-                        .collect();
+                    let all_subjects: HashSet<&str> =
+                        self.facts.iter().map(|(_, s)| s.as_str()).collect();
 
                     for subject in &all_subjects {
                         let all_match = premises.iter().all(|(pred, v)| {
                             if v.starts_with('?') {
-                                self.facts
-                                    .contains(&(pred.clone(), subject.to_string()))
+                                self.facts.contains(&(pred.clone(), subject.to_string()))
                             } else {
                                 self.facts.contains(&(pred.clone(), v.clone()))
                             }
@@ -336,10 +335,7 @@ mod tests {
         graph.add_fact("bird", "Tweety");
         graph.add_fact("has_wings", "Tweety");
         // Rule: bird(X) ∧ has_wings(X) → can_fly(X)
-        graph.add_rule(
-            vec![("bird", "?X"), ("has_wings", "?X")],
-            ("can_fly", "?X"),
-        );
+        graph.add_rule(vec![("bird", "?X"), ("has_wings", "?X")], ("can_fly", "?X"));
         let derived = graph.forward_chain(10);
         assert!(
             derived.contains(&"can_fly(Tweety)".to_string()),
@@ -353,12 +349,12 @@ mod tests {
         let mut graph = KnowledgeGraph::new();
         graph.add_fact("bird", "Tweety");
         // Rule requires has_wings too, but Tweety doesn't have it
-        graph.add_rule(
-            vec![("bird", "?X"), ("has_wings", "?X")],
-            ("can_fly", "?X"),
-        );
+        graph.add_rule(vec![("bird", "?X"), ("has_wings", "?X")], ("can_fly", "?X"));
         let derived = graph.forward_chain(10);
-        assert!(derived.is_empty(), "No derivation should occur without all premises");
+        assert!(
+            derived.is_empty(),
+            "No derivation should occur without all premises"
+        );
     }
 
     #[test]
@@ -372,10 +368,7 @@ mod tests {
             ("pet", "?X"),
         );
         // Rule 2: pet(X) → needs_care(X)  (requires pet to be derived first)
-        graph.add_rule(
-            vec![("pet", "?X")],
-            ("needs_care", "?X"),
-        );
+        graph.add_rule(vec![("pet", "?X")], ("needs_care", "?X"));
         let derived = graph.forward_chain(10);
         assert!(derived.contains(&"pet(Fido)".to_string()));
         assert!(derived.contains(&"needs_care(Fido)".to_string()));

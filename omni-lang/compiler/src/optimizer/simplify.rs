@@ -270,9 +270,7 @@ fn exprs_equal(a: &Expression, b: &Expression) -> bool {
     match (a, b) {
         (Expression::Identifier(x), Expression::Identifier(y)) => x == y,
         (Expression::Literal(Literal::Int(x)), Expression::Literal(Literal::Int(y))) => x == y,
-        (Expression::Literal(Literal::Float(x)), Expression::Literal(Literal::Float(y))) => {
-            x == y
-        }
+        (Expression::Literal(Literal::Float(x)), Expression::Literal(Literal::Float(y))) => x == y,
         (Expression::Literal(Literal::Bool(x)), Expression::Literal(Literal::Bool(y))) => x == y,
         (Expression::Literal(Literal::String(x)), Expression::Literal(Literal::String(y))) => {
             x == y

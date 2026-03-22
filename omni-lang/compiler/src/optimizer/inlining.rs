@@ -49,10 +49,7 @@ struct InlineCandidate {
 }
 
 /// Find functions eligible for inlining.
-fn find_inline_candidates(
-    module: &Module,
-    threshold: usize,
-) -> HashMap<String, InlineCandidate> {
+fn find_inline_candidates(module: &Module, threshold: usize) -> HashMap<String, InlineCandidate> {
     // Build call graph to detect recursion
     let call_graph = build_call_graph(module);
     let recursive = find_recursive_functions(&call_graph);
@@ -306,9 +303,9 @@ fn stmt_has_closure_or_complex(stmt: &Statement) -> bool {
         Statement::Let { value, .. } => expr_has_closure(value),
         Statement::Expression(expr) => expr_has_closure(expr),
         Statement::Return(Some(expr)) => expr_has_closure(expr),
-        Statement::Spawn(_) => true,         // complex control flow
-        Statement::Select { .. } => true,    // complex control flow
-        Statement::Yield(_) => true,         // generator
+        Statement::Spawn(_) => true,      // complex control flow
+        Statement::Select { .. } => true, // complex control flow
+        Statement::Yield(_) => true,      // generator
         _ => false,
     }
 }
@@ -317,9 +314,7 @@ fn expr_has_closure(expr: &Expression) -> bool {
     match expr {
         Expression::Lambda { .. } => true,
         Expression::Generator { .. } => true,
-        Expression::Call(func, args) => {
-            expr_has_closure(func) || args.iter().any(expr_has_closure)
-        }
+        Expression::Call(func, args) => expr_has_closure(func) || args.iter().any(expr_has_closure),
         Expression::Binary(l, _, r) => expr_has_closure(l) || expr_has_closure(r),
         Expression::Unary(_, inner) => expr_has_closure(inner),
         _ => false,
@@ -393,12 +388,7 @@ fn build_inline_body(candidate: &InlineCandidate, args: &[Expression]) -> Vec<St
 }
 
 /// Rewrite the last `return expr` in inlined body to `let name = expr`.
-fn rewrite_return_as_let(
-    stmts: &mut Vec<Statement>,
-    name: &str,
-    mutable: bool,
-    ty: Option<Type>,
-) {
+fn rewrite_return_as_let(stmts: &mut Vec<Statement>, name: &str, mutable: bool, ty: Option<Type>) {
     if let Some(last) = stmts.last_mut() {
         if let Statement::Return(Some(expr)) = last {
             let val = expr.clone();
@@ -547,9 +537,7 @@ mod tests {
 
     #[test]
     fn test_no_inline_large_function() {
-        let stmts: Vec<Statement> = (0..10)
-            .map(|i| Statement::Expression(int(i)))
-            .collect();
+        let stmts: Vec<Statement> = (0..10).map(|i| Statement::Expression(int(i))).collect();
         let mut module = Module {
             items: vec![
                 make_fn("big_func", vec![], stmts),
@@ -580,9 +568,7 @@ mod tests {
     #[test]
     fn test_inline_called_once_even_if_large() {
         // A function called only once can be inlined regardless of size
-        let stmts: Vec<Statement> = (0..8)
-            .map(|i| Statement::Expression(int(i)))
-            .collect();
+        let stmts: Vec<Statement> = (0..8).map(|i| Statement::Expression(int(i))).collect();
         let mut module = Module {
             items: vec![
                 make_fn("called_once", vec![], stmts),
@@ -599,10 +585,7 @@ mod tests {
         inline_functions(&mut module, false);
         if let Item::Function(main_fn) = &module.items[1] {
             // Should be inlined: 8 body stmts
-            assert!(
-                main_fn.body.statements.len() > 1,
-                "Expected inlined body"
-            );
+            assert!(main_fn.body.statements.len() > 1, "Expected inlined body");
         }
     }
 
@@ -645,11 +628,7 @@ mod tests {
     #[test]
     fn test_no_inline_main() {
         let mut module = Module {
-            items: vec![make_fn(
-                "main",
-                vec![],
-                vec![Statement::Expression(int(1))],
-            )],
+            items: vec![make_fn("main", vec![], vec![Statement::Expression(int(1))])],
         };
         let candidates = find_inline_candidates(&module, MAX_INLINE_STMTS);
         assert!(!candidates.contains_key("main"));

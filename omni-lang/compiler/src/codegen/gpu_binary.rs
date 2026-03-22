@@ -9,9 +9,9 @@
 //! Includes a unified GpuDriver abstraction for device selection,
 //! kernel loading, and execution dispatch.
 
-use crate::ir::{IrFunction, IrInstruction, IrType, IrBinOp, IrTerminator, IrValue, IrConst};
-use std::collections::HashMap;
+use crate::ir::{IrBinOp, IrConst, IrFunction, IrInstruction, IrTerminator, IrType, IrValue};
 use log::{debug, info};
+use std::collections::HashMap;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PTX Binary Compilation
@@ -92,7 +92,10 @@ impl PtxCompiler {
         let mut ptx = String::with_capacity(4096);
 
         // PTX header
-        ptx.push_str(&format!(".version {}.{}\n", self.ptx_version.0, self.ptx_version.1));
+        ptx.push_str(&format!(
+            ".version {}.{}\n",
+            self.ptx_version.0, self.ptx_version.1
+        ));
         ptx.push_str(&format!(".target sm_{}\n", self.sm_version));
         ptx.push_str(".address_size 64\n\n");
 
@@ -102,7 +105,9 @@ impl PtxCompiler {
         // Parameters
         for (i, (name, ty)) in func.params.iter().enumerate() {
             let ptx_type = self.ir_type_to_ptx(ty);
-            if i > 0 { ptx.push_str(",\n"); }
+            if i > 0 {
+                ptx.push_str(",\n");
+            }
             ptx.push_str(&format!("    .param {} param_{}", ptx_type, name));
         }
         ptx.push_str("\n) {\n");
@@ -124,8 +129,12 @@ impl PtxCompiler {
         // Load parameters
         for (i, (name, ty)) in func.params.iter().enumerate() {
             let ptx_type = self.ir_type_to_ptx(ty);
-            ptx.push_str(&format!("    ld.param{} %rd{}, [param_{}];\n",
-                                 ptx_type, i + 10, name));
+            ptx.push_str(&format!(
+                "    ld.param{} %rd{}, [param_{}];\n",
+                ptx_type,
+                i + 10,
+                name
+            ));
         }
         ptx.push('\n');
 
@@ -138,30 +147,43 @@ impl PtxCompiler {
 
             for inst in &block.instructions {
                 match inst {
-                    IrInstruction::BinOp { dest, op, left, right } => {
+                    IrInstruction::BinOp {
+                        dest,
+                        op,
+                        left,
+                        right,
+                    } => {
                         let l = self.value_to_ptx(left, &mut reg_counter);
                         let r = self.value_to_ptx(right, &mut reg_counter);
                         let (op_str, ty_suffix) = self.binop_to_ptx(op);
-                        ptx.push_str(&format!("    {}.{} %rd{}, {}, {};\n",
-                                             op_str, ty_suffix, reg_counter, l, r));
+                        ptx.push_str(&format!(
+                            "    {}.{} %rd{}, {}, {};\n",
+                            op_str, ty_suffix, reg_counter, l, r
+                        ));
                         reg_counter += 1;
                     }
                     IrInstruction::Load { dest, ptr, ty } => {
                         let width = self.ir_type_to_ptx(ty);
-                        ptx.push_str(&format!("    ld.global{} %rd{}, [%rd{}];\n",
-                                             width, reg_counter, ptr));
+                        ptx.push_str(&format!(
+                            "    ld.global{} %rd{}, [%rd{}];\n",
+                            width, reg_counter, ptr
+                        ));
                         reg_counter += 1;
                     }
                     IrInstruction::Store { ptr, value } => {
                         let v = self.value_to_ptx(value, &mut reg_counter);
                         ptx.push_str(&format!("    st.global.b64 [%rd{}], {};\n", ptr, v));
                     }
-                    IrInstruction::Call { func: callee, args, .. } => {
+                    IrInstruction::Call {
+                        func: callee, args, ..
+                    } => {
                         ptx.push_str(&format!("    // call {} ({} args)\n", callee, args.len()));
                     }
                     _ => {
-                        ptx.push_str(&format!("    // Unsupported: {:?}\n",
-                            std::mem::discriminant(inst)));
+                        ptx.push_str(&format!(
+                            "    // Unsupported: {:?}\n",
+                            std::mem::discriminant(inst)
+                        ));
                     }
                 }
             }
@@ -170,7 +192,11 @@ impl PtxCompiler {
             match &block.terminator {
                 IrTerminator::Return(_) => ptx.push_str("    ret;\n"),
                 IrTerminator::Branch(target) => ptx.push_str(&format!("    bra ${};\n", target)),
-                IrTerminator::CondBranch { cond, then_label, else_label } => {
+                IrTerminator::CondBranch {
+                    cond,
+                    then_label,
+                    else_label,
+                } => {
                     let c = self.value_to_ptx(cond, &mut reg_counter);
                     ptx.push_str(&format!("    setp.ne.b64 %p0, {}, 0;\n", c));
                     ptx.push_str(&format!("    @%p0 bra ${};\n", then_label));
@@ -199,7 +225,8 @@ impl PtxCompiler {
             .args([
                 &format!("--gpu-name=sm_{}", self.sm_version),
                 &format!("-O{}", self.opt_level),
-                "-o", cubin_path.to_str().unwrap_or(""),
+                "-o",
+                cubin_path.to_str().unwrap_or(""),
                 ptx_path.to_str().unwrap_or(""),
             ])
             .output();
@@ -228,13 +255,13 @@ impl PtxCompiler {
             IrBinOp::Div => ("div", "s64"),
             IrBinOp::Mod => ("rem", "s64"),
             IrBinOp::And => ("and", "b64"),
-            IrBinOp::Or  => ("or", "b64"),
-            IrBinOp::Eq  => ("setp.eq", "s64"),
-            IrBinOp::Ne  => ("setp.ne", "s64"),
-            IrBinOp::Lt  => ("setp.lt", "s64"),
-            IrBinOp::Le  => ("setp.le", "s64"),
-            IrBinOp::Gt  => ("setp.gt", "s64"),
-            IrBinOp::Ge  => ("setp.ge", "s64"),
+            IrBinOp::Or => ("or", "b64"),
+            IrBinOp::Eq => ("setp.eq", "s64"),
+            IrBinOp::Ne => ("setp.ne", "s64"),
+            IrBinOp::Lt => ("setp.lt", "s64"),
+            IrBinOp::Le => ("setp.le", "s64"),
+            IrBinOp::Gt => ("setp.gt", "s64"),
+            IrBinOp::Ge => ("setp.ge", "s64"),
         }
     }
 
@@ -273,8 +300,16 @@ impl PtxCompiler {
 
     fn calculate_max_threads(&self, registers: u32, shared_mem: u32) -> u32 {
         // Based on SM limits for different architectures
-        let reg_limit = if registers > 0 { 65536 / registers } else { 1024 };
-        let smem_limit = if shared_mem > 0 { 49152 / shared_mem } else { 1024 };
+        let reg_limit = if registers > 0 {
+            65536 / registers
+        } else {
+            1024
+        };
+        let smem_limit = if shared_mem > 0 {
+            49152 / shared_mem
+        } else {
+            1024
+        };
         reg_limit.min(smem_limit).min(1024)
     }
 }
@@ -325,8 +360,10 @@ impl SpirvCompiler {
 
     /// Compile an IR function to SPIR-V binary
     pub fn emit_spirv_binary(&mut self, func: &IrFunction) -> Result<SpirvBinary, String> {
-        info!("SPIR-V: Compiling {} for Vulkan {}.{}", func.name,
-              self.vulkan_version.0, self.vulkan_version.1);
+        info!(
+            "SPIR-V: Compiling {} for Vulkan {}.{}",
+            func.name, self.vulkan_version.0, self.vulkan_version.1
+        );
 
         self.next_id = 1;
         self.type_ids.clear();
@@ -345,13 +382,21 @@ impl SpirvCompiler {
     fn generate_spirv_assembly(&mut self, func: &IrFunction) -> Result<String, String> {
         let mut asm = String::with_capacity(2048);
         asm.push_str("; SPIR-V\n");
-        asm.push_str(&format!("; Version: {}.{}\n", self.spirv_version.0, self.spirv_version.1));
+        asm.push_str(&format!(
+            "; Version: {}.{}\n",
+            self.spirv_version.0, self.spirv_version.1
+        ));
         asm.push_str("; Generator: Omni Compiler\n\n");
         asm.push_str("               OpCapability Shader\n");
         asm.push_str("               OpMemoryModel Logical GLSL450\n");
-        asm.push_str(&format!("               OpEntryPoint GLCompute %main \"{}\" %gl_GlobalInvocationID\n", func.name));
+        asm.push_str(&format!(
+            "               OpEntryPoint GLCompute %main \"{}\" %gl_GlobalInvocationID\n",
+            func.name
+        ));
         asm.push_str("               OpExecutionMode %main LocalSize 256 1 1\n");
-        asm.push_str("               OpDecorate %gl_GlobalInvocationID BuiltIn GlobalInvocationId\n\n");
+        asm.push_str(
+            "               OpDecorate %gl_GlobalInvocationID BuiltIn GlobalInvocationId\n\n",
+        );
 
         // Type declarations
         asm.push_str("       %void = OpTypeVoid\n");
@@ -374,14 +419,26 @@ impl SpirvCompiler {
         for block in &func.blocks {
             for inst in &block.instructions {
                 match inst {
-                    IrInstruction::BinOp { dest, op, left, right } => {
+                    IrInstruction::BinOp {
+                        dest,
+                        op,
+                        left,
+                        right,
+                    } => {
                         let op_name = self.spirv_binop(op);
-                        asm.push_str(&format!("       %{} = {} %int {} {}\n",
-                            dest, op_name, self.spirv_value(left), self.spirv_value(right)));
+                        asm.push_str(&format!(
+                            "       %{} = {} %int {} {}\n",
+                            dest,
+                            op_name,
+                            self.spirv_value(left),
+                            self.spirv_value(right)
+                        ));
                     }
                     _ => {
-                        asm.push_str(&format!("                 ; unsupported: {:?}\n",
-                            std::mem::discriminant(inst)));
+                        asm.push_str(&format!(
+                            "                 ; unsupported: {:?}\n",
+                            std::mem::discriminant(inst)
+                        ));
                     }
                 }
             }
@@ -446,7 +503,7 @@ impl SpirvCompiler {
         // OpEntryPoint GLCompute
         let main_id = self.alloc_id();
         let mut entry_words = vec![5, main_id]; // GLCompute=5
-        // Encode name as words
+                                                // Encode name as words
         let name_bytes = func.name.as_bytes();
         let mut name_words = Vec::new();
         for chunk in name_bytes.chunks(4) {
@@ -501,7 +558,7 @@ impl SpirvCompiler {
 
         // OpReturn + OpFunctionEnd
         self.emit_spirv_op(&mut binary, 253, &[]); // OpReturn
-        self.emit_spirv_op(&mut binary, 56, &[]);  // OpFunctionEnd
+        self.emit_spirv_op(&mut binary, 56, &[]); // OpFunctionEnd
 
         // Patch bound
         let bound = self.next_id;
@@ -526,14 +583,14 @@ impl SpirvCompiler {
             IrBinOp::Mul => "OpIMul",
             IrBinOp::Div => "OpSDiv",
             IrBinOp::Mod => "OpSRem",
-            IrBinOp::Eq  => "OpIEqual",
-            IrBinOp::Ne  => "OpINotEqual",
-            IrBinOp::Lt  => "OpSLessThan",
-            IrBinOp::Le  => "OpSLessThanEqual",
-            IrBinOp::Gt  => "OpSGreaterThan",
-            IrBinOp::Ge  => "OpSGreaterThanEqual",
+            IrBinOp::Eq => "OpIEqual",
+            IrBinOp::Ne => "OpINotEqual",
+            IrBinOp::Lt => "OpSLessThan",
+            IrBinOp::Le => "OpSLessThanEqual",
+            IrBinOp::Gt => "OpSGreaterThan",
+            IrBinOp::Ge => "OpSGreaterThanEqual",
             IrBinOp::And => "OpBitwiseAnd",
-            IrBinOp::Or  => "OpBitwiseOr",
+            IrBinOp::Or => "OpBitwiseOr",
         }
     }
 
@@ -622,7 +679,9 @@ impl MetalCompiler {
         msl.push_str(&format!("kernel void {}(\n", func.name));
         for (i, (name, ty)) in func.params.iter().enumerate() {
             let metal_type = self.ir_type_to_metal(ty);
-            if i > 0 { msl.push_str(",\n"); }
+            if i > 0 {
+                msl.push_str(",\n");
+            }
             msl.push_str(&format!("    {} {} [[buffer({})]]", metal_type, name, i));
         }
         msl.push_str(",\n    uint gid [[thread_position_in_grid]]\n) {\n");
@@ -631,16 +690,30 @@ impl MetalCompiler {
         for block in &func.blocks {
             for inst in &block.instructions {
                 match inst {
-                    IrInstruction::BinOp { dest, op, left, right } => {
+                    IrInstruction::BinOp {
+                        dest,
+                        op,
+                        left,
+                        right,
+                    } => {
                         let op_sym = self.metal_binop(op);
-                        msl.push_str(&format!("    auto {} = {} {} {};\n",
-                            dest, self.metal_value(left), op_sym, self.metal_value(right)));
+                        msl.push_str(&format!(
+                            "    auto {} = {} {} {};\n",
+                            dest,
+                            self.metal_value(left),
+                            op_sym,
+                            self.metal_value(right)
+                        ));
                     }
                     IrInstruction::Load { dest, ptr, .. } => {
                         msl.push_str(&format!("    auto {} = {}[gid];\n", dest, ptr));
                     }
                     IrInstruction::Store { ptr, value } => {
-                        msl.push_str(&format!("    {}[gid] = {};\n", ptr, self.metal_value(value)));
+                        msl.push_str(&format!(
+                            "    {}[gid] = {};\n",
+                            ptr,
+                            self.metal_value(value)
+                        ));
                     }
                     _ => {}
                 }
@@ -721,10 +794,18 @@ impl MetalCompiler {
 
     fn metal_binop(&self, op: &IrBinOp) -> &'static str {
         match op {
-            IrBinOp::Add => "+", IrBinOp::Sub => "-", IrBinOp::Mul => "*",
-            IrBinOp::Div => "/", IrBinOp::Mod => "%", IrBinOp::And => "&",
-            IrBinOp::Or => "|", IrBinOp::Eq => "==", IrBinOp::Ne => "!=",
-            IrBinOp::Lt => "<", IrBinOp::Le => "<=", IrBinOp::Gt => ">",
+            IrBinOp::Add => "+",
+            IrBinOp::Sub => "-",
+            IrBinOp::Mul => "*",
+            IrBinOp::Div => "/",
+            IrBinOp::Mod => "%",
+            IrBinOp::And => "&",
+            IrBinOp::Or => "|",
+            IrBinOp::Eq => "==",
+            IrBinOp::Ne => "!=",
+            IrBinOp::Lt => "<",
+            IrBinOp::Le => "<=",
+            IrBinOp::Gt => ">",
             IrBinOp::Ge => ">=",
         }
     }
@@ -812,7 +893,11 @@ impl GpuDriver {
             name: "CUDA".to_string(),
             backend_type: GpuDriverType::Cuda,
             available: cuda_available,
-            device_name: if cuda_available { "NVIDIA GPU".to_string() } else { "Not detected".to_string() },
+            device_name: if cuda_available {
+                "NVIDIA GPU".to_string()
+            } else {
+                "Not detected".to_string()
+            },
             compute_units: if cuda_available { 80 } else { 0 },
             memory_mb: if cuda_available { 8192 } else { 0 },
         });
@@ -823,7 +908,11 @@ impl GpuDriver {
             name: "Vulkan".to_string(),
             backend_type: GpuDriverType::Vulkan,
             available: vulkan_available,
-            device_name: if vulkan_available { "Vulkan Device".to_string() } else { "Not detected".to_string() },
+            device_name: if vulkan_available {
+                "Vulkan Device".to_string()
+            } else {
+                "Not detected".to_string()
+            },
             compute_units: if vulkan_available { 64 } else { 0 },
             memory_mb: if vulkan_available { 4096 } else { 0 },
         });
@@ -834,7 +923,11 @@ impl GpuDriver {
             name: "Metal".to_string(),
             backend_type: GpuDriverType::Metal,
             available: metal_available,
-            device_name: if metal_available { "Apple GPU".to_string() } else { "Not available".to_string() },
+            device_name: if metal_available {
+                "Apple GPU".to_string()
+            } else {
+                "Not available".to_string()
+            },
             compute_units: if metal_available { 32 } else { 0 },
             memory_mb: if metal_available { 8192 } else { 0 },
         });
@@ -855,9 +948,18 @@ impl GpuDriver {
 
     /// Select the best available backend
     pub fn select_best_backend(&mut self) {
-        let priority = [GpuDriverType::Cuda, GpuDriverType::Metal, GpuDriverType::Vulkan, GpuDriverType::Software];
+        let priority = [
+            GpuDriverType::Cuda,
+            GpuDriverType::Metal,
+            GpuDriverType::Vulkan,
+            GpuDriverType::Software,
+        ];
         for preferred in &priority {
-            if let Some(idx) = self.backends.iter().position(|b| b.backend_type == *preferred && b.available) {
+            if let Some(idx) = self
+                .backends
+                .iter()
+                .position(|b| b.backend_type == *preferred && b.available)
+            {
                 self.active_backend = idx;
                 info!("GpuDriver: Selected {} backend", self.backends[idx].name);
                 return;
@@ -883,7 +985,9 @@ impl GpuDriver {
                 CompiledGpuKernel {
                     name: ptx.name,
                     driver_type: GpuDriverType::Cuda,
-                    binary_data: ptx.cubin.unwrap_or_else(|| ptx.ptx_source.as_bytes().to_vec()),
+                    binary_data: ptx
+                        .cubin
+                        .unwrap_or_else(|| ptx.ptx_source.as_bytes().to_vec()),
                     source_code: ptx.ptx_source,
                     workgroup_size: [256, 1, 1],
                 }
@@ -903,20 +1007,20 @@ impl GpuDriver {
                 CompiledGpuKernel {
                     name: metal.name,
                     driver_type: GpuDriverType::Metal,
-                    binary_data: metal.metallib.unwrap_or_else(|| metal.msl_source.as_bytes().to_vec()),
+                    binary_data: metal
+                        .metallib
+                        .unwrap_or_else(|| metal.msl_source.as_bytes().to_vec()),
                     source_code: metal.msl_source,
                     workgroup_size: [256, 1, 1],
                 }
             }
-            GpuDriverType::Software => {
-                CompiledGpuKernel {
-                    name: format!("{}_software", func.name),
-                    driver_type: GpuDriverType::Software,
-                    binary_data: Vec::new(),
-                    source_code: "// Software emulation".to_string(),
-                    workgroup_size: [1, 1, 1],
-                }
-            }
+            GpuDriverType::Software => CompiledGpuKernel {
+                name: format!("{}_software", func.name),
+                driver_type: GpuDriverType::Software,
+                binary_data: Vec::new(),
+                source_code: "// Software emulation".to_string(),
+                workgroup_size: [1, 1, 1],
+            },
         };
 
         self.kernel_cache.insert(cache_key, kernel.clone());
@@ -959,7 +1063,9 @@ impl GpuDriver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{IrBlock, IrFunction, IrInstruction, IrTerminator, IrType, IrBinOp, IrValue, IrConst};
+    use crate::ir::{
+        IrBinOp, IrBlock, IrConst, IrFunction, IrInstruction, IrTerminator, IrType, IrValue,
+    };
 
     fn sample_gpu_function() -> IrFunction {
         IrFunction {
@@ -973,14 +1079,12 @@ mod tests {
             return_type: IrType::Void,
             blocks: vec![IrBlock {
                 label: "entry".to_string(),
-                instructions: vec![
-                    IrInstruction::BinOp {
-                        dest: "sum".to_string(),
-                        op: IrBinOp::Add,
-                        left: IrValue::Var("a".to_string()),
-                        right: IrValue::Var("b".to_string()),
-                    },
-                ],
+                instructions: vec![IrInstruction::BinOp {
+                    dest: "sum".to_string(),
+                    op: IrBinOp::Add,
+                    left: IrValue::Var("a".to_string()),
+                    right: IrValue::Var("b".to_string()),
+                }],
                 terminator: IrTerminator::Return(None),
             }],
             locals: vec![],
@@ -1026,7 +1130,12 @@ mod tests {
 
         // Check SPIR-V magic number
         assert!(binary.binary.len() >= 20);
-        let magic = u32::from_le_bytes([binary.binary[0], binary.binary[1], binary.binary[2], binary.binary[3]]);
+        let magic = u32::from_le_bytes([
+            binary.binary[0],
+            binary.binary[1],
+            binary.binary[2],
+            binary.binary[3],
+        ]);
         assert_eq!(magic, 0x07230203);
 
         // Check assembly contains expected content
@@ -1057,7 +1166,9 @@ mod tests {
 
         // Should always have at least the software fallback
         assert!(!backends.is_empty());
-        assert!(backends.iter().any(|b| b.backend_type == GpuDriverType::Software && b.available));
+        assert!(backends
+            .iter()
+            .any(|b| b.backend_type == GpuDriverType::Software && b.available));
 
         let active = driver.active_backend();
         assert!(active.available);
@@ -1083,7 +1194,10 @@ mod tests {
         assert_eq!(backends.len(), 4);
 
         // Software should always be available
-        let sw = backends.iter().find(|b| b.backend_type == GpuDriverType::Software).unwrap();
+        let sw = backends
+            .iter()
+            .find(|b| b.backend_type == GpuDriverType::Software)
+            .unwrap();
         assert!(sw.available);
         assert!(sw.compute_units > 0);
     }

@@ -1,11 +1,10 @@
 /// Properties & Sealed Classes Implementation
-/// 
+///
 /// Complete support for modern property syntax and sealed class enforcement
 /// Status: PRODUCTION-READY
-
 use crate::parser::ast::*;
-use std::collections::HashMap;
 use logos::Span;
+use std::collections::HashMap;
 
 /// Property Definition — Modern syntax for getters and setters
 #[derive(Clone, Debug)]
@@ -16,7 +15,7 @@ pub struct Property {
     pub setter_body: Option<Box<Statement>>,
     pub getter_visibility: VisibilityLevel,
     pub setter_visibility: VisibilityLevel,
-    pub is_auto: bool,  // Auto property: no custom getter/setter
+    pub is_auto: bool, // Auto property: no custom getter/setter
     pub doc_comment: Option<String>,
     pub span: Span,
 }
@@ -39,9 +38,9 @@ impl VisibilityLevel {
 /// Property accessor kind
 #[derive(Clone, Debug)]
 pub enum PropertyAccessorKind {
-    Get,      // Property getter
-    Set,      // Property setter
-    Init,     // Init-only property (set once)
+    Get,  // Property getter
+    Set,  // Property setter
+    Init, // Init-only property (set once)
 }
 
 /// Individual property accessor (getter or setter)
@@ -58,7 +57,7 @@ pub struct PropertyAccessor {
 #[derive(Clone, Debug)]
 pub struct PropertyContainer {
     pub properties: HashMap<String, Property>,
-    pub property_order: Vec<String>,  // Track definition order
+    pub property_order: Vec<String>, // Track definition order
 }
 
 impl PropertyContainer {
@@ -84,7 +83,9 @@ impl PropertyContainer {
     }
 
     pub fn all_properties(&self) -> impl Iterator<Item = &Property> {
-        self.property_order.iter().filter_map(|name| self.properties.get(name))
+        self.property_order
+            .iter()
+            .filter_map(|name| self.properties.get(name))
     }
 
     pub fn with_getter(mut self, name: String, getter_body: Statement) -> Self {
@@ -104,43 +105,39 @@ impl PropertyContainer {
     }
 
     pub fn to_getter_method(&self, prop_name: &str) -> Option<Function> {
-        self.get_property(prop_name).map(|prop| {
-            Function {
-                name: format!("get_{}", prop_name),
-                is_async: false,
-                attributes: vec![],
-                params: vec![],
-                return_type: Some(prop.type_expr.clone()),
-                body: Block {
-                    statements: if let Some(body) = &prop.getter_body {
-                        vec![(**body).clone()]
-                    } else {
-                        vec![]
-                    }
+        self.get_property(prop_name).map(|prop| Function {
+            name: format!("get_{}", prop_name),
+            is_async: false,
+            attributes: vec![],
+            params: vec![],
+            return_type: Some(prop.type_expr.clone()),
+            body: Block {
+                statements: if let Some(body) = &prop.getter_body {
+                    vec![(**body).clone()]
+                } else {
+                    vec![]
                 },
-            }
+            },
         })
     }
 
     pub fn to_setter_method(&self, prop_name: &str) -> Option<Function> {
-        self.get_property(prop_name).map(|prop| {
-            Function {
-                name: format!("set_{}", prop_name),
-                is_async: false,
-                attributes: vec![],
-                params: vec![Param {
-                    name: "value".to_string(),
-                    ty: prop.type_expr.clone(),
-                }],
-                return_type: None,
-                body: Block {
-                    statements: if let Some(body) = &prop.setter_body {
-                        vec![(**body).clone()]
-                    } else {
-                        vec![]
-                    }
+        self.get_property(prop_name).map(|prop| Function {
+            name: format!("set_{}", prop_name),
+            is_async: false,
+            attributes: vec![],
+            params: vec![Param {
+                name: "value".to_string(),
+                ty: prop.type_expr.clone(),
+            }],
+            return_type: None,
+            body: Block {
+                statements: if let Some(body) = &prop.setter_body {
+                    vec![(**body).clone()]
+                } else {
+                    vec![]
                 },
-            }
+            },
         })
     }
 }
@@ -153,31 +150,34 @@ pub struct PropertyAccessExpander {
 
 impl PropertyAccessExpander {
     pub fn new(props: PropertyContainer) -> Self {
-        PropertyAccessExpander {
-            properties: props,
-        }
+        PropertyAccessExpander { properties: props }
     }
 
     /// Expand property getter: obj.prop → obj.get_prop()
     pub fn expand_getter(&self, obj: Expression, prop_name: &str) -> Option<Expression> {
-        self.properties.get_property(prop_name).map(|_| {
-            Expression::MethodCall {
+        self.properties
+            .get_property(prop_name)
+            .map(|_| Expression::MethodCall {
                 receiver: Box::new(obj),
                 method: format!("get_{}", prop_name),
                 args: vec![],
-            }
-        })
+            })
     }
 
     /// Expand property setter: obj.prop = val → obj.set_prop(val)
-    pub fn expand_setter(&self, obj: Expression, prop_name: &str, value: Expression) -> Option<Expression> {
-        self.properties.get_property(prop_name).map(|_| {
-            Expression::MethodCall {
+    pub fn expand_setter(
+        &self,
+        obj: Expression,
+        prop_name: &str,
+        value: Expression,
+    ) -> Option<Expression> {
+        self.properties
+            .get_property(prop_name)
+            .map(|_| Expression::MethodCall {
                 receiver: Box::new(obj),
                 method: format!("set_{}", prop_name),
                 args: vec![value],
-            }
-        })
+            })
     }
 }
 
@@ -185,8 +185,8 @@ impl PropertyAccessExpander {
 #[derive(Clone, Debug)]
 pub struct SealedTraitInfo {
     pub trait_name: String,
-    pub allowed_impls: Vec<String>,  // Type names that can implement
-    pub all_impls_in_module: bool,    // true = all impls must be in defining module
+    pub allowed_impls: Vec<String>, // Type names that can implement
+    pub all_impls_in_module: bool,  // true = all impls must be in defining module
     pub defining_module: String,
     pub span: Span,
 }
@@ -301,10 +301,7 @@ pub fn parse_property_syntax(name: String, type_expr: Type) -> Property {
 
 /// Pattern matching support for properties
 /// Allows using properties in patterns: let Point { x, y } = point
-pub fn expand_property_pattern(
-    pattern: &Pattern,
-    container: &PropertyContainer,
-) -> Pattern {
+pub fn expand_property_pattern(pattern: &Pattern, container: &PropertyContainer) -> Pattern {
     // Would recursively expand property patterns
     // For now, return pattern as-is (would need full AST support)
     pattern.clone()
@@ -317,7 +314,7 @@ mod tests {
     #[test]
     fn test_property_container() {
         let mut container = PropertyContainer::new();
-        
+
         let prop = Property {
             name: "x".to_string(),
             type_expr: Type::I32,
@@ -329,7 +326,7 @@ mod tests {
             doc_comment: None,
             span: 0..0,
         };
-        
+
         container.add_property(prop);
         assert!(container.get_property("x").is_some());
     }
@@ -338,12 +335,12 @@ mod tests {
     fn test_sealed_trait_validation() {
         let mut validator = SealedClassValidator::new();
         let sealed = SealedTraitInfo::new("MyTrait".to_string(), "module_a".to_string());
-        
+
         validator.register_sealed(sealed);
-        
+
         // Implementation in same module should be allowed
         assert!(validator.can_implement("MyTrait", "MyType", "module_a"));
-        
+
         // Implementation in different module should be denied
         assert!(!validator.can_implement("MyTrait", "MyType", "module_b"));
     }
@@ -362,23 +359,25 @@ mod tests {
             doc_comment: None,
             span: 0..0,
         };
-        
+
         assert!(validate_property(&auto_prop).is_ok());
-        
+
         // Invalid: auto property with custom getter
         let invalid_prop = Property {
             is_auto: true,
-            getter_body: Some(Box::new(Statement::Return(Some(Expression::Literal(Literal::Int(42)))))),
+            getter_body: Some(Box::new(Statement::Return(Some(Expression::Literal(
+                Literal::Int(42),
+            ))))),
             ..auto_prop.clone()
         };
-        
+
         assert!(validate_property(&invalid_prop).is_err());
     }
 
     #[test]
     fn test_property_methods_generation() {
         let mut container = PropertyContainer::new();
-        
+
         let prop = Property {
             name: "value".to_string(),
             type_expr: Type::I32,
@@ -390,14 +389,14 @@ mod tests {
             doc_comment: None,
             span: 0..0,
         };
-        
+
         container.add_property(prop);
-        
+
         // Generate getter method
         let getter = container.to_getter_method("value");
         assert!(getter.is_some());
         assert_eq!(getter.unwrap().name, "get_value");
-        
+
         // Generate setter method
         let setter = container.to_setter_method("value");
         assert!(setter.is_some());
@@ -408,9 +407,9 @@ mod tests {
     fn test_sealed_explicit_allows() {
         let mut sealed = SealedTraitInfo::new("MyTrait".to_string(), "module_a".to_string());
         sealed.all_impls_in_module = false;
-        
+
         sealed.allow_impl("AllowedType".to_string());
-        
+
         assert!(sealed.is_impl_allowed("AllowedType", "module_b"));
         assert!(!sealed.is_impl_allowed("OtherType", "module_b"));
     }

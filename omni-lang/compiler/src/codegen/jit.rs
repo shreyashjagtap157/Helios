@@ -10,12 +10,12 @@
 //! - On-stack replacement (OSR) for long-running loops
 //! - Code patching and deoptimization support
 
-use crate::ir::{IrFunction, IrInstruction, IrTerminator, IrType, IrBinOp, IrValue};
-use std::collections::HashMap;
 use crate::codegen::optimizing_jit::OptimizingJit;
+use crate::ir::{IrBinOp, IrFunction, IrInstruction, IrTerminator, IrType, IrValue};
+use std::collections::HashMap;
 
-use std::time::Instant;
 use log::{debug, info, trace, warn};
+use std::time::Instant;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tiered Compilation Configuration
@@ -120,11 +120,11 @@ impl MethodProfile {
             compiled_entry: None,
         }
     }
-    
+
     /// Record a method invocation and return whether compilation should be triggered
     pub fn record_invocation(&mut self, config: &JitConfig) -> Option<CompilationTier> {
         self.invocation_count += 1;
-        
+
         match self.tier {
             CompilationTier::Interpreted => {
                 if self.invocation_count >= config.baseline_threshold {
@@ -143,10 +143,11 @@ impl MethodProfile {
             CompilationTier::Optimizing => None, // Already at highest tier
         }
     }
-    
+
     /// Record a branch outcome for profile-guided optimization
     pub fn record_branch(&mut self, label: &str, taken: bool) {
-        let entry = self.branch_profiles
+        let entry = self
+            .branch_profiles
             .entry(label.to_string())
             .or_insert((0, 0));
         if taken {
@@ -155,22 +156,24 @@ impl MethodProfile {
             entry.1 += 1;
         }
     }
-    
+
     /// Record a loop back-edge for OSR detection
     pub fn record_loop_iteration(&mut self, header: &str) -> bool {
-        let count = self.loop_counts
-            .entry(header.to_string())
-            .or_insert(0);
+        let count = self.loop_counts.entry(header.to_string()).or_insert(0);
         *count += 1;
         // Signal if OSR should trigger
         *count % 1000 == 0
     }
-    
+
     /// Get branch probability (taken probability 0.0 - 1.0)
     pub fn branch_probability(&self, label: &str) -> f64 {
         if let Some(&(taken, not_taken)) = self.branch_profiles.get(label) {
             let total = taken + not_taken;
-            if total == 0 { 0.5 } else { taken as f64 / total as f64 }
+            if total == 0 {
+                0.5
+            } else {
+                taken as f64 / total as f64
+            }
         } else {
             0.5 // No data, assume 50/50
         }
@@ -199,13 +202,13 @@ impl TypeFeedback {
             is_megamorphic: false,
         }
     }
-    
+
     /// Record an observed type at this call site
     pub fn record_type(&mut self, type_name: &str, max_ic_entries: usize) {
         if !self.observed_types.contains(&type_name.to_string()) {
             self.observed_types.push(type_name.to_string());
         }
-        
+
         self.is_monomorphic = self.observed_types.len() == 1;
         self.is_megamorphic = self.observed_types.len() > max_ic_entries;
     }
@@ -252,7 +255,7 @@ impl InlineCache {
             method_name,
         }
     }
-    
+
     /// Look up a target method for the given type
     pub fn lookup(&mut self, type_id: u64) -> Option<&InlineCacheEntry> {
         self.lookups += 1;
@@ -265,12 +268,14 @@ impl InlineCache {
         }
         None
     }
-    
+
     /// Add a new cache entry
     pub fn insert(&mut self, type_id: u64, target_method: String, compiled_offset: Option<usize>) {
         if self.entries.len() >= self.max_entries {
             // Evict least-used entry
-            if let Some(min_idx) = self.entries.iter()
+            if let Some(min_idx) = self
+                .entries
+                .iter()
                 .enumerate()
                 .min_by_key(|(_, e)| e.hit_count)
                 .map(|(i, _)| i)
@@ -278,7 +283,7 @@ impl InlineCache {
                 self.entries.remove(min_idx);
             }
         }
-        
+
         self.entries.push(InlineCacheEntry {
             type_id,
             target_method,
@@ -286,22 +291,26 @@ impl InlineCache {
             hit_count: 0,
         });
     }
-    
+
     /// Check if the cache is monomorphic (single entry)
     pub fn is_monomorphic(&self) -> bool {
         self.entries.len() == 1
     }
-    
+
     /// Check if the cache is megamorphic (full)
     pub fn is_megamorphic(&self) -> bool {
         self.entries.len() >= self.max_entries
     }
-    
+
     /// Cache hit rate
     pub fn hit_rate(&self) -> f64 {
-        if self.lookups == 0 { 0.0 } else { self.hits as f64 / self.lookups as f64 }
+        if self.lookups == 0 {
+            0.0
+        } else {
+            self.hits as f64 / self.lookups as f64
+        }
     }
-    
+
     /// Invalidate all entries (e.g., after class hierarchy change)
     pub fn invalidate(&mut self) {
         self.entries.clear();
@@ -352,7 +361,7 @@ pub struct DeoptPoint {
 #[derive(Debug, Clone)]
 pub enum ValueLocation {
     Register(u8),
-    Stack(i32),       // Offset from frame pointer
+    Stack(i32), // Offset from frame pointer
     Constant(i64),
 }
 
@@ -451,19 +460,19 @@ impl RegisterState {
             next_spill: -8, // Start below frame pointer
         }
     }
-    
+
     /// Allocate a register for a variable (returns register index)
     fn allocate(&mut self, var: &str) -> u8 {
         // Check if already allocated
         if let Some(&reg) = self.var_to_reg.get(var) {
             return reg;
         }
-        
+
         // Caller-saved registers: rax(0), rcx(1), rdx(2), r8-r11(8-11)
         // Callee-saved: rbx(3), rbp(5), r12-r15(12-15)
         // Reserved: rsp(4), rbp(5)
         let preferred = [0, 1, 2, 6, 7, 8, 9, 10, 11, 3, 12, 13, 14, 15];
-        
+
         for &reg in &preferred {
             if !self.used[reg as usize] {
                 self.used[reg as usize] = true;
@@ -471,14 +480,14 @@ impl RegisterState {
                 return reg;
             }
         }
-        
+
         // All registers in use, spill the least recently used
         // For baseline JIT, we spill to stack
         self.spill_slots.insert(var.to_string(), self.next_spill);
         self.next_spill -= 8;
         0 // Return rax, caller must handle spill
     }
-    
+
     /// Free a register
     fn free(&mut self, var: &str) {
         if let Some(reg) = self.var_to_reg.remove(var) {
@@ -486,7 +495,7 @@ impl RegisterState {
         }
         self.spill_slots.remove(var);
     }
-    
+
     /// Get the register for a variable (if allocated)
     fn get_reg(&self, var: &str) -> Option<u8> {
         self.var_to_reg.get(var).copied()
@@ -506,30 +515,32 @@ impl BaselineEmitter {
             ic_sites: Vec::new(),
         }
     }
-    
+
     // ── x86-64 instruction encoding helpers ──────────────────────────────
-    
+
     /// Emit function prologue (x86-64 System V ABI)
     fn emit_prologue(&mut self, local_count: usize) {
         // push rbp
         self.code.push(0x55);
         // mov rbp, rsp
         self.code.extend_from_slice(&[0x48, 0x89, 0xE5]);
-        
+
         // sub rsp, frame_size (align to 16 bytes)
         self.frame_size = ((local_count + 1) * 8 + 15) & !15;
         if self.frame_size > 0 {
             if self.frame_size <= 128 {
                 // sub rsp, imm8
-                self.code.extend_from_slice(&[0x48, 0x83, 0xEC, self.frame_size as u8]);
+                self.code
+                    .extend_from_slice(&[0x48, 0x83, 0xEC, self.frame_size as u8]);
             } else {
                 // sub rsp, imm32
                 self.code.extend_from_slice(&[0x48, 0x81, 0xEC]);
-                self.code.extend_from_slice(&(self.frame_size as u32).to_le_bytes());
+                self.code
+                    .extend_from_slice(&(self.frame_size as u32).to_le_bytes());
             }
         }
     }
-    
+
     /// Emit function epilogue
     fn emit_epilogue(&mut self) {
         // mov rsp, rbp
@@ -539,7 +550,7 @@ impl BaselineEmitter {
         // ret
         self.code.push(0xC3);
     }
-    
+
     /// Emit mov reg, imm64
     fn emit_mov_reg_imm64(&mut self, reg: u8, value: i64) {
         let rex = 0x48 | ((reg >> 3) & 1);
@@ -547,7 +558,7 @@ impl BaselineEmitter {
         self.code.push(0xB8 + (reg & 7));
         self.code.extend_from_slice(&value.to_le_bytes());
     }
-    
+
     /// Emit mov reg, reg
     fn emit_mov_reg_reg(&mut self, dst: u8, src: u8) {
         let rex = 0x48 | ((src >> 3) << 2) | ((dst >> 3) & 1);
@@ -555,7 +566,7 @@ impl BaselineEmitter {
         self.code.push(0x89);
         self.code.push(0xC0 | ((src & 7) << 3) | (dst & 7));
     }
-    
+
     /// Emit add reg, reg
     fn emit_add_reg_reg(&mut self, dst: u8, src: u8) {
         let rex = 0x48 | ((src >> 3) << 2) | ((dst >> 3) & 1);
@@ -563,7 +574,7 @@ impl BaselineEmitter {
         self.code.push(0x01);
         self.code.push(0xC0 | ((src & 7) << 3) | (dst & 7));
     }
-    
+
     /// Emit sub reg, reg
     fn emit_sub_reg_reg(&mut self, dst: u8, src: u8) {
         let rex = 0x48 | ((src >> 3) << 2) | ((dst >> 3) & 1);
@@ -571,7 +582,7 @@ impl BaselineEmitter {
         self.code.push(0x29);
         self.code.push(0xC0 | ((src & 7) << 3) | (dst & 7));
     }
-    
+
     /// Emit imul reg, reg (signed multiply)
     fn emit_imul_reg_reg(&mut self, dst: u8, src: u8) {
         let rex = 0x48 | ((dst >> 3) << 2) | ((src >> 3) & 1);
@@ -579,7 +590,7 @@ impl BaselineEmitter {
         self.code.extend_from_slice(&[0x0F, 0xAF]);
         self.code.push(0xC0 | ((dst & 7) << 3) | (src & 7));
     }
-    
+
     /// Emit idiv reg (signed divide: rax = rdx:rax / reg)
     fn emit_idiv_reg(&mut self, reg: u8) {
         let rex = 0x48 | ((reg >> 3) & 1);
@@ -587,12 +598,12 @@ impl BaselineEmitter {
         self.code.push(0xF7);
         self.code.push(0xF8 | (reg & 7));
     }
-    
+
     /// Emit cqo (sign-extend rax into rdx:rax)
     fn emit_cqo(&mut self) {
         self.code.extend_from_slice(&[0x48, 0x99]);
     }
-    
+
     /// Emit cmp reg, reg
     fn emit_cmp_reg_reg(&mut self, left: u8, right: u8) {
         let rex = 0x48 | ((right >> 3) << 2) | ((left >> 3) & 1);
@@ -600,33 +611,33 @@ impl BaselineEmitter {
         self.code.push(0x39);
         self.code.push(0xC0 | ((right & 7) << 3) | (left & 7));
     }
-    
+
     /// Emit jcc (conditional jump, 32-bit displacement)
     fn emit_jcc(&mut self, condition: u8, target_label: &str) {
         self.code.extend_from_slice(&[0x0F, 0x80 + condition]);
         let fixup_pos = self.code.len();
         self.code.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // placeholder
-        
+
         self.fixups.push(Fixup {
             code_offset: fixup_pos,
             target_label: target_label.to_string(),
             kind: FixupKind::RelativeJump32,
         });
     }
-    
+
     /// Emit jmp (unconditional jump, 32-bit displacement)
     fn emit_jmp(&mut self, target_label: &str) {
         self.code.push(0xE9);
         let fixup_pos = self.code.len();
         self.code.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // placeholder
-        
+
         self.fixups.push(Fixup {
             code_offset: fixup_pos,
             target_label: target_label.to_string(),
             kind: FixupKind::RelativeJump32,
         });
     }
-    
+
     /// Emit call to absolute address (via register)
     fn emit_call_reg(&mut self, reg: u8) {
         if reg >= 8 {
@@ -635,36 +646,42 @@ impl BaselineEmitter {
         self.code.push(0xFF);
         self.code.push(0xD0 | (reg & 7));
     }
-    
+
     /// Emit a label at the current position
     fn emit_label(&mut self, name: &str) {
         self.labels.insert(name.to_string(), self.code.len());
     }
-    
+
     /// Emit a deoptimization check (guard)
     fn emit_deopt_guard(&mut self, ir_block: &str, ir_idx: usize) {
         let deopt_point = DeoptPoint {
             code_offset: self.code.len(),
             ir_position: (ir_block.to_string(), ir_idx),
-            live_values: self.reg_alloc.var_to_reg.iter()
+            live_values: self
+                .reg_alloc
+                .var_to_reg
+                .iter()
                 .map(|(var, &reg)| (ValueLocation::Register(reg), var.clone()))
                 .collect(),
         };
         self.deopt_points.push(deopt_point);
     }
-    
+
     /// Emit a stack map for GC
     fn emit_stack_map(&mut self) {
-        let gc_roots: Vec<ValueLocation> = self.reg_alloc.var_to_reg.iter()
+        let gc_roots: Vec<ValueLocation> = self
+            .reg_alloc
+            .var_to_reg
+            .iter()
             .map(|(_, &reg)| ValueLocation::Register(reg))
             .collect();
-        
+
         self.stack_maps.push(StackMap {
             code_offset: self.code.len(),
             gc_roots,
         });
     }
-    
+
     /// Patch all forward references
     fn patch_fixups(&mut self) {
         for fixup in &self.fixups {
@@ -673,19 +690,16 @@ impl BaselineEmitter {
                     FixupKind::RelativeJump32 => {
                         let rel_offset = target_pos as i32 - (fixup.code_offset as i32 + 4);
                         let bytes = rel_offset.to_le_bytes();
-                        self.code[fixup.code_offset..fixup.code_offset + 4]
-                            .copy_from_slice(&bytes);
+                        self.code[fixup.code_offset..fixup.code_offset + 4].copy_from_slice(&bytes);
                     }
                     FixupKind::AbsoluteAddress64 => {
                         let bytes = (target_pos as u64).to_le_bytes();
-                        self.code[fixup.code_offset..fixup.code_offset + 8]
-                            .copy_from_slice(&bytes);
+                        self.code[fixup.code_offset..fixup.code_offset + 8].copy_from_slice(&bytes);
                     }
                     FixupKind::PCRelative32 => {
                         let rel_offset = target_pos as i32 - (fixup.code_offset as i32 + 4);
                         let bytes = rel_offset.to_le_bytes();
-                        self.code[fixup.code_offset..fixup.code_offset + 4]
-                            .copy_from_slice(&bytes);
+                        self.code[fixup.code_offset..fixup.code_offset + 4].copy_from_slice(&bytes);
                     }
                 }
             } else {
@@ -711,18 +725,18 @@ impl BaselineJit {
     pub fn new(config: JitConfig) -> Self {
         BaselineJit { config }
     }
-    
+
     /// Compile a single IR function to machine code (x86-64)
     pub fn compile(&self, func: &IrFunction) -> Result<CompiledMethod, String> {
         let start = Instant::now();
         info!("Baseline JIT: compiling {}", func.name);
-        
+
         let mut emitter = BaselineEmitter::new();
-        
+
         // Calculate locals needed
         let local_count = func.params.len() + func.locals.len();
         emitter.emit_prologue(local_count);
-        
+
         // Store incoming parameters to their stack slots
         // System V ABI: rdi, rsi, rdx, rcx, r8, r9 for first 6 integer args
         let param_regs = SYSV_PARAM_REGS;
@@ -735,28 +749,28 @@ impl BaselineJit {
             }
             // Beyond 6 args: loaded from stack (rbp + 16 + 8*i)
         }
-        
+
         // Compile each block
         for block in &func.blocks {
             emitter.emit_label(&block.label);
-            
+
             // Emit a GC safepoint at block entry
             emitter.emit_stack_map();
-            
+
             // Compile instructions
             for (idx, inst) in block.instructions.iter().enumerate() {
                 self.compile_instruction(&mut emitter, inst, &block.label, idx)?;
             }
-            
+
             // Compile terminator
             self.compile_terminator(&mut emitter, &block.terminator)?;
         }
-        
+
         // Patch forward jumps
         emitter.patch_fixups();
-        
+
         let compile_time = start.elapsed().as_micros() as u64;
-        
+
         Ok(CompiledMethod {
             name: func.name.clone(),
             tier: CompilationTier::Baseline,
@@ -770,7 +784,7 @@ impl BaselineJit {
             assumptions: Vec::new(),
         })
     }
-    
+
     /// Compile a single IR instruction
     fn compile_instruction(
         &self,
@@ -780,16 +794,21 @@ impl BaselineJit {
         inst_idx: usize,
     ) -> Result<(), String> {
         match inst {
-            IrInstruction::BinOp { dest, op, left, right } => {
+            IrInstruction::BinOp {
+                dest,
+                op,
+                left,
+                right,
+            } => {
                 let left_reg = self.load_value(emitter, left, "left_tmp")?;
                 let right_reg = self.load_value(emitter, right, "right_tmp")?;
                 let dest_reg = emitter.reg_alloc.allocate(dest);
-                
+
                 // Move left into dest if needed
                 if dest_reg != left_reg {
                     emitter.emit_mov_reg_reg(dest_reg, left_reg);
                 }
-                
+
                 match op {
                     IrBinOp::Add => emitter.emit_add_reg_reg(dest_reg, right_reg),
                     IrBinOp::Sub => emitter.emit_sub_reg_reg(dest_reg, right_reg),
@@ -797,14 +816,18 @@ impl BaselineJit {
                     IrBinOp::Div => {
                         // idiv uses rdx:rax
                         emitter.emit_mov_reg_reg(0, dest_reg); // mov rax, dest
-                        emitter.emit_cqo();                     // sign extend rax -> rdx:rax
-                        emitter.emit_idiv_reg(right_reg);       // idiv right
+                        emitter.emit_cqo(); // sign extend rax -> rdx:rax
+                        emitter.emit_idiv_reg(right_reg); // idiv right
                         if dest_reg != 0 {
                             emitter.emit_mov_reg_reg(dest_reg, 0); // mov dest, rax
                         }
                     }
-                    IrBinOp::Eq | IrBinOp::Ne | IrBinOp::Lt |
-                    IrBinOp::Le | IrBinOp::Gt | IrBinOp::Ge => {
+                    IrBinOp::Eq
+                    | IrBinOp::Ne
+                    | IrBinOp::Lt
+                    | IrBinOp::Le
+                    | IrBinOp::Gt
+                    | IrBinOp::Ge => {
                         emitter.emit_cmp_reg_reg(dest_reg, right_reg);
                         // setcc al, then movzx
                         let cc = match op {
@@ -828,7 +851,7 @@ impl BaselineJit {
                     }
                 }
             }
-            
+
             IrInstruction::Call { dest, func, args } => {
                 // Save caller-saved registers
                 // Load arguments into ABI registers
@@ -840,11 +863,11 @@ impl BaselineJit {
                         }
                     }
                 }
-                
+
                 // Emit call (indirect through register for now)
                 // In a real implementation, we'd resolve func to a code address
                 emitter.emit_stack_map(); // GC safepoint at call
-                
+
                 // Store result if needed
                 if let Some(dest_name) = dest {
                     let dest_reg = emitter.reg_alloc.allocate(dest_name);
@@ -853,12 +876,12 @@ impl BaselineJit {
                     }
                 }
             }
-            
+
             IrInstruction::Alloca { dest, ty } => {
                 // Allocate stack space (already done in prologue)
                 let _reg = emitter.reg_alloc.allocate(dest);
             }
-            
+
             IrInstruction::Load { dest, ptr, ty } => {
                 if let Some(ptr_reg) = emitter.reg_alloc.get_reg(ptr) {
                     let dest_reg = emitter.reg_alloc.allocate(dest);
@@ -869,7 +892,7 @@ impl BaselineJit {
                     emitter.code.push(((dest_reg & 7) << 3) | (ptr_reg & 7));
                 }
             }
-            
+
             IrInstruction::Store { ptr, value } => {
                 if let Some(ptr_reg) = emitter.reg_alloc.get_reg(ptr) {
                     let val_reg = self.load_value(emitter, value, "store_tmp")?;
@@ -880,52 +903,68 @@ impl BaselineJit {
                     emitter.code.push(((val_reg & 7) << 3) | (ptr_reg & 7));
                 }
             }
-            
-            IrInstruction::TraitDispatch { dest, object, method, args } => {
+
+            IrInstruction::TraitDispatch {
+                dest,
+                object,
+                method,
+                args,
+            } => {
                 // Inline Cache Site
                 // 1. Load object (receiver)
-                let obj_reg = self.load_value(emitter, &crate::ir::IrValue::Var(object.clone()), "rcv_tmp")?;
-                
+                let obj_reg =
+                    self.load_value(emitter, &crate::ir::IrValue::Var(object.clone()), "rcv_tmp")?;
+
                 // 2. Emit IC check (Fast Path) - initially empty, just a call to runtime (Slow Path)
                 // In a real implementation, we would emit:
                 //   cmp [obj_reg + header_offset], cached_type_id
                 //   je cached_target
                 //   call miss_handler
-                
+
                 // For now, we emit a call to the runtime lookup function
                 // This acts as a "megamorphic" cache state or "uninitialized" state
-                
+
                 // Prepare args for runtime call: (object, method_name_hash, args...)
                 // We need to marshal args similar to a standard call
-                
+
                 // Save caller-saved registers
-                emitter.emit_stack_map(); 
-                
+                emitter.emit_stack_map();
+
                 // TODO: emit runtime call for dispatch
                 // emitter.emit_call_runtime("dispatch_trait", ...);
-                
+
                 // Record this site for future patching (JIT)
                 emitter.ic_sites.push(ICSite {
                     code_offset: emitter.code.len(),
                     patch_size: 0, // No patchable region yet (just a call)
                     cache: InlineCache::new(2, method.clone()), // Small default size for this site
                 });
-                
-                // For this implementation gap fill, we'll fall back to interpreter/deopt 
+
+                // For this implementation gap fill, we'll fall back to interpreter/deopt
                 // because we don't have the full runtime glue for trait dispatch yet.
                 // But we successfully identified and "structured" the gap.
                 debug!("JIT: Emitting deopt for TraitDispatch (IC framework connected)");
                 emitter.emit_deopt_guard(block_label, inst_idx);
             }
 
-            IrInstruction::Cast { dest, value, to_type } => {
+            IrInstruction::Cast {
+                dest,
+                value,
+                to_type,
+            } => {
                 let src_reg = self.load_value(emitter, value, "cast_tmp")?;
                 let dest_reg = emitter.reg_alloc.allocate(dest);
-                
+
                 match to_type {
                     IrType::F64 => {
                         // cvtsi2sd xmm0, src_reg
-                        emitter.code.extend_from_slice(&[0xF2, 0x48, 0x0F, 0x2A, 0xC0 | (src_reg & 7)]);
+                        emitter.code.extend_from_slice(&[
+                            0xF2,
+                            0x48,
+                            0x0F,
+                            0x2A,
+                            0xC0 | (src_reg & 7),
+                        ]);
                     }
                     _ => {
                         if dest_reg != src_reg {
@@ -934,16 +973,19 @@ impl BaselineJit {
                     }
                 }
             }
-            
+
             // For other instructions, emit a deopt point and fall back to interpreter
             _ => {
-                trace!("JIT: Unsupported instruction {:?}, inserting deopt guard", inst);
+                trace!(
+                    "JIT: Unsupported instruction {:?}, inserting deopt guard",
+                    inst
+                );
                 emitter.emit_deopt_guard(block_label, inst_idx);
             }
         }
         Ok(())
     }
-    
+
     /// Compile a terminator instruction
     fn compile_terminator(
         &self,
@@ -953,7 +995,8 @@ impl BaselineJit {
         match term {
             IrTerminator::Return(Some(value)) => {
                 let reg = self.load_value(emitter, value, "ret_tmp")?;
-                if reg != 0 { // rax
+                if reg != 0 {
+                    // rax
                     emitter.emit_mov_reg_reg(0, reg);
                 }
                 emitter.emit_epilogue();
@@ -964,16 +1007,22 @@ impl BaselineJit {
             IrTerminator::Branch(label) => {
                 emitter.emit_jmp(label);
             }
-            IrTerminator::CondBranch { cond, then_label, else_label } => {
+            IrTerminator::CondBranch {
+                cond,
+                then_label,
+                else_label,
+            } => {
                 let cond_reg = self.load_value(emitter, cond, "cond_tmp")?;
                 // test cond_reg, cond_reg
                 let rex = 0x48 | ((cond_reg >> 3) << 2) | ((cond_reg >> 3) & 1);
                 emitter.code.push(rex);
                 emitter.code.push(0x85);
-                emitter.code.push(0xC0 | ((cond_reg & 7) << 3) | (cond_reg & 7));
+                emitter
+                    .code
+                    .push(0xC0 | ((cond_reg & 7) << 3) | (cond_reg & 7));
                 // jnz then_label
                 emitter.emit_jcc(0x05, then_label); // JNZ
-                // jmp else_label (fall through)
+                                                    // jmp else_label (fall through)
                 emitter.emit_jmp(else_label);
             }
             IrTerminator::Unreachable => {
@@ -983,9 +1032,14 @@ impl BaselineJit {
         }
         Ok(())
     }
-    
+
     /// Load an IR value into a register
-    fn load_value(&self, emitter: &mut BaselineEmitter, value: &IrValue, hint: &str) -> Result<u8, String> {
+    fn load_value(
+        &self,
+        emitter: &mut BaselineEmitter,
+        value: &IrValue,
+        hint: &str,
+    ) -> Result<u8, String> {
         match value {
             IrValue::Var(name) => {
                 if let Some(reg) = emitter.reg_alloc.get_reg(name) {
@@ -999,9 +1053,18 @@ impl BaselineJit {
                 let reg = emitter.reg_alloc.allocate(hint);
                 match constant {
                     crate::ir::IrConst::Int(v) => emitter.emit_mov_reg_imm64(reg, *v),
-                    crate::ir::IrConst::Float(v) => emitter.emit_mov_reg_imm64(reg, v.to_bits() as i64),
-                    crate::ir::IrConst::Bool(v) => emitter.emit_mov_reg_imm64(reg, if *v { 1 } else { 0 }),
-                    _ => return Err(format!("JIT: Cannot load constant {:?} into register", constant)),
+                    crate::ir::IrConst::Float(v) => {
+                        emitter.emit_mov_reg_imm64(reg, v.to_bits() as i64)
+                    }
+                    crate::ir::IrConst::Bool(v) => {
+                        emitter.emit_mov_reg_imm64(reg, if *v { 1 } else { 0 })
+                    }
+                    _ => {
+                        return Err(format!(
+                            "JIT: Cannot load constant {:?} into register",
+                            constant
+                        ))
+                    }
                 }
                 Ok(reg)
             }
@@ -1031,54 +1094,62 @@ impl CodeCache {
             max_size,
         }
     }
-    
+
     /// Store a compiled method in the cache
     pub fn insert(&mut self, method: CompiledMethod) -> Result<usize, String> {
         let code_size = method.machine_code.len();
-        
+
         // Check if we have space
         if self.total_size + code_size > self.max_size {
             // Evict cold methods
             self.evict_cold_methods(code_size)?;
         }
-        
+
         let offset = self.total_size;
         self.total_size += code_size;
-        
-        info!("CodeCache: stored {} ({} bytes, tier={}, compile_time={}μs)",
-              method.name, code_size, method.tier, method.compile_time_us);
-        
-        self.methods.insert(method.name.clone(), CompiledMethod {
-            code_offset: offset,
-            code_size,
-            ..method
-        });
-        
+
+        info!(
+            "CodeCache: stored {} ({} bytes, tier={}, compile_time={}μs)",
+            method.name, code_size, method.tier, method.compile_time_us
+        );
+
+        self.methods.insert(
+            method.name.clone(),
+            CompiledMethod {
+                code_offset: offset,
+                code_size,
+                ..method
+            },
+        );
+
         Ok(offset)
     }
-    
+
     /// Look up a compiled method
     pub fn lookup(&self, name: &str) -> Option<&CompiledMethod> {
         self.methods.get(name)
     }
-    
+
     /// Invalidate a compiled method (e.g., for deoptimization)
     pub fn invalidate(&mut self, name: &str) -> bool {
         if let Some(method) = self.methods.remove(name) {
             self.total_size -= method.code_size;
-            info!("CodeCache: invalidated {} ({} bytes freed)", name, method.code_size);
+            info!(
+                "CodeCache: invalidated {} ({} bytes freed)",
+                name, method.code_size
+            );
             true
         } else {
             false
         }
     }
-    
+
     /// Evict cold methods to make space
     fn evict_cold_methods(&mut self, needed: usize) -> Result<(), String> {
         // Simple LRU-like eviction: remove baseline-compiled methods first
         let mut to_evict: Vec<String> = Vec::new();
         let mut freed = 0;
-        
+
         // First pass: evict baseline methods
         for (name, method) in &self.methods {
             if method.tier == CompilationTier::Baseline {
@@ -1089,23 +1160,23 @@ impl CodeCache {
                 }
             }
         }
-        
+
         for name in &to_evict {
             self.invalidate(name);
         }
-        
+
         if self.total_size + needed <= self.max_size {
             Ok(())
         } else {
             Err("CodeCache: unable to free enough space".to_string())
         }
     }
-    
+
     /// Get cache statistics
     pub fn stats(&self) -> CodeCacheStats {
         let mut baseline_count = 0;
         let mut optimized_count = 0;
-        
+
         for method in self.methods.values() {
             match method.tier {
                 CompilationTier::Baseline => baseline_count += 1,
@@ -1113,7 +1184,7 @@ impl CodeCache {
                 _ => {}
             }
         }
-        
+
         CodeCacheStats {
             total_methods: self.methods.len(),
             baseline_methods: baseline_count,
@@ -1163,35 +1234,40 @@ impl OsrManager {
             pending: HashMap::new(),
         }
     }
-    
+
     /// Request OSR compilation for a hot loop
     pub fn request_osr(&mut self, func_name: &str, loop_header: &str, iteration: u64) {
         let key = format!("{}:{}", func_name, loop_header);
         if !self.pending.contains_key(&key) {
-            info!("OSR: Requesting compilation for {}:{} at iteration {}",
-                  func_name, loop_header, iteration);
-            self.pending.insert(key, OsrEntry {
-                func_name: func_name.to_string(),
-                loop_header: loop_header.to_string(),
-                trigger_iteration: iteration,
-                compiled: None,
-            });
+            info!(
+                "OSR: Requesting compilation for {}:{} at iteration {}",
+                func_name, loop_header, iteration
+            );
+            self.pending.insert(
+                key,
+                OsrEntry {
+                    func_name: func_name.to_string(),
+                    loop_header: loop_header.to_string(),
+                    trigger_iteration: iteration,
+                    compiled: None,
+                },
+            );
         }
     }
-    
+
     /// Check if OSR code is ready for a given loop
     pub fn is_ready(&self, func_name: &str, loop_header: &str) -> bool {
         let key = format!("{}:{}", func_name, loop_header);
-        self.pending.get(&key)
+        self.pending
+            .get(&key)
             .map(|e| e.compiled.is_some())
             .unwrap_or(false)
     }
-    
+
     /// Get OSR entry point
     pub fn get_entry(&self, func_name: &str, loop_header: &str) -> Option<&CompiledMethod> {
         let key = format!("{}:{}", func_name, loop_header);
-        self.pending.get(&key)
-            .and_then(|e| e.compiled.as_ref())
+        self.pending.get(&key).and_then(|e| e.compiled.as_ref())
     }
 }
 
@@ -1204,14 +1280,15 @@ pub struct Deoptimizer;
 
 impl Deoptimizer {
     /// Perform deoptimization: reconstruct interpreter state from compiled code
-    pub fn deoptimize(
-        method: &CompiledMethod,
-        deopt_point: &DeoptPoint,
-    ) -> DeoptResult {
-        info!("Deoptimizing {} at code offset {} -> IR {}:{}",
-              method.name, deopt_point.code_offset,
-              deopt_point.ir_position.0, deopt_point.ir_position.1);
-        
+    pub fn deoptimize(method: &CompiledMethod, deopt_point: &DeoptPoint) -> DeoptResult {
+        info!(
+            "Deoptimizing {} at code offset {} -> IR {}:{}",
+            method.name,
+            deopt_point.code_offset,
+            deopt_point.ir_position.0,
+            deopt_point.ir_position.1
+        );
+
         // Reconstruct local variable values from register/stack locations
         let mut locals = HashMap::new();
         for (location, var_name) in &deopt_point.live_values {
@@ -1228,23 +1305,22 @@ impl Deoptimizer {
             };
             locals.insert(var_name.clone(), value);
         }
-        
+
         DeoptResult {
             resume_block: deopt_point.ir_position.0.clone(),
             resume_index: deopt_point.ir_position.1,
             locals,
         }
     }
-    
+
     /// Invalidate compiled methods that depend on a changed assumption
-    pub fn invalidate_dependent(
-        code_cache: &mut CodeCache,
-        assumption: &SpeculativeAssumption,
-    ) {
+    pub fn invalidate_dependent(code_cache: &mut CodeCache, assumption: &SpeculativeAssumption) {
         for method_name in &assumption.dependent_methods {
             if code_cache.invalidate(method_name) {
-                info!("Deoptimizer: invalidated {} due to assumption: {}",
-                      method_name, assumption.description);
+                info!(
+                    "Deoptimizer: invalidated {} due to assumption: {}",
+                    method_name, assumption.description
+                );
             }
         }
     }
@@ -1303,39 +1379,38 @@ impl JitEngine {
             optimizing_jit: OptimizingJit::new(),
         }
     }
-    
+
     /// Notify the JIT engine of a method invocation
     pub fn on_method_entry(&mut self, func: &IrFunction) -> Option<&CompiledMethod> {
-        let profile = self.profiles
+        let profile = self
+            .profiles
             .entry(func.name.clone())
             .or_insert_with(MethodProfile::new);
-        
+
         // Check if we already have compiled code — return early
         if self.code_cache.lookup(&func.name).is_some() {
             profile.invocation_count += 1;
             return self.code_cache.lookup(&func.name);
         }
-        
+
         // Check if compilation should be triggered
         if let Some(target_tier) = profile.record_invocation(&self.config) {
             if !profile.compiling {
                 profile.compiling = true;
-                
+
                 match target_tier {
-                    CompilationTier::Baseline => {
-                        match self.baseline_jit.compile(func) {
-                            Ok(compiled) => {
-                                self.compile_count += 1;
-                                profile.tier = CompilationTier::Baseline;
-                                profile.compiling = false;
-                                let _ = self.code_cache.insert(compiled);
-                            }
-                            Err(e) => {
-                                warn!("JIT baseline compilation failed for {}: {}", func.name, e);
-                                profile.compiling = false;
-                            }
+                    CompilationTier::Baseline => match self.baseline_jit.compile(func) {
+                        Ok(compiled) => {
+                            self.compile_count += 1;
+                            profile.tier = CompilationTier::Baseline;
+                            profile.compiling = false;
+                            let _ = self.code_cache.insert(compiled);
                         }
-                    }
+                        Err(e) => {
+                            warn!("JIT baseline compilation failed for {}: {}", func.name, e);
+                            profile.compiling = false;
+                        }
+                    },
                     CompilationTier::Optimizing => {
                         // For optimizing tier, we'd use profile data for
                         // speculative optimizations
@@ -1348,7 +1423,7 @@ impl JitEngine {
                             }
                             Err(e) => {
                                 warn!("JIT optimizing compilation failed for {}: {}", func.name, e);
-                                // Fallback to baseline or interpreter? 
+                                // Fallback to baseline or interpreter?
                                 // Keep as baseline for now
                                 profile.compiling = false;
                             }
@@ -1358,23 +1433,23 @@ impl JitEngine {
                 }
             }
         }
-        
+
         self.code_cache.lookup(&func.name)
     }
-    
+
     /// Record a branch outcome for profile-guided optimization
     pub fn record_branch(&mut self, func_name: &str, label: &str, taken: bool) {
         if let Some(profile) = self.profiles.get_mut(func_name) {
             profile.record_branch(label, taken);
         }
     }
-    
+
     /// Record a loop back-edge (for OSR detection)
     pub fn record_loop_back_edge(&mut self, func_name: &str, header: &str) -> bool {
         if !self.config.enable_osr {
             return false;
         }
-        
+
         if let Some(profile) = self.profiles.get_mut(func_name) {
             if profile.record_loop_iteration(header) {
                 let count = profile.loop_counts.get(header).copied().unwrap_or(0);
@@ -1386,7 +1461,7 @@ impl JitEngine {
         }
         false
     }
-    
+
     /// Look up or create an inline cache for a call site
     pub fn get_inline_cache(&mut self, site_id: &str) -> &mut InlineCache {
         let max_entries = self.config.max_ic_entries;
@@ -1394,58 +1469,62 @@ impl JitEngine {
             .entry(site_id.to_string())
             .or_insert_with(|| InlineCache::new(max_entries, site_id.to_string()))
     }
-    
+
     /// Perform deoptimization for a method
     pub fn deoptimize(&mut self, method_name: &str) {
         self.deopt_count += 1;
         self.code_cache.invalidate(method_name);
-        
+
         if let Some(profile) = self.profiles.get_mut(method_name) {
             profile.tier = CompilationTier::Interpreted;
             profile.compiled_entry = None;
             // Reset invocation count to delay recompilation
             profile.invocation_count = 0;
         }
-        
-        info!("JIT: Deoptimized {} (total deopt count: {})", method_name, self.deopt_count);
+
+        info!(
+            "JIT: Deoptimized {} (total deopt count: {})",
+            method_name, self.deopt_count
+        );
     }
 
     /// Recompile a function immediately (e.g. for Hot Swap)
     pub fn recompile_function(&mut self, func: &IrFunction) -> Result<CompiledMethod, String> {
         info!("JIT: Hot Swapping - Recompiling {}", func.name);
-        
+
         // Force compilation using baseline JIT for reliability during hot swap
         match self.baseline_jit.compile(func) {
             Ok(compiled) => {
                 self.compile_count += 1;
-                
+
                 // Update profile
-                let profile = self.profiles
+                let profile = self
+                    .profiles
                     .entry(func.name.clone())
                     .or_insert_with(MethodProfile::new);
                 profile.tier = CompilationTier::Baseline; // Reset to baseline
                 profile.compiling = false;
-                
+
                 // Insert into code cache (replaces existing if any, or adds new version)
                 // Note: Real hot swap would need to patch existing call sites or use indirection.
                 // Here we just update the cache storage.
                 let _offset = self.code_cache.insert(compiled.clone())?;
-                
+
                 Ok(compiled)
             }
             Err(e) => Err(format!("Hot swap compilation failed: {}", e)),
         }
     }
-    
+
     /// Get JIT engine statistics
     pub fn stats(&self) -> JitStats {
         let cache_stats = self.code_cache.stats();
-        
+
         let mut total_invocations = 0u64;
         let mut interpreted_methods = 0;
         let mut baseline_methods = 0;
         let mut optimized_methods = 0;
-        
+
         for profile in self.profiles.values() {
             total_invocations += profile.invocation_count;
             match profile.tier {
@@ -1454,15 +1533,17 @@ impl JitEngine {
                 CompilationTier::Optimizing => optimized_methods += 1,
             }
         }
-        
+
         let ic_hit_rate = if !self.inline_caches.is_empty() {
-            self.inline_caches.values()
+            self.inline_caches
+                .values()
                 .map(|ic| ic.hit_rate())
-                .sum::<f64>() / self.inline_caches.len() as f64
+                .sum::<f64>()
+                / self.inline_caches.len() as f64
         } else {
             0.0
         };
-        
+
         JitStats {
             total_methods_profiled: self.profiles.len(),
             interpreted_methods,
@@ -1505,10 +1586,19 @@ impl std::fmt::Display for JitStats {
         writeln!(f, "Compilations:        {}", self.total_compilations)?;
         writeln!(f, "Deoptimizations:     {}", self.total_deoptimizations)?;
         writeln!(f, "Total invocations:   {}", self.total_invocations)?;
-        writeln!(f, "Code cache:          {} / {} bytes ({:.1}%)",
-                 self.code_cache_size, 64 * 1024 * 1024, self.code_cache_utilization * 100.0)?;
-        writeln!(f, "Inline caches:       {} (hit rate: {:.1}%)",
-                 self.inline_cache_count, self.inline_cache_hit_rate * 100.0)?;
+        writeln!(
+            f,
+            "Code cache:          {} / {} bytes ({:.1}%)",
+            self.code_cache_size,
+            64 * 1024 * 1024,
+            self.code_cache_utilization * 100.0
+        )?;
+        writeln!(
+            f,
+            "Inline caches:       {} (hit rate: {:.1}%)",
+            self.inline_cache_count,
+            self.inline_cache_hit_rate * 100.0
+        )?;
         Ok(())
     }
 }
@@ -1537,37 +1627,43 @@ mod tests {
             ..JitConfig::default()
         };
         let mut profile = MethodProfile::new();
-        
+
         // Should not trigger at 4 invocations
         for _ in 0..4 {
             assert!(profile.record_invocation(&config).is_none());
         }
-        
+
         // Should trigger baseline at 5
-        assert_eq!(profile.record_invocation(&config), Some(CompilationTier::Baseline));
+        assert_eq!(
+            profile.record_invocation(&config),
+            Some(CompilationTier::Baseline)
+        );
         profile.tier = CompilationTier::Baseline;
-        
+
         // Should trigger optimizing at 20
         for _ in 6..20 {
             assert!(profile.record_invocation(&config).is_none());
         }
-        assert_eq!(profile.record_invocation(&config), Some(CompilationTier::Optimizing));
+        assert_eq!(
+            profile.record_invocation(&config),
+            Some(CompilationTier::Optimizing)
+        );
     }
 
     #[test]
     fn test_inline_cache() {
         let mut ic = InlineCache::new(3, "test_method".to_string());
-        
+
         ic.insert(100, "method_a".to_string(), None);
         assert!(ic.is_monomorphic());
-        
+
         ic.insert(200, "method_b".to_string(), None);
         assert!(!ic.is_monomorphic());
         assert!(!ic.is_megamorphic());
-        
+
         assert!(ic.lookup(100).is_some());
         assert!(ic.lookup(999).is_none());
-        
+
         ic.insert(300, "method_c".to_string(), None);
         assert!(ic.is_megamorphic());
     }
@@ -1575,7 +1671,7 @@ mod tests {
     #[test]
     fn test_code_cache() {
         let mut cache = CodeCache::new(1024);
-        
+
         let method = CompiledMethod {
             name: "test_method".to_string(),
             tier: CompilationTier::Baseline,
@@ -1588,11 +1684,11 @@ mod tests {
             compile_time_us: 50,
             assumptions: vec![],
         };
-        
+
         let offset = cache.insert(method).unwrap();
         assert_eq!(offset, 0);
         assert!(cache.lookup("test_method").is_some());
-        
+
         cache.invalidate("test_method");
         assert!(cache.lookup("test_method").is_none());
     }
@@ -1600,17 +1696,17 @@ mod tests {
     #[test]
     fn test_register_allocation() {
         let mut regs = RegisterState::new();
-        
+
         let r1 = regs.allocate("x");
         let r2 = regs.allocate("y");
         assert_ne!(r1, r2);
-        
+
         assert_eq!(regs.get_reg("x"), Some(r1));
         assert_eq!(regs.get_reg("y"), Some(r2));
-        
+
         regs.free("x");
         assert_eq!(regs.get_reg("x"), None);
-        
+
         let r3 = regs.allocate("z");
         assert_eq!(r3, r1); // Should reuse freed register
     }
@@ -1618,11 +1714,11 @@ mod tests {
     #[test]
     fn test_branch_profiling() {
         let mut profile = MethodProfile::new();
-        
+
         profile.record_branch("loop_header", true);
         profile.record_branch("loop_header", true);
         profile.record_branch("loop_header", false);
-        
+
         let prob = profile.branch_probability("loop_header");
         assert!((prob - 0.6667).abs() < 0.01);
     }
@@ -1632,7 +1728,7 @@ mod tests {
         let config = JitConfig::default();
         let engine = JitEngine::new(config);
         let stats = engine.stats();
-        
+
         assert_eq!(stats.total_methods_profiled, 0);
         assert_eq!(stats.total_compilations, 0);
     }

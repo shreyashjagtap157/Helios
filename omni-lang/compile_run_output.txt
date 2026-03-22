@@ -1,5 +1,0 @@
-[2026-03-15T14:28:53Z INFO  omnc] HELIOS Omni Compiler/Runtime v2.0.0 (Cognitive Framework)
-[2026-03-15T14:28:53Z INFO  omnc] Target: Ovm
-[2026-03-15T14:28:53Z INFO  omnc] Compiling: "d:\\\\Project\\\\Helios\\\\omni-lang\\\\omni\\\\bootstrap.omni"
-[2026-03-15T14:28:53Z DEBUG omnc] Phase 1: Lexical analysis
-[2026-03-15T14:28:53Z DEBUG omnc] Phase 2: Parsing

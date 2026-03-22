@@ -10,17 +10,17 @@ use thiserror::Error;
 pub enum LexerError {
     #[error("Unexpected character at position {position}: '{char}'")]
     UnexpectedChar { position: usize, char: char },
-    
+
     #[error("Unterminated string literal starting at position {position}")]
     UnterminatedString { position: usize },
-    
+
     #[error("Invalid number literal: {literal}")]
     InvalidNumber { literal: String },
 }
 
 /// Token types for the Omni language
 #[derive(Logos, Debug, Clone, PartialEq)]
-#[logos(skip r"[ \t\r]+")]  // Skip whitespace including CR (but not LF - they're significant)
+#[logos(skip r"[ \t\r]+")] // Skip whitespace including CR (but not LF - they're significant)
 pub enum TokenKind {
     // Keywords
     #[token("module")]
@@ -291,8 +291,20 @@ pub struct Token {
 }
 
 impl Token {
-    pub fn new(kind: TokenKind, lexeme: String, line: usize, column: usize, span: std::ops::Range<usize>) -> Self {
-        Self { kind, lexeme, line, column, span }
+    pub fn new(
+        kind: TokenKind,
+        lexeme: String,
+        line: usize,
+        column: usize,
+        span: std::ops::Range<usize>,
+    ) -> Self {
+        Self {
+            kind,
+            lexeme,
+            line,
+            column,
+            span,
+        }
     }
 }
 
@@ -313,7 +325,7 @@ impl Lexer {
 
 impl Iterator for Lexer {
     type Item = Token;
-    
+
     fn next(&mut self) -> Option<Self::Item> {
         if self.index < self.tokens.len() {
             let token = self.tokens[self.index].clone();
@@ -373,11 +385,23 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexerError> {
 
                     if indent > current_indent {
                         indent_stack.push(indent);
-                        tokens.push(Token::new(TokenKind::Indent, String::new(), line, 1, span.clone()));
+                        tokens.push(Token::new(
+                            TokenKind::Indent,
+                            String::new(),
+                            line,
+                            1,
+                            span.clone(),
+                        ));
                     } else {
                         while indent < *indent_stack.last().unwrap() {
                             indent_stack.pop();
-                            tokens.push(Token::new(TokenKind::Dedent, String::new(), line, 1, span.clone()));
+                            tokens.push(Token::new(
+                                TokenKind::Dedent,
+                                String::new(),
+                                line,
+                                1,
+                                span.clone(),
+                            ));
                         }
                     }
                 } else if kind == TokenKind::Comment || kind == TokenKind::BlockComment {
@@ -397,14 +421,20 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexerError> {
                         tokens.push(Token::new(kind, lexeme.clone(), line, column, span.clone()));
                         column += lexeme.len();
                     } else {
-                        // Legacy comment: # not followed by [ 
+                        // Legacy comment: # not followed by [
                         // Skip everything until end of line by advancing the logos lexer
                         loop {
                             match lexer.next() {
                                 Some(Ok(TokenKind::Newline)) => {
                                     // Emit the newline and handle indentation
                                     let nl_span = lexer.span();
-                                    tokens.push(Token::new(TokenKind::Newline, "\n".to_string(), line, column, nl_span.clone()));
+                                    tokens.push(Token::new(
+                                        TokenKind::Newline,
+                                        "\n".to_string(),
+                                        line,
+                                        column,
+                                        nl_span.clone(),
+                                    ));
                                     line += 1;
                                     column = 1;
                                     // Handle indentation after the newline
@@ -413,11 +443,23 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexerError> {
                                     let current_indent = *indent_stack.last().unwrap();
                                     if indent > current_indent {
                                         indent_stack.push(indent);
-                                        tokens.push(Token::new(TokenKind::Indent, String::new(), line, 1, nl_span.clone()));
+                                        tokens.push(Token::new(
+                                            TokenKind::Indent,
+                                            String::new(),
+                                            line,
+                                            1,
+                                            nl_span.clone(),
+                                        ));
                                     } else {
                                         while indent < *indent_stack.last().unwrap() {
                                             indent_stack.pop();
-                                            tokens.push(Token::new(TokenKind::Dedent, String::new(), line, 1, nl_span.clone()));
+                                            tokens.push(Token::new(
+                                                TokenKind::Dedent,
+                                                String::new(),
+                                                line,
+                                                1,
+                                                nl_span.clone(),
+                                            ));
                                         }
                                     }
                                     break;
@@ -440,8 +482,10 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexerError> {
                             }
                             s if s.starts_with("\\u{") && s.ends_with('}') => {
                                 // \u{HHHH} - Unicode escape
-                                let hex = &s[3..s.len()-1];
-                                !hex.is_empty() && hex.len() <= 6 && hex.chars().all(|c| c.is_ascii_hexdigit())
+                                let hex = &s[3..s.len() - 1];
+                                !hex.is_empty()
+                                    && hex.len() <= 6
+                                    && hex.chars().all(|c| c.is_ascii_hexdigit())
                             }
                             _ => false,
                         }
@@ -477,7 +521,13 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexerError> {
     // Add remaining dedents at end of file
     while indent_stack.len() > 1 {
         indent_stack.pop();
-        tokens.push(Token::new(TokenKind::Dedent, String::new(), line, column, source.len()..source.len()));
+        tokens.push(Token::new(
+            TokenKind::Dedent,
+            String::new(),
+            line,
+            column,
+            source.len()..source.len(),
+        ));
     }
 
     Ok(tokens)
@@ -491,7 +541,7 @@ mod tests {
     fn test_basic_tokens() {
         let source = "fn main() -> i32:\n    return 42";
         let tokens = tokenize(source).unwrap();
-        
+
         assert_eq!(tokens[0].kind, TokenKind::Fn);
         assert_eq!(tokens[1].kind, TokenKind::Identifier);
         assert_eq!(tokens[1].lexeme, "main");
@@ -501,7 +551,7 @@ mod tests {
     fn test_struct_definition() {
         let source = "struct Neuron:\n    weights: &mut [f32]\n    bias: f32";
         let tokens = tokenize(source).unwrap();
-        
+
         assert_eq!(tokens[0].kind, TokenKind::Struct);
         assert_eq!(tokens[1].kind, TokenKind::Identifier);
     }
@@ -548,27 +598,48 @@ mod tests {
     #[test]
     fn test_all_keywords() {
         let keywords = vec![
-            ("module", TokenKind::Module), ("struct", TokenKind::Struct),
-            ("fn", TokenKind::Fn), ("let", TokenKind::Let),
-            ("mut", TokenKind::Mut), ("if", TokenKind::If),
-            ("else", TokenKind::Else), ("for", TokenKind::For),
-            ("in", TokenKind::In), ("while", TokenKind::While),
-            ("return", TokenKind::Return), ("match", TokenKind::Match),
-            ("async", TokenKind::Async), ("await", TokenKind::Await),
-            ("import", TokenKind::Import), ("pass", TokenKind::Pass),
-            ("try", TokenKind::Try), ("catch", TokenKind::Catch),
-            ("finally", TokenKind::Finally), ("break", TokenKind::Break),
-            ("continue", TokenKind::Continue), ("loop", TokenKind::Loop),
-            ("yield", TokenKind::Yield), ("const", TokenKind::Const),
-            ("enum", TokenKind::Enum), ("trait", TokenKind::Trait),
-            ("impl", TokenKind::Impl), ("pub", TokenKind::Pub),
-            ("var", TokenKind::Var), ("defer", TokenKind::Defer),
-            ("spawn", TokenKind::Spawn), ("select", TokenKind::Select),
-            ("macro", TokenKind::Macro), ("elif", TokenKind::Elif),
+            ("module", TokenKind::Module),
+            ("struct", TokenKind::Struct),
+            ("fn", TokenKind::Fn),
+            ("let", TokenKind::Let),
+            ("mut", TokenKind::Mut),
+            ("if", TokenKind::If),
+            ("else", TokenKind::Else),
+            ("for", TokenKind::For),
+            ("in", TokenKind::In),
+            ("while", TokenKind::While),
+            ("return", TokenKind::Return),
+            ("match", TokenKind::Match),
+            ("async", TokenKind::Async),
+            ("await", TokenKind::Await),
+            ("import", TokenKind::Import),
+            ("pass", TokenKind::Pass),
+            ("try", TokenKind::Try),
+            ("catch", TokenKind::Catch),
+            ("finally", TokenKind::Finally),
+            ("break", TokenKind::Break),
+            ("continue", TokenKind::Continue),
+            ("loop", TokenKind::Loop),
+            ("yield", TokenKind::Yield),
+            ("const", TokenKind::Const),
+            ("enum", TokenKind::Enum),
+            ("trait", TokenKind::Trait),
+            ("impl", TokenKind::Impl),
+            ("pub", TokenKind::Pub),
+            ("var", TokenKind::Var),
+            ("defer", TokenKind::Defer),
+            ("spawn", TokenKind::Spawn),
+            ("select", TokenKind::Select),
+            ("macro", TokenKind::Macro),
+            ("elif", TokenKind::Elif),
         ];
         for (text, expected_kind) in keywords {
             let tokens = tokenize(text).unwrap();
-            assert_eq!(tokens[0].kind, expected_kind, "Keyword '{}' should tokenize correctly", text);
+            assert_eq!(
+                tokens[0].kind, expected_kind,
+                "Keyword '{}' should tokenize correctly",
+                text
+            );
         }
     }
 

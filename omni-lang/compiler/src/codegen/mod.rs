@@ -12,16 +12,16 @@ pub mod gpu_advanced;
 pub mod gpu_binary;
 pub mod gpu_dispatch;
 pub mod gpu_fusion;
+pub mod gpu_hardware;
 #[cfg(test)]
 pub mod gpu_tests;
-pub mod gpu_hardware;
 pub mod jit;
 pub mod jit_complete;
 pub mod linker;
 pub mod mlir;
-pub mod native_linker;
 pub mod native_codegen;
 pub mod native_extended;
+pub mod native_linker;
 pub mod opt;
 pub mod optimizer;
 pub mod optimizing_jit;

@@ -296,14 +296,18 @@ impl OmniVM {
 
     /// Dereference a HeapRef to get a clone of the heap cell.
     pub fn heap_get(&self, idx: usize) -> Option<&HeapCell> {
-        self.heap.get(idx).and_then(|slot| slot.as_ref().map(|(_, cell)| cell))
+        self.heap
+            .get(idx)
+            .and_then(|slot| slot.as_ref().map(|(_, cell)| cell))
     }
 
     // -- Helper methods -----------------------------------------------------
 
     /// Pop a value from the operand stack.
     fn pop(&mut self) -> Result<VmValue, String> {
-        self.stack.pop().ok_or_else(|| "Stack underflow".to_string())
+        self.stack
+            .pop()
+            .ok_or_else(|| "Stack underflow".to_string())
     }
 
     /// Push a value onto the operand stack.
@@ -313,7 +317,9 @@ impl OmniVM {
 
     /// Peek at the top of the operand stack without removing it.
     fn peek(&self) -> Result<&VmValue, String> {
-        self.stack.last().ok_or_else(|| "Stack underflow (peek)".to_string())
+        self.stack
+            .last()
+            .ok_or_else(|| "Stack underflow (peek)".to_string())
     }
 
     /// Determine whether a value is truthy.
@@ -359,7 +365,9 @@ impl OmniVM {
                 .functions
                 .iter()
                 .position(|f| f.name == "main")
-                .ok_or_else(|| "No entry point: no `entry_point` set and no `main` function found".to_string())?
+                .ok_or_else(|| {
+                    "No entry point: no `entry_point` set and no `main` function found".to_string()
+                })?
         };
 
         if entry_idx >= module.functions.len() {
@@ -431,7 +439,6 @@ impl OmniVM {
                 }
 
                 // -- Arithmetic -------------------------------------------------
-
                 OpCode::Add => {
                     let b = self.pop()?;
                     let a = self.pop()?;
@@ -532,7 +539,6 @@ impl OmniVM {
                 }
 
                 // -- Comparison -------------------------------------------------
-
                 OpCode::Eq => {
                     let b = self.pop()?;
                     let a = self.pop()?;
@@ -602,7 +608,6 @@ impl OmniVM {
                 }
 
                 // -- Logic ------------------------------------------------------
-
                 OpCode::And => {
                     let b = self.pop()?;
                     let a = self.pop()?;
@@ -634,7 +639,6 @@ impl OmniVM {
                 }
 
                 // -- String -----------------------------------------------------
-
                 OpCode::Concat => {
                     let b = self.pop()?;
                     let a = self.pop()?;
@@ -647,7 +651,6 @@ impl OmniVM {
                 }
 
                 // -- Local variables --------------------------------------------
-
                 OpCode::LoadLocal(n) => {
                     let frame = self.call_stack.last().unwrap();
                     if n >= frame.locals.len() {
@@ -672,13 +675,8 @@ impl OmniVM {
                 }
 
                 // -- Global variables -------------------------------------------
-
                 OpCode::LoadGlobal(ref name) => {
-                    let val = self
-                        .globals
-                        .get(name)
-                        .cloned()
-                        .unwrap_or(VmValue::Null);
+                    let val = self.globals.get(name).cloned().unwrap_or(VmValue::Null);
                     self.push(val);
                 }
 
@@ -688,7 +686,6 @@ impl OmniVM {
                 }
 
                 // -- Fields (struct access) -------------------------------------
-
                 OpCode::LoadField(ref field_name) => {
                     let obj = self.pop()?;
                     match obj {
@@ -729,7 +726,6 @@ impl OmniVM {
                 }
 
                 // -- Control flow -----------------------------------------------
-
                 OpCode::Jump(addr) => {
                     self.call_stack.last_mut().unwrap().ip = addr;
                 }
@@ -749,7 +745,6 @@ impl OmniVM {
                 }
 
                 // -- Function calls ---------------------------------------------
-
                 OpCode::Call(_n_args) => {
                     return Err(
                         "Call(n) with function-on-stack is not yet supported; use CallNamed"
@@ -810,7 +805,6 @@ impl OmniVM {
                 }
 
                 // -- Composite constructors -------------------------------------
-
                 OpCode::NewStruct(ref name, n) => {
                     let mut fields = Vec::with_capacity(n);
                     for i in (0..n).rev() {
@@ -878,17 +872,11 @@ impl OmniVM {
                                 }
                             }
                         }
-                        _ => {
-                            return Err(format!(
-                                "Cannot index {:?} with {:?}",
-                                collection, index
-                            ))
-                        }
+                        _ => return Err(format!("Cannot index {:?} with {:?}", collection, index)),
                     }
                 }
 
                 // -- Built-in operations ----------------------------------------
-
                 OpCode::Print => {
                     let val = self.pop()?;
                     let text = format!("{}", val);
@@ -1167,10 +1155,7 @@ mod tests {
             vm.globals["concat"],
             VmValue::String("Hello, World!".into())
         );
-        assert_eq!(
-            vm.globals["add_concat"],
-            VmValue::String("foobar".into())
-        );
+        assert_eq!(vm.globals["add_concat"], VmValue::String("foobar".into()));
     }
 
     // -- 7. Local variables --------------------------------------------------
@@ -1326,10 +1311,7 @@ mod tests {
             name: "make_greeting".to_string(),
             arity: 0,
             locals_count: 0,
-            instructions: vec![
-                OpCode::Push(Value::String("hi".into())),
-                OpCode::Return,
-            ],
+            instructions: vec![OpCode::Push(Value::String("hi".into())), OpCode::Return],
         };
         let module = OvmModule {
             name: "test".to_string(),
@@ -1569,8 +1551,8 @@ mod tests {
                 OpCode::Push(Value::Int(10)),
                 OpCode::Push(Value::Int(20)),
                 OpCode::Swap,
-                OpCode::StoreGlobal("swap_top".into()),  // was bottom (10)
-                OpCode::StoreGlobal("swap_bot".into()),   // was top (20)
+                OpCode::StoreGlobal("swap_top".into()), // was bottom (10)
+                OpCode::StoreGlobal("swap_bot".into()), // was top (20)
                 OpCode::Halt,
             ],
             0,
@@ -1752,7 +1734,10 @@ mod tests {
 
         // Next allocation should reuse a free slot
         let reused = vm.alloc(HeapCell::HeapString("reused".to_string()));
-        assert!(reused == idx0 || reused == idx1, "should reuse a freed slot");
+        assert!(
+            reused == idx0 || reused == idx1,
+            "should reuse a freed slot"
+        );
     }
 
     // -- 28. GC: globals as roots --------------------------------------------
@@ -1761,7 +1746,8 @@ mod tests {
     fn test_gc_globals_as_roots() {
         let mut vm = OmniVM::new();
         let idx = vm.alloc(HeapCell::HeapString("global obj".to_string()));
-        vm.globals.insert("my_global".to_string(), VmValue::HeapRef(idx));
+        vm.globals
+            .insert("my_global".to_string(), VmValue::HeapRef(idx));
 
         // Allocate garbage
         for _ in 0..100 {
@@ -1770,7 +1756,10 @@ mod tests {
 
         vm.gc_collect();
 
-        assert!(vm.heap[idx].is_some(), "object referenced from globals should survive");
+        assert!(
+            vm.heap[idx].is_some(),
+            "object referenced from globals should survive"
+        );
         let live = vm.heap.iter().filter(|c| c.is_some()).count();
         assert_eq!(live, 1);
     }

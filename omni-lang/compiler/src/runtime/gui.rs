@@ -2,7 +2,7 @@
 //! Native GUI Integration (Cross-platform)
 //! Provides window management, event pumping, and basic rendering context
 
-use log::{info, debug};
+use log::{debug, info};
 use std::collections::HashMap;
 
 /// Window state
@@ -21,7 +21,7 @@ pub struct WindowInfo {
 pub enum GuiEvent {
     WindowClose(usize),
     WindowResize(usize, u32, u32),
-    KeyDown(usize, u32),    // window_handle, keycode
+    KeyDown(usize, u32), // window_handle, keycode
     KeyUp(usize, u32),
     MouseMove(usize, i32, i32),
     MouseButton(usize, u8, bool), // window, button, pressed
@@ -48,14 +48,14 @@ impl GuiContext {
 
     pub fn init(&mut self) -> anyhow::Result<()> {
         info!("GUI: Initializing native subsystem");
-        
+
         #[cfg(target_os = "windows")]
         {
             // Register window class via Win32 API
             debug!("GUI: Registering Win32 window class");
             // In a full implementation, would call RegisterClassExW here
         }
-        
+
         self.initialized = true;
         Ok(())
     }
@@ -63,15 +63,18 @@ impl GuiContext {
     pub fn create_window(&mut self, title: &str, width: u32, height: u32) -> usize {
         let handle = self.next_handle;
         self.next_handle += 1;
-        
-        info!("GUI: Creating window [{}]: '{}' ({}x{})", handle, title, width, height);
+
+        info!(
+            "GUI: Creating window [{}]: '{}' ({}x{})",
+            handle, title, width, height
+        );
 
         #[cfg(target_os = "windows")]
         {
             // Would call CreateWindowExW here for a real window
             debug!("GUI: Win32 window creation requested");
         }
-        
+
         #[cfg(target_os = "linux")]
         {
             // Would use X11/Wayland for real windows
@@ -86,7 +89,7 @@ impl GuiContext {
             visible: false,
             should_close: false,
         };
-        
+
         self.windows.insert(handle, window);
         handle
     }
@@ -95,36 +98,36 @@ impl GuiContext {
         if let Some(window) = self.windows.get_mut(&handle) {
             window.visible = true;
             debug!("GUI: Showing window [{}] '{}'", handle, window.title);
-            
+
             #[cfg(target_os = "windows")]
             {
                 // Would call ShowWindow(hwnd, SW_SHOW) here
             }
         }
     }
-    
+
     pub fn hide_window(&mut self, handle: usize) {
         if let Some(window) = self.windows.get_mut(&handle) {
             window.visible = false;
             debug!("GUI: Hiding window [{}]", handle);
         }
     }
-    
+
     pub fn destroy_window(&mut self, handle: usize) {
         if let Some(window) = self.windows.remove(&handle) {
             debug!("GUI: Destroying window [{}] '{}'", handle, window.title);
-            
+
             #[cfg(target_os = "windows")]
             {
                 // Would call DestroyWindow(hwnd) here
             }
         }
     }
-    
+
     pub fn set_title(&mut self, handle: usize, title: &str) {
         if let Some(window) = self.windows.get_mut(&handle) {
             window.title = title.to_string();
-            
+
             #[cfg(target_os = "windows")]
             {
                 // Would call SetWindowTextW here
@@ -148,13 +151,15 @@ impl GuiContext {
             // Would call PeekMessageW / TranslateMessage / DispatchMessageW here
             // For now, check if any window has requested close
         }
-        
+
         // Process any queued close requests
-        let close_handles: Vec<usize> = self.windows.iter()
+        let close_handles: Vec<usize> = self
+            .windows
+            .iter()
             .filter(|(_, w)| w.should_close)
             .map(|(h, _)| *h)
             .collect();
-        
+
         for handle in close_handles {
             self.windows.remove(&handle);
         }
@@ -166,7 +171,7 @@ impl GuiContext {
     pub fn poll_event(&mut self) -> Option<GuiEvent> {
         self.event_queue.pop()
     }
-    
+
     /// Queue an event externally (e.g., from a platform callback)
     pub fn push_event(&mut self, event: GuiEvent) {
         match &event {
@@ -190,7 +195,7 @@ impl GuiContext {
     pub fn get_window_info(&self, handle: usize) -> Option<&WindowInfo> {
         self.windows.get(&handle)
     }
-    
+
     /// Get all window handles
     pub fn window_handles(&self) -> Vec<usize> {
         self.windows.keys().copied().collect()

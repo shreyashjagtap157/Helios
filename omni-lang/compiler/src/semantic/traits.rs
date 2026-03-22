@@ -90,9 +90,9 @@ pub struct HigherRankedBound {
 /// Trait object: dyn Trait + Trait2 + 'a
 #[derive(Debug, Clone)]
 pub struct TraitObject {
-    pub principal: String,           // Main trait
-    pub supertraits: Vec<String>,    // Additional trait bounds
-    pub lifetime: Option<String>,    // Optional lifetime bound
+    pub principal: String,        // Main trait
+    pub supertraits: Vec<String>, // Additional trait bounds
+    pub lifetime: Option<String>, // Optional lifetime bound
 }
 
 /// Trait resolver with advanced feature support
@@ -212,7 +212,8 @@ impl TraitResolver {
         // 3. All methods have &self or &mut self receiver
         if let Some(trait_def) = self.traits.get(trait_name) {
             let has_generic_methods = trait_def.methods.iter().any(|m| !m.type_params.is_empty());
-            let has_non_default_assoc = trait_def.associated_types
+            let has_non_default_assoc = trait_def
+                .associated_types
                 .iter()
                 .any(|a| a.default.is_none() && !a.generic_params.is_empty());
 
@@ -225,7 +226,8 @@ impl TraitResolver {
 
     /// Register higher-ranked trait bound: for<'a> F: Fn(&'a T)
     pub fn register_higher_ranked(&mut self, bound: HigherRankedBound) {
-        self.higher_ranked_cache.insert(bound.type_param.clone(), bound);
+        self.higher_ranked_cache
+            .insert(bound.type_param.clone(), bound);
     }
 
     /// Cache generic associated type resolution
@@ -236,12 +238,24 @@ impl TraitResolver {
         generic_args: String,
         resolved: Type,
     ) {
-        self.gat_cache.insert((trait_name, type_name, generic_args), resolved);
+        self.gat_cache
+            .insert((trait_name, type_name, generic_args), resolved);
     }
 
     /// Get cached GAT
-    pub fn get_cached_gat(&self, trait_name: &str, type_name: &str, generic_args: &str) -> Option<Type> {
-        self.gat_cache.get(&(trait_name.to_string(), type_name.to_string(), generic_args.to_string())).cloned()
+    pub fn get_cached_gat(
+        &self,
+        trait_name: &str,
+        type_name: &str,
+        generic_args: &str,
+    ) -> Option<Type> {
+        self.gat_cache
+            .get(&(
+                trait_name.to_string(),
+                type_name.to_string(),
+                generic_args.to_string(),
+            ))
+            .cloned()
     }
 
     /// Register a trait implementation
@@ -250,10 +264,7 @@ impl TraitResolver {
         if !self.traits.contains_key(&impl_def.trait_name)
             && !self.builtin_traits.contains_key(&impl_def.trait_name)
         {
-            return Err(format!(
-                "Trait {} not found for impl",
-                impl_def.trait_name
-            ));
+            return Err(format!("Trait {} not found for impl", impl_def.trait_name));
         }
         self.impls.push(impl_def);
         Ok(())
@@ -265,9 +276,20 @@ impl TraitResolver {
         if let Some(types) = self.builtin_traits.get(trait_name) {
             match ty {
                 Type::Named(n) => types.iter().any(|t| t == n),
-                Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::Isize
-                | Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::Usize
-                | Type::F32 | Type::F64 | Type::Bool | Type::Str => {
+                Type::I8
+                | Type::I16
+                | Type::I32
+                | Type::I64
+                | Type::Isize
+                | Type::U8
+                | Type::U16
+                | Type::U32
+                | Type::U64
+                | Type::Usize
+                | Type::F32
+                | Type::F64
+                | Type::Bool
+                | Type::Str => {
                     let type_name = self.type_to_builtin_name(ty);
                     types.contains(&type_name)
                 }
@@ -316,27 +338,16 @@ impl TraitResolver {
             .impls
             .iter()
             .find(|i| {
-                i.trait_name == trait_name
-                    && self.types_match(ty, &i.type_name, &i.type_args)
+                i.trait_name == trait_name && self.types_match(ty, &i.type_name, &i.type_args)
             })
-            .ok_or_else(|| {
-                format!(
-                    "No impl of {} for {:?}",
-                    trait_name, ty
-                )
-            })?;
+            .ok_or_else(|| format!("No impl of {} for {:?}", trait_name, ty))?;
 
         // Find associated type
         impl_def
             .assoc_types
             .get(assoc_type_name)
             .cloned()
-            .ok_or_else(|| {
-                format!(
-                    "Associated type {} not found in impl",
-                    assoc_type_name
-                )
-            })
+            .ok_or_else(|| format!("Associated type {} not found in impl", assoc_type_name))
     }
 
     /// Check trait bounds on a type
@@ -357,12 +368,12 @@ impl TraitResolver {
         match ty {
             Type::Named(n) => n == name && args.is_empty(),
             Type::Generic(n, a) => {
-                n == name && a.len() == args.len() && a.iter().zip(args).all(|(x, y)| {
-                    match (x, y) {
+                n == name
+                    && a.len() == args.len()
+                    && a.iter().zip(args).all(|(x, y)| match (x, y) {
                         (Type::Named(nx), Type::Named(ny)) => nx == ny,
                         _ => false,
-                    }
-                })
+                    })
             }
             _ => false,
         }
@@ -465,7 +476,8 @@ mod tests {
             associated_types: vec![],
             supertraits: vec![],
             is_object_safe: true,
-            where_clauses: vec![],        };
+            where_clauses: vec![],
+        };
         resolver.register_trait(trait_def.clone()).unwrap();
         assert!(resolver.register_trait(trait_def).is_err());
     }

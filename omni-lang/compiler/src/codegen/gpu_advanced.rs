@@ -1,8 +1,8 @@
 //! Advanced GPU Optimizations
-//! 
+//!
 //! Warp divergence analysis, shared memory banking, Tensor Cores, CUDA Graphs.
 
-use crate::ir::{IrModule, IrFunction, IrInstruction, IrType};
+use crate::ir::{IrFunction, IrInstruction, IrModule, IrType};
 
 /// Warp Divergence Analyzer
 pub struct WarpDivergenceAnalyzer;
@@ -11,7 +11,7 @@ impl WarpDivergenceAnalyzer {
     /// Detect branches that depend on thread ID (cause warp divergence)
     pub fn analyze(func: &IrFunction) -> Vec<WarpDivergenceWarning> {
         let mut warnings = Vec::new();
-        
+
         for (block_idx, block) in func.blocks.iter().enumerate() {
             // Check terminators for conditional branches
             if let crate::ir::IrTerminator::CondBranch { cond, .. } = &block.terminator {
@@ -25,7 +25,7 @@ impl WarpDivergenceAnalyzer {
                 }
             }
         }
-        
+
         warnings
     }
 
@@ -55,7 +55,7 @@ impl BankConflictAnalyzer {
     /// Detect strided access patterns that cause bank conflicts
     pub fn analyze(func: &IrFunction) -> Vec<BankConflictWarning> {
         let mut warnings = Vec::new();
-        
+
         for block in &func.blocks {
             for (line, inst) in block.instructions.iter().enumerate() {
                 let ptr_name = match inst {
@@ -67,14 +67,17 @@ impl BankConflictAnalyzer {
                     if Self::causes_bank_conflict(address) {
                         warnings.push(BankConflictWarning {
                             line: line as u32,
-                            message: format!("Potential bank conflict in shared memory access: {}", address),
+                            message: format!(
+                                "Potential bank conflict in shared memory access: {}",
+                                address
+                            ),
                             suggestion: "Consider padding or swizzling access pattern".to_string(),
                         });
                     }
                 }
             }
         }
-        
+
         warnings
     }
 
@@ -98,7 +101,7 @@ impl TextureMemoryOptimizer {
     /// Identify read-only tensors that can be bound to texture units
     pub fn optimize(module: &mut IrModule) -> Vec<TextureBinding> {
         let mut bindings = Vec::new();
-        
+
         for func in &module.functions {
             for param in &func.params {
                 // Check if parameter type is a pointer to an array (2D accessible)
@@ -113,7 +116,7 @@ impl TextureMemoryOptimizer {
                 }
             }
         }
-        
+
         bindings
     }
 }
@@ -133,15 +136,19 @@ impl CooperativeGroups {
         r#"
         cooperative_groups::grid_group grid = cooperative_groups::this_grid();
         grid.sync();
-        "#.to_string()
+        "#
+        .to_string()
     }
 
     /// Generate code for tile-based cooperative operations
     pub fn emit_tile_sync(tile_size: u32) -> String {
-        format!(r#"
+        format!(
+            r#"
         auto tile = cooperative_groups::tiled_partition<{}>(cooperative_groups::this_thread_block());
         tile.sync();
-        "#, tile_size)
+        "#,
+            tile_size
+        )
     }
 }
 
@@ -176,7 +183,8 @@ impl CudaGraphCapture {
         cudaStream_t stream;
         cudaStreamCreate(&stream);
         cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);
-        "#.to_string()
+        "#
+        .to_string()
     }
 
     /// Emit graph capture end and instantiation
@@ -184,7 +192,8 @@ impl CudaGraphCapture {
         r#"
         cudaStreamEndCapture(stream, &graph);
         cudaGraphInstantiate(&instance, graph, NULL, NULL, 0);
-        "#.to_string()
+        "#
+        .to_string()
     }
 
     /// Emit graph replay
@@ -199,11 +208,14 @@ pub struct TensorCoreEmitter;
 impl TensorCoreEmitter {
     /// Emit wmma fragment declarations
     pub fn emit_fragments(m: u32, n: u32, k: u32) -> String {
-        format!(r#"
+        format!(
+            r#"
         wmma::fragment<wmma::matrix_a, {}, {}, {}, half, wmma::row_major> a_frag;
         wmma::fragment<wmma::matrix_b, {}, {}, {}, half, wmma::col_major> b_frag;
         wmma::fragment<wmma::accumulator, {}, {}, {}, float> c_frag;
-        "#, m, n, k, m, n, k, m, n, k)
+        "#,
+            m, n, k, m, n, k, m, n, k
+        )
     }
 
     /// Emit wmma mma operation
@@ -218,7 +230,10 @@ impl TensorCoreEmitter {
 
     /// Emit store to shared memory
     pub fn emit_store_matrix(ptr: &str, frag: &str, stride: u32) -> String {
-        format!("wmma::store_matrix_sync({}, {}, {}, wmma::mem_row_major);", ptr, frag, stride)
+        format!(
+            "wmma::store_matrix_sync({}, {}, {}, wmma::mem_row_major);",
+            ptr, frag, stride
+        )
     }
 }
 
@@ -264,7 +279,8 @@ impl OccupancyCalculator {
                 "registers"
             } else {
                 "shared_memory"
-            }.to_string(),
+            }
+            .to_string(),
         }
     }
 }

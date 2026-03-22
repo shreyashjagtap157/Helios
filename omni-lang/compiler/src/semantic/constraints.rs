@@ -144,10 +144,14 @@ impl Substitution {
         }
 
         // Compose lifetime mappings
-        result.lifetime_mappings.extend(self.lifetime_mappings.clone());
+        result
+            .lifetime_mappings
+            .extend(self.lifetime_mappings.clone());
         for (var, lifetime) in &other.lifetime_mappings {
             if !result.lifetime_mappings.contains_key(var) {
-                result.lifetime_mappings.insert(var.clone(), lifetime.clone());
+                result
+                    .lifetime_mappings
+                    .insert(var.clone(), lifetime.clone());
             }
         }
 
@@ -161,8 +165,8 @@ pub struct ConstraintSolver {
     type_var_counter: usize,
     lifetime_var_counter: usize,
     assoc_type_cache: HashMap<(String, String), InferenceType>, // (trait, name) -> type
-    where_clauses: Vec<(String, String)>, // (type_param, trait_bound)
-    lifetime_graph: HashMap<LifetimeVar, Vec<LifetimeVar>>, // outlives relationships
+    where_clauses: Vec<(String, String)>,                       // (type_param, trait_bound)
+    lifetime_graph: HashMap<LifetimeVar, Vec<LifetimeVar>>,     // outlives relationships
 }
 
 impl ConstraintSolver {
@@ -202,7 +206,12 @@ impl ConstraintSolver {
     }
 
     /// Register associated type
-    pub fn register_assoc_type(&mut self, trait_name: String, type_name: String, ty: InferenceType) {
+    pub fn register_assoc_type(
+        &mut self,
+        trait_name: String,
+        type_name: String,
+        ty: InferenceType,
+    ) {
         self.assoc_type_cache.insert((trait_name, type_name), ty);
     }
 
@@ -213,7 +222,9 @@ impl ConstraintSolver {
         trait_name: &str,
         type_name: &str,
     ) -> Option<InferenceType> {
-        self.assoc_type_cache.get(&(trait_name.to_string(), type_name.to_string())).cloned()
+        self.assoc_type_cache
+            .get(&(trait_name.to_string(), type_name.to_string()))
+            .cloned()
     }
 
     /// Infer lifetime: find elided lifetime from context
@@ -257,23 +268,14 @@ impl ConstraintSolver {
                         // Generic types unify if names match and args unify
                         (InferenceType::Generic(n1, a1), InferenceType::Generic(n2, a2)) => {
                             if n1 != n2 || a1.len() != a2.len() {
-                                return Err(format!(
-                                    "Generic type mismatch: {} vs {}",
-                                    n1, n2
-                                ));
+                                return Err(format!("Generic type mismatch: {} vs {}", n1, n2));
                             }
                             for (arg1, arg2) in a1.iter().zip(a2.iter()) {
-                                self.add_constraint(Constraint::Equals(
-                                    arg1.clone(),
-                                    arg2.clone(),
-                                ));
+                                self.add_constraint(Constraint::Equals(arg1.clone(), arg2.clone()));
                             }
                         }
                         // Function types unify if parameters and returns unify
-                        (
-                            InferenceType::Function(p1, r1),
-                            InferenceType::Function(p2, r2),
-                        ) => {
+                        (InferenceType::Function(p1, r1), InferenceType::Function(p2, r2)) => {
                             self.add_constraint(Constraint::Equals(*p1.clone(), *p2.clone()));
                             self.add_constraint(Constraint::Equals(*r1.clone(), *r2.clone()));
                         }
@@ -445,8 +447,14 @@ mod tests {
     fn test_generic_unification() {
         let mut solver = ConstraintSolver::new();
         solver.add_constraint(Constraint::Equals(
-            InferenceType::Generic("Vec".to_string(), vec![InferenceType::Concrete(Box::new(Type::I32))]),
-            InferenceType::Generic("Vec".to_string(), vec![InferenceType::Concrete(Box::new(Type::I32))]),
+            InferenceType::Generic(
+                "Vec".to_string(),
+                vec![InferenceType::Concrete(Box::new(Type::I32))],
+            ),
+            InferenceType::Generic(
+                "Vec".to_string(),
+                vec![InferenceType::Concrete(Box::new(Type::I32))],
+            ),
         ));
         assert!(solver.solve().is_ok());
     }

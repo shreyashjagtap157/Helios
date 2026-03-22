@@ -382,6 +382,115 @@ impl InferenceEngine {
         }
     }
 
+    /// Register built-in functions and types available in all modules.
+    fn register_builtins(&mut self, env: &mut TypeEnv) {
+        // Core types
+        env.define("String", Type::String);
+        env.define("Int", Type::Int);
+        env.define("Float", Type::Float);
+        env.define("Bool", Type::Bool);
+        env.define("Void", Type::Void);
+
+        // Type aliases
+        env.define("int", Type::Int);
+        env.define("float", Type::Float);
+        env.define("bool", Type::Bool);
+        env.define("string", Type::String);
+
+        // IO functions
+        env.define(
+            "println",
+            Type::Function(vec![Type::String], Box::new(Type::Void)),
+        );
+        env.define(
+            "print",
+            Type::Function(vec![Type::String], Box::new(Type::Void)),
+        );
+        env.define(
+            "println!",
+            Type::Function(vec![Type::String], Box::new(Type::Void)),
+        );
+
+        // String formatting
+        env.define(
+            "format",
+            Type::Function(vec![Type::String], Box::new(Type::String)),
+        );
+        env.define(
+            "format!",
+            Type::Function(vec![Type::String], Box::new(Type::String)),
+        );
+
+        // Type introspection
+        env.define(
+            "type_of",
+            Type::Function(vec![Type::Var(999)], Box::new(Type::String)),
+        );
+
+        // Conversion functions
+        env.define(
+            "int",
+            Type::Function(vec![Type::String], Box::new(Type::Int)),
+        );
+        env.define(
+            "float",
+            Type::Function(vec![Type::String], Box::new(Type::Float)),
+        );
+        env.define(
+            "str",
+            Type::Function(vec![Type::Int], Box::new(Type::String)),
+        );
+
+        // String methods (available as associated functions)
+        env.define(
+            "len",
+            Type::Function(vec![Type::String], Box::new(Type::Int)),
+        );
+
+        // Assertion
+        env.define(
+            "assert",
+            Type::Function(vec![Type::Bool, Type::String], Box::new(Type::Void)),
+        );
+
+        // Range function
+        env.define(
+            "range",
+            Type::Function(
+                vec![Type::Int, Type::Int],
+                Box::new(Type::Array(Box::new(Type::Int))),
+            ),
+        );
+
+        // Register builtin struct-like types
+        self.struct_defs.insert("String".to_string(), vec![]);
+        self.struct_defs.insert(
+            "Vec2".to_string(),
+            vec![
+                ("x".to_string(), Type::Float),
+                ("y".to_string(), Type::Float),
+            ],
+        );
+        self.struct_defs.insert(
+            "Stack".to_string(),
+            vec![
+                ("items".to_string(), Type::Array(Box::new(Type::Var(1000)))),
+                ("size".to_string(), Type::Int),
+            ],
+        );
+
+        // Register builtin function signatures
+        let println_sig = (vec![Type::String], Type::Void);
+        self.function_sigs
+            .insert("println".to_string(), println_sig.clone());
+        self.function_sigs
+            .insert("println!".to_string(), println_sig);
+        let format_sig = (vec![Type::String], Type::String);
+        self.function_sigs
+            .insert("format".to_string(), format_sig.clone());
+        self.function_sigs.insert("format!".to_string(), format_sig);
+    }
+
     /// Allocate a fresh (unique) type variable.
     pub fn fresh_var(&mut self) -> Type {
         let id = self.next_var;
@@ -413,9 +522,7 @@ impl InferenceEngine {
                 "void" | "Void" => Type::Void,
                 _ => Type::Generic(name.clone()),
             },
-            ast::Type::Array(elem_ty, _size) => {
-                Type::Array(Box::new(self.from_ast_type(elem_ty)))
-            }
+            ast::Type::Array(elem_ty, _size) => Type::Array(Box::new(self.from_ast_type(elem_ty))),
             ast::Type::Slice(elem_ty) => Type::Array(Box::new(self.from_ast_type(elem_ty))),
             ast::Type::Function(params, ret) => {
                 let param_tys: Vec<Type> = params.iter().map(|p| self.from_ast_type(p)).collect();
@@ -448,8 +555,14 @@ impl InferenceEngine {
 
     /// Run type inference on an entire module. Returns either the resolved
     /// `InferenceResult` or a list of type errors.
-    pub fn infer_module(&mut self, module: &ast::Module) -> Result<InferenceResult, Vec<TypeError>> {
+    pub fn infer_module(
+        &mut self,
+        module: &ast::Module,
+    ) -> Result<InferenceResult, Vec<TypeError>> {
         let mut env = TypeEnv::new();
+
+        // -- Register built-in functions and types --
+        self.register_builtins(&mut env);
 
         // -- First pass: collect struct definitions and function signatures --
         for item in module.items.iter() {
@@ -522,12 +635,7 @@ impl InferenceEngine {
         self.register_function_with_name(&func.name, func, env);
     }
 
-    fn register_function_with_name(
-        &mut self,
-        name: &str,
-        func: &ast::Function,
-        env: &mut TypeEnv,
-    ) {
+    fn register_function_with_name(&mut self, name: &str, func: &ast::Function, env: &mut TypeEnv) {
         let param_tys: Vec<Type> = func
             .params
             .iter()
@@ -543,9 +651,7 @@ impl InferenceEngine {
 
         self.function_sigs
             .insert(name.to_string(), (param_tys, ret_ty));
-        self.result
-            .function_types
-            .insert(name.to_string(), func_ty);
+        self.result.function_types.insert(name.to_string(), func_ty);
     }
 
     // -----------------------------------------------------------------
@@ -580,15 +686,12 @@ impl InferenceEngine {
     // -----------------------------------------------------------------
 
     /// Infer types for a single statement, emitting constraints as needed.
-    pub fn infer_statement(
-        &mut self,
-        stmt: &ast::Statement,
-        env: &mut TypeEnv,
-        fn_ret: &Type,
-    ) {
+    pub fn infer_statement(&mut self, stmt: &ast::Statement, env: &mut TypeEnv, fn_ret: &Type) {
         match stmt {
             // -- let / var bindings --
-            ast::Statement::Let { name, ty, value, .. } => {
+            ast::Statement::Let {
+                name, ty, value, ..
+            } => {
                 let val_ty = self.infer_expr(value, env);
                 let declared_ty = match ty {
                     Some(t) => {
@@ -606,9 +709,7 @@ impl InferenceEngine {
                     None => val_ty.clone(),
                 };
                 env.define(name, declared_ty.clone());
-                self.result
-                    .variable_types
-                    .insert(name.clone(), declared_ty);
+                self.result.variable_types.insert(name.clone(), declared_ty);
             }
 
             ast::Statement::Var { name, ty, value } => {
@@ -641,8 +742,14 @@ impl InferenceEngine {
                 if let Some(bin_op) = op {
                     // Compound assignment (+=, -= etc.) – operands must be numeric
                     if is_arithmetic_op(*bin_op) {
-                        self.constrain_numeric(&target_ty, &format!("compound assignment {:?}", bin_op));
-                        self.constrain_numeric(&value_ty, &format!("compound assignment {:?}", bin_op));
+                        self.constrain_numeric(
+                            &target_ty,
+                            &format!("compound assignment {:?}", bin_op),
+                        );
+                        self.constrain_numeric(
+                            &value_ty,
+                            &format!("compound assignment {:?}", bin_op),
+                        );
                     }
                 }
                 // The value must be compatible with the target
@@ -813,10 +920,8 @@ impl InferenceEngine {
                 if let Some(ty) = env.lookup(name) {
                     ty.clone()
                 } else {
-                    self.errors.push(TypeError::new(format!(
-                        "Undefined variable '{}'",
-                        name
-                    )));
+                    self.errors
+                        .push(TypeError::new(format!("Undefined variable '{}'", name)));
                     Type::Error
                 }
             }
@@ -938,8 +1043,7 @@ impl InferenceEngine {
                 // If we know the struct definition, constrain fields to match
                 if let Some(def_fields) = self.struct_defs.get(name).cloned() {
                     for (fname, fty) in &field_tys {
-                        if let Some((_, expected_ty)) =
-                            def_fields.iter().find(|(n, _)| n == fname)
+                        if let Some((_, expected_ty)) = def_fields.iter().find(|(n, _)| n == fname)
                         {
                             self.add_constraint(Constraint::Equal(
                                 expected_ty.clone(),
@@ -962,18 +1066,19 @@ impl InferenceEngine {
             }
 
             // -- Borrow --
-            ast::Expression::Borrow { expr, .. } => {
-                self.infer_expr(expr, env)
-            }
+            ast::Expression::Borrow { expr, .. } => self.infer_expr(expr, env),
 
             // -- Deref --
-            ast::Expression::Deref(inner) => {
-                self.infer_expr(inner, env)
-            }
+            ast::Expression::Deref(inner) => self.infer_expr(inner, env),
 
             // -- Await --
             ast::Expression::Await(inner) => {
                 // For now, the awaited value's type is the inner type
+                self.infer_expr(inner, env)
+            }
+
+            // -- Ownership annotations (shared/own pass-through) --
+            ast::Expression::Shared(inner) | ast::Expression::Own(inner) => {
                 self.infer_expr(inner, env)
             }
 
@@ -1123,9 +1228,7 @@ impl InferenceEngine {
                 let inner_ty = self.infer_expr(inner, env);
                 Type::Nullable(Box::new(inner_ty))
             }
-            ast::Expression::Ok(inner) | ast::Expression::Err(inner) => {
-                self.infer_expr(inner, env)
-            }
+            ast::Expression::Ok(inner) | ast::Expression::Err(inner) => self.infer_expr(inner, env),
         }
     }
 
@@ -1150,8 +1253,11 @@ impl InferenceEngine {
     fn infer_binary_op(&mut self, lhs_ty: &Type, op: ast::BinaryOp, rhs_ty: &Type) -> Type {
         match op {
             // Arithmetic → both operands numeric, result numeric
-            ast::BinaryOp::Add | ast::BinaryOp::Sub | ast::BinaryOp::Mul
-            | ast::BinaryOp::Div | ast::BinaryOp::Mod => {
+            ast::BinaryOp::Add
+            | ast::BinaryOp::Sub
+            | ast::BinaryOp::Mul
+            | ast::BinaryOp::Div
+            | ast::BinaryOp::Mod => {
                 self.constrain_numeric(lhs_ty, &format!("left operand of {:?}", op));
                 self.constrain_numeric(rhs_ty, &format!("right operand of {:?}", op));
                 // Both sides must agree
@@ -1167,8 +1273,12 @@ impl InferenceEngine {
             }
 
             // Comparison → both operands same type, result Bool
-            ast::BinaryOp::Eq | ast::BinaryOp::NotEq | ast::BinaryOp::Lt
-            | ast::BinaryOp::Gt | ast::BinaryOp::LtEq | ast::BinaryOp::GtEq => {
+            ast::BinaryOp::Eq
+            | ast::BinaryOp::NotEq
+            | ast::BinaryOp::Lt
+            | ast::BinaryOp::Gt
+            | ast::BinaryOp::LtEq
+            | ast::BinaryOp::GtEq => {
                 self.add_constraint(Constraint::Equal(
                     lhs_ty.clone(),
                     rhs_ty.clone(),
@@ -1185,18 +1295,12 @@ impl InferenceEngine {
                 self.add_constraint(Constraint::Equal(
                     lhs_ty.clone(),
                     Type::Bool,
-                    ConstraintOrigin::new(format!(
-                        "logical {:?}: left operand must be Bool",
-                        op
-                    )),
+                    ConstraintOrigin::new(format!("logical {:?}: left operand must be Bool", op)),
                 ));
                 self.add_constraint(Constraint::Equal(
                     rhs_ty.clone(),
                     Type::Bool,
-                    ConstraintOrigin::new(format!(
-                        "logical {:?}: right operand must be Bool",
-                        op
-                    )),
+                    ConstraintOrigin::new(format!("logical {:?}: right operand must be Bool", op)),
                 ));
                 Type::Bool
             }
@@ -1214,12 +1318,7 @@ impl InferenceEngine {
     // Method call inference
     // -----------------------------------------------------------------
 
-    fn infer_method_call(
-        &mut self,
-        recv_ty: &Type,
-        method: &str,
-        arg_tys: &[Type],
-    ) -> Type {
+    fn infer_method_call(&mut self, recv_ty: &Type, method: &str, arg_tys: &[Type]) -> Type {
         // Try to resolve from registered impl methods
         let resolved = self.substitution.apply(recv_ty);
         if let Type::Struct(ref struct_name, _) = resolved {
@@ -1539,10 +1638,7 @@ impl InferenceEngine {
                 }
                 for ((fn1, ft1), (fn2, ft2)) in f1.iter().zip(f2.iter()) {
                     if fn1 != fn2 {
-                        return Err(format!(
-                            "Struct field name mismatch: {} vs {}",
-                            fn1, fn2
-                        ));
+                        return Err(format!("Struct field name mismatch: {} vs {}", fn1, fn2));
                     }
                     self.unify(ft1, ft2)?;
                 }
@@ -1601,12 +1697,9 @@ impl InferenceEngine {
             Type::Map(k, v) => self.occurs_check(var, k) || self.occurs_check(var, v),
             Type::Tuple(elems) => elems.iter().any(|e| self.occurs_check(var, e)),
             Type::Function(params, ret) => {
-                params.iter().any(|p| self.occurs_check(var, p))
-                    || self.occurs_check(var, ret)
+                params.iter().any(|p| self.occurs_check(var, p)) || self.occurs_check(var, ret)
             }
-            Type::Struct(_, fields) => {
-                fields.iter().any(|(_, ft)| self.occurs_check(var, ft))
-            }
+            Type::Struct(_, fields) => fields.iter().any(|(_, ft)| self.occurs_check(var, ft)),
             Type::Applied(base, args) => {
                 self.occurs_check(var, base) || args.iter().any(|a| self.occurs_check(var, a))
             }
@@ -1686,10 +1779,7 @@ impl InferenceEngine {
 
     /// Walk an entire module and generate constraints without solving them.
     /// Useful for two-phase workflows (generate then solve).
-    pub fn generate_constraints(
-        &mut self,
-        module: &ast::Module,
-    ) {
+    pub fn generate_constraints(&mut self, module: &ast::Module) {
         let mut env = TypeEnv::new();
 
         // Register declarations

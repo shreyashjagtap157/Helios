@@ -20,7 +20,13 @@ pub struct Diagnostic {
 
 impl fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[{:?}] {}: {}", self.level, self.code.as_deref().unwrap_or(""), self.message)
+        write!(
+            f,
+            "[{:?}] {}: {}",
+            self.level,
+            self.code.as_deref().unwrap_or(""),
+            self.message
+        )
     }
 }
 
@@ -57,5 +63,7 @@ impl DiagnosticCollector {
 }
 
 impl Default for DiagnosticCollector {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }

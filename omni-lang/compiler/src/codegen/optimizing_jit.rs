@@ -1,10 +1,12 @@
-use crate::ir::{IrFunction, IrModule};
-use crate::codegen::jit::{CompiledMethod, CompilationTier};
+use crate::codegen::jit::{CompilationTier, CompiledMethod};
 use crate::codegen::native_codegen::{NativeCodegen, TargetTriple};
-use crate::codegen::opt::{OptimizationPass, dce::DeadCodeElimination, const_prop::ConstantPropagation};
+use crate::codegen::opt::{
+    const_prop::ConstantPropagation, dce::DeadCodeElimination, OptimizationPass,
+};
+use crate::ir::{IrFunction, IrModule};
 
 /// Optimizing JIT Compiler
-/// 
+///
 /// Uses profile data to perform advanced optimizations like:
 /// - Inlining
 /// - Loop unrolling
@@ -21,7 +23,7 @@ impl OptimizingJit {
         passes.push(Box::new(ConstantPropagation));
         passes.push(Box::new(DeadCodeElimination));
         passes.push(Box::new(crate::codegen::opt::licm::LoopInvariantCodeMotion));
-        
+
         OptimizingJit {
             optimization_level: 2,
             passes,
@@ -31,12 +33,12 @@ impl OptimizingJit {
     pub fn compile(&self, func: &IrFunction) -> Result<CompiledMethod, String> {
         // 1. Clone function for mutation
         let mut optimized_func = func.clone();
-        
+
         // 2. Run optimization passes
         let mut changed = true;
         let max_iterations = 10;
         let mut iter = 0;
-        
+
         while changed && iter < max_iterations {
             changed = false;
             for pass in &self.passes {
@@ -46,7 +48,7 @@ impl OptimizingJit {
             }
             iter += 1;
         }
-        
+
         // 3. Code Generation
         // Wrap in a temporary module for NativeCodegen
         let wrapper_module = IrModule {
@@ -58,18 +60,20 @@ impl OptimizingJit {
             string_pool: vec![],
             type_info: vec![],
         };
-        
+
         let target = TargetTriple::host();
         let mut codegen = NativeCodegen::new(target);
         codegen.set_opt_level(self.optimization_level as u32);
-        
+
         let output = codegen.compile_module(&wrapper_module)?;
-        
+
         // 4. Extract compiled code
-        let symbol = output.symbols.iter()
+        let symbol = output
+            .symbols
+            .iter()
             .find(|s| s.name == func.name)
             .ok_or("Function symbol not found in generated code")?;
-            
+
         Ok(CompiledMethod {
             name: func.name.clone(),
             tier: CompilationTier::Optimizing,

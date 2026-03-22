@@ -1,0 +1,17 @@
+; Omni IR Module: main
+fn @greet(%name: %string) -> void {
+  entry:
+    %t0 = load %string, %name
+    %t1 = native.call io::println(%t0)
+    ret void
+
+}
+
+fn @main() -> void {
+  entry:
+    %t2 = call @greet("OVM")
+    %t3 = native.call io::println("Done!")
+    ret void
+
+}
+

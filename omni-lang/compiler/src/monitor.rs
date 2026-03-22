@@ -1,7 +1,7 @@
 use lazy_static::lazy_static;
-use std::sync::atomic::{AtomicBool, AtomicUsize, AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 lazy_static! {
     static ref ENABLED: AtomicBool = AtomicBool::new(false);
@@ -16,7 +16,10 @@ lazy_static! {
 }
 
 fn now_ms() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 pub fn enable() {
@@ -48,7 +51,9 @@ pub fn inc_items() {
 
 /// Record a compact parser snapshot: current token index and a small preview
 pub fn record_parser_snapshot(current: usize, preview: &[String]) {
-    if !enabled() { return; }
+    if !enabled() {
+        return;
+    }
     PARSER_CUR.store(current, Ordering::SeqCst);
     if let Ok(mut p) = PARSER_PREVIEW.lock() {
         p.clear();
@@ -61,11 +66,15 @@ pub fn record_parser_snapshot(current: usize, preview: &[String]) {
 
 /// Record a recent parser error message for diagnostics
 pub fn record_parser_error(msg: &str) {
-    if !enabled() { return; }
+    if !enabled() {
+        return;
+    }
     if let Ok(mut e) = PARSER_ERRORS.lock() {
         e.push(msg.to_string());
         let excess = if e.len() > 50 { e.len() - 50 } else { 0 };
-        if excess > 0 { e.drain(0..excess); }
+        if excess > 0 {
+            e.drain(0..excess);
+        }
     }
     update_heartbeat();
 }

@@ -11,16 +11,16 @@ use std::collections::HashMap;
 /// Lifetime relationship: which lifetime outlives which
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LifetimeRelation {
-    pub outlives: String,  // 'a
+    pub outlives: String,    // 'a
     pub outlived_by: String, // 'b in 'b: 'a means 'b outlives 'a
 }
 
 /// Lifetime context for a function
 #[derive(Debug, Clone)]
 pub struct LifetimeContext {
-    pub explicit_lifetimes: Vec<String>,  // Declared lifetimes
+    pub explicit_lifetimes: Vec<String>, // Declared lifetimes
     pub inferred_lifetimes: HashMap<String, String>, // Inferred lifetimes
-    pub relations: Vec<LifetimeRelation>,  // Outlives relationships
+    pub relations: Vec<LifetimeRelation>, // Outlives relationships
 }
 
 impl LifetimeContext {
@@ -51,7 +51,10 @@ impl LifetimeContext {
 
     /// Add lifetime outlives relationship
     pub fn add_outlives(&mut self, outlives: String, outlived_by: String) {
-        self.relations.push(LifetimeRelation { outlives, outlived_by });
+        self.relations.push(LifetimeRelation {
+            outlives,
+            outlived_by,
+        });
     }
 
     /// Check if lifetime 'a outlives 'b
@@ -76,9 +79,9 @@ impl LifetimeContext {
 /// Lifetime variance enum
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Variance {
-    Covariant,      // 'a <: 'b means F<'a> <: F<'b>
-    Contravariant,  // 'a <: 'b means F<'b> <: F<'a>
-    Invariant,      // 'a <: 'b doesn't imply anything about F<'a> vs F<'b>
+    Covariant,     // 'a <: 'b means F<'a> <: F<'b>
+    Contravariant, // 'a <: 'b means F<'b> <: F<'a>
+    Invariant,     // 'a <: 'b doesn't imply anything about F<'a> vs F<'b>
 }
 
 /// Check variance of a type constructor
@@ -94,10 +97,7 @@ pub fn check_variance(ty: &Type) -> Variance {
 }
 
 /// Elide lifetimes in function signature
-pub fn elide_fn_lifetimes(
-    params: &[(String, Type)],
-    return_type: &Type,
-) -> (Vec<String>, Type) {
+pub fn elide_fn_lifetimes(params: &[(String, Type)], return_type: &Type) -> (Vec<String>, Type) {
     // Collect input lifetimes
     let mut input_lifetimes = Vec::new();
     for (_, ty) in params {

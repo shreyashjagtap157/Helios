@@ -1,10 +1,9 @@
 //! Python Buffer Protocol (PEP 3118)
-//! 
+//!
 //! C-ABI compatible structs for zero-copy sharing with NumPy.
 //! Implements Py_buffer fill logic and __iter__/__next__ protocol.
 
 use crate::ir::IrType;
-
 
 #[repr(C)]
 pub struct Py_buffer {
@@ -38,7 +37,7 @@ impl Py_buffer {
             internal: std::ptr::null_mut(),
         }
     }
-    
+
     /// Fill this buffer view from an Omni Tensor's memory layout.
     /// `data` is the raw pointer to contiguous element storage.
     /// `shape` is the array of dimension sizes (e.g. [batch, height, width, channels]).
@@ -63,7 +62,7 @@ impl Py_buffer {
         self.strides = std::ptr::null_mut(); // Will be set by caller
         self.suboffsets = std::ptr::null_mut(); // Not used for simple contiguous
     }
-    
+
     /// Compute C-contiguous (row-major) strides from shape and itemsize
     pub fn compute_strides(shape: &[isize], itemsize: isize) -> Vec<isize> {
         let ndim = shape.len();
@@ -77,7 +76,7 @@ impl Py_buffer {
         }
         strides
     }
-    
+
     /// Compute Fortran-contiguous (column-major) strides
     pub fn compute_fortran_strides(shape: &[isize], itemsize: isize) -> Vec<isize> {
         let ndim = shape.len();
@@ -100,17 +99,17 @@ impl BufferProtocol {
     /// See: https://docs.python.org/3/library/struct.html#format-characters
     pub fn get_format_char_for_type(ty: &IrType) -> &'static str {
         match ty {
-            IrType::I8 => "b",        // signed char
-            IrType::I16 => "h",       // short
-            IrType::I32 => "i",       // int
-            IrType::I64 => "q",       // long long
-            IrType::F32 => "f",       // float
-            IrType::F64 => "d",       // double
-            IrType::Bool => "?",      // _Bool
-            _ => "B",                 // unsigned char fallback
+            IrType::I8 => "b",   // signed char
+            IrType::I16 => "h",  // short
+            IrType::I32 => "i",  // int
+            IrType::I64 => "q",  // long long
+            IrType::F32 => "f",  // float
+            IrType::F64 => "d",  // double
+            IrType::Bool => "?", // _Bool
+            _ => "B",            // unsigned char fallback
         }
     }
-    
+
     /// Get the byte size for a PEP 3118 format character
     pub fn format_char_size(format: &str) -> usize {
         match format {
@@ -121,15 +120,16 @@ impl BufferProtocol {
             _ => 1,
         }
     }
-    
+
     /// Generate C code for __getbuffer__ implementation (bf_getbuffer slot).
     /// This is the function Python calls when someone does `memoryview(omni_obj)` or
     /// `numpy.array(omni_obj)`.
     pub fn generate_getbuffer(type_name: &str, element_type: &IrType, ndim: usize) -> String {
         let format = Self::get_format_char_for_type(element_type);
         let itemsize = Self::format_char_size(format);
-        
-        format!(r#"
+
+        format!(
+            r#"
 static int {type_name}_getbuffer(PyObject* self, Py_buffer* view, int flags) {{
     OmniTensor* tensor = (OmniTensor*)self;
     
@@ -157,7 +157,12 @@ static PyBufferProcs {type_name}_as_buffer = {{
     (getbufferproc){type_name}_getbuffer,
     (releasebufferproc){type_name}_releasebuffer,
 }};
-"#, type_name = type_name, itemsize = itemsize, ndim = ndim, format = format)
+"#,
+            type_name = type_name,
+            itemsize = itemsize,
+            ndim = ndim,
+            format = format
+        )
     }
 
     /// Generate C code for a Python iterator over an Omni collection.
@@ -165,8 +170,9 @@ static PyBufferProcs {type_name}_as_buffer = {{
     pub fn generate_iterator(type_name: &str, element_type: &IrType) -> String {
         let format = Self::get_format_char_for_type(element_type);
         let itemsize = Self::format_char_size(format);
-        
-        format!(r#"
+
+        format!(
+            r#"
 typedef struct {{
     PyObject_HEAD
     PyObject* source;      // The Omni object being iterated

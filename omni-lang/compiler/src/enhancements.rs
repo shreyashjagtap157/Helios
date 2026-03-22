@@ -15,25 +15,25 @@ pub struct SIMDInfo {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstructionSet {
-    SSE2,      // 128-bit
-    SSE41,     // 128-bit with enhancements
-    AVX,       // 256-bit
-    AVX2,      // 256-bit with integer ops
-    AVX512,    // 512-bit
-    NEON,      // ARM NEON
-    SVE,       // ARM SVE
-    WASM,      // WebAssembly
+    SSE2,   // 128-bit
+    SSE41,  // 128-bit with enhancements
+    AVX,    // 256-bit
+    AVX2,   // 256-bit with integer ops
+    AVX512, // 512-bit
+    NEON,   // ARM NEON
+    SVE,    // ARM SVE
+    WASM,   // WebAssembly
 }
 
 impl InstructionSet {
     pub fn width(&self) -> usize {
         match self {
-            InstructionSet::SSE2 | InstructionSet::SSE41 => 16,  // bytes
+            InstructionSet::SSE2 | InstructionSet::SSE41 => 16, // bytes
             InstructionSet::AVX => 32,
             InstructionSet::AVX2 => 32,
             InstructionSet::AVX512 => 64,
             InstructionSet::NEON => 16,
-            InstructionSet::SVE => 128,  // scalable
+            InstructionSet::SVE => 128, // scalable
             InstructionSet::WASM => 16,
         }
     }
@@ -116,7 +116,11 @@ impl<K: Clone + std::hash::Hash + Eq, V: Clone> CompilationCache<K, V> {
 
     pub fn hit_rate(&self) -> f64 {
         let total = (self.hits + self.misses) as f64;
-        if total == 0.0 { 0.0 } else { self.hits as f64 / total }
+        if total == 0.0 {
+            0.0
+        } else {
+            self.hits as f64 / total
+        }
     }
 }
 
@@ -172,8 +176,8 @@ pub struct VectorizationAnalyzer;
 
 impl VectorizationAnalyzer {
     pub fn analyze_loop(loop_body: &str, _induction_var: &str) -> SIMDInfo {
-        let is_vectorizable = !loop_body.contains("function call") && 
-                             !loop_body.contains("memory dependency");
+        let is_vectorizable =
+            !loop_body.contains("function call") && !loop_body.contains("memory dependency");
 
         SIMDInfo {
             is_vectorizable,
@@ -185,8 +189,7 @@ impl VectorizationAnalyzer {
 
     pub fn can_parallelize(loop_body: &str) -> bool {
         // Check for data dependencies
-        !loop_body.contains("depends on") && 
-        !loop_body.contains("sequential")
+        !loop_body.contains("depends on") && !loop_body.contains("sequential")
     }
 
     pub fn unroll_factor(loop_size: usize) -> usize {
@@ -237,8 +240,12 @@ pub struct PerformanceMetrics {
 
 impl PerformanceMetrics {
     pub fn total_time(&self) -> u64 {
-        self.lexer_time_ms + self.parser_time_ms + self.semantic_time_ms + 
-        self.ir_gen_time_ms + self.codegen_time_ms + self.optimization_time_ms
+        self.lexer_time_ms
+            + self.parser_time_ms
+            + self.semantic_time_ms
+            + self.ir_gen_time_ms
+            + self.codegen_time_ms
+            + self.optimization_time_ms
     }
 
     pub fn bottleneck(&self) -> &'static str {
@@ -249,7 +256,11 @@ impl PerformanceMetrics {
             self.ir_gen_time_ms,
             self.codegen_time_ms,
             self.optimization_time_ms,
-        ].iter().max().cloned().unwrap_or(0);
+        ]
+        .iter()
+        .max()
+        .cloned()
+        .unwrap_or(0);
 
         match max_time {
             t if t == self.lexer_time_ms => "Lexer",
@@ -266,22 +277,55 @@ impl PerformanceMetrics {
         println!("\n╔══════════════════════════════════════════════════╗");
         println!("║         Compiler Performance Metrics            ║");
         println!("╠══════════════════════════════════════════════════╣");
-        println!("║ Lexer:              {:>6} ms                   ║", self.lexer_time_ms);
-        println!("║ Parser:             {:>6} ms                   ║", self.parser_time_ms);
-        println!("║ Semantic:           {:>6} ms                   ║", self.semantic_time_ms);
-        println!("║ IR Generation:      {:>6} ms                   ║", self.ir_gen_time_ms);
-        println!("║ Code Generation:    {:>6} ms                   ║", self.codegen_time_ms);
-        println!("║ Optimization:       {:>6} ms                   ║", self.optimization_time_ms);
+        println!(
+            "║ Lexer:              {:>6} ms                   ║",
+            self.lexer_time_ms
+        );
+        println!(
+            "║ Parser:             {:>6} ms                   ║",
+            self.parser_time_ms
+        );
+        println!(
+            "║ Semantic:           {:>6} ms                   ║",
+            self.semantic_time_ms
+        );
+        println!(
+            "║ IR Generation:      {:>6} ms                   ║",
+            self.ir_gen_time_ms
+        );
+        println!(
+            "║ Code Generation:    {:>6} ms                   ║",
+            self.codegen_time_ms
+        );
+        println!(
+            "║ Optimization:       {:>6} ms                   ║",
+            self.optimization_time_ms
+        );
         println!("╠══════════════════════════════════════════════════╣");
-        println!("║ Total Time:         {:>6} ms                   ║", self.total_time());
-        println!("║ Memory Peak:        {:>6} MB                   ║", self.memory_peak_mb);
-        println!("║ Instructions:       {:>6}                      ║", self.instructions_generated);
-        println!("║ Cache Hit Rate:     {:>5}%                    ║", 
-                 if self.cache_hits + self.cache_misses > 0 {
-                     (self.cache_hits * 100) / (self.cache_hits + self.cache_misses)
-                 } else { 0 });
-        println!("║ Bottleneck:         {}     ║", 
-                 format!("{:<25}", self.bottleneck()));
+        println!(
+            "║ Total Time:         {:>6} ms                   ║",
+            self.total_time()
+        );
+        println!(
+            "║ Memory Peak:        {:>6} MB                   ║",
+            self.memory_peak_mb
+        );
+        println!(
+            "║ Instructions:       {:>6}                      ║",
+            self.instructions_generated
+        );
+        println!(
+            "║ Cache Hit Rate:     {:>5}%                    ║",
+            if self.cache_hits + self.cache_misses > 0 {
+                (self.cache_hits * 100) / (self.cache_hits + self.cache_misses)
+            } else {
+                0
+            }
+        );
+        println!(
+            "║ Bottleneck:         {}     ║",
+            format!("{:<25}", self.bottleneck())
+        );
         println!("╚══════════════════════════════════════════════════╝");
     }
 }
@@ -302,7 +346,7 @@ mod tests {
     fn test_compilation_cache() {
         let mut cache = CompilationCache::<String, i32>::new(10);
         cache.insert("key1".to_string(), 42);
-        
+
         let result = cache.get(&"key1".to_string());
         assert_eq!(result, Some(42));
         assert!(cache.hit_rate() > 0.0);
@@ -329,7 +373,7 @@ mod tests {
         metrics.lexer_time_ms = 50;
         metrics.semantic_time_ms = 100;
         metrics.memory_peak_mb = 256;
-        
+
         assert_eq!(metrics.bottleneck(), "Semantic Analysis");
     }
 }

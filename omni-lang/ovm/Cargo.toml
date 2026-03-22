@@ -1,0 +1,9 @@
+[package]
+name = "ovm-runner"
+version = "1.0.0"
+edition = "2021"
+description = "Omni Virtual Machine — Standalone bytecode runner"
+
+[[bin]]
+name = "ovm-runner"
+path = "src/main.rs"

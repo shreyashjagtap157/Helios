@@ -1,6 +1,6 @@
-use crate::ir::{IrFunction, IrInstruction, IrValue, IrConst, IrBinOp};
-use std::collections::HashMap;
 use super::OptimizationPass;
+use crate::ir::{IrBinOp, IrConst, IrFunction, IrInstruction, IrValue};
+use std::collections::HashMap;
 
 pub struct ConstantPropagation;
 
@@ -17,32 +17,44 @@ impl OptimizationPass for ConstantPropagation {
         for block in &func.blocks {
             for inst in &block.instructions {
                 // Determine if instruction defines a constant
-                // Currently generated IR might not have explicit "Const" instructions for all, 
+                // Currently generated IR might not have explicit "Const" instructions for all,
                 // but literals in BinOp are common.
                 // However, basic const prop looks for: %v = const 5
-                // Our IR uses IrValue in operands. 
+                // Our IR uses IrValue in operands.
                 // So we look for: %v = something that evaluates to constant.
                 // Or simply simple copies/aliasing if we had Copy.
-                
+
                 // For now, let's look for simple arithmetic on constants.
-                if let IrInstruction::BinOp { dest, op, left, right } = inst {
-                     if let (IrValue::Const(l), IrValue::Const(r)) = (left, right) {
-                         let val = match (op, l, r) {
-                             (IrBinOp::Add, IrConst::Int(a), IrConst::Int(b)) => Some(IrConst::Int(a + b)),
-                             (IrBinOp::Sub, IrConst::Int(a), IrConst::Int(b)) => Some(IrConst::Int(a - b)),
-                             (IrBinOp::Mul, IrConst::Int(a), IrConst::Int(b)) => Some(IrConst::Int(a * b)),
-                             // TODO: Handle more ops and types
-                             _ => None,
-                         };
-                         
-                         if let Some(c) = val {
-                             constants.insert(dest.clone(), c);
-                         }
-                     }
+                if let IrInstruction::BinOp {
+                    dest,
+                    op,
+                    left,
+                    right,
+                } = inst
+                {
+                    if let (IrValue::Const(l), IrValue::Const(r)) = (left, right) {
+                        let val = match (op, l, r) {
+                            (IrBinOp::Add, IrConst::Int(a), IrConst::Int(b)) => {
+                                Some(IrConst::Int(a + b))
+                            }
+                            (IrBinOp::Sub, IrConst::Int(a), IrConst::Int(b)) => {
+                                Some(IrConst::Int(a - b))
+                            }
+                            (IrBinOp::Mul, IrConst::Int(a), IrConst::Int(b)) => {
+                                Some(IrConst::Int(a * b))
+                            }
+                            // TODO: Handle more ops and types
+                            _ => None,
+                        };
+
+                        if let Some(c) = val {
+                            constants.insert(dest.clone(), c);
+                        }
+                    }
                 }
             }
         }
-        
+
         if constants.is_empty() {
             return false;
         }
@@ -64,7 +76,7 @@ impl OptimizationPass for ConstantPropagation {
                                 changed = true;
                             }
                         }
-                    },
+                    }
                     IrInstruction::Call { args, .. } => {
                         for arg in args {
                             if let IrValue::Var(v) = arg {
@@ -74,13 +86,13 @@ impl OptimizationPass for ConstantPropagation {
                                 }
                             }
                         }
-                    },
+                    }
                     // TODO: Handle loops/Phi nodes (requires fixed-point iteration)
                     _ => {}
                 }
             }
         }
-        
+
         // 3. (Optional) Remove the defining instructions of the constants
         // This is handled by DCE in the next pass.
 

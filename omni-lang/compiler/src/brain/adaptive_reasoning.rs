@@ -87,7 +87,8 @@ impl AdaptiveReasoner {
             if p.starts_with("if ") && p.contains(" then ") {
                 if let Some(then_pos) = p.find(" then ") {
                     let antecedent = p[3..then_pos].trim().to_string();
-                    let consequent = premises[i][premises[i].to_lowercase().find(" then ").unwrap() + 6..]
+                    let consequent = premises[i]
+                        [premises[i].to_lowercase().find(" then ").unwrap() + 6..]
                         .trim()
                         .to_string();
 
@@ -127,7 +128,10 @@ impl AdaptiveReasoner {
 
     /// Record an outcome to adapt strategy scores.
     pub fn record_outcome(&mut self, strategy: &str, success: bool) {
-        let score = self.strategy_scores.entry(strategy.to_string()).or_insert(0.5);
+        let score = self
+            .strategy_scores
+            .entry(strategy.to_string())
+            .or_insert(0.5);
         if success {
             *score = (*score * 0.9 + 1.0 * 0.1).min(1.0);
         } else {
@@ -171,10 +175,7 @@ mod tests {
     #[test]
     fn test_deductive_fallback() {
         let reasoner = AdaptiveReasoner::new();
-        let premises = vec![
-            "The sky is blue".to_string(),
-            "Water is wet".to_string(),
-        ];
+        let premises = vec!["The sky is blue".to_string(), "Water is wet".to_string()];
         let result = reasoner.deduce(&premises);
         // No deductive conclusion possible — fallback
         assert!(result.confidence <= 0.6);

@@ -89,9 +89,7 @@ fn fold_statement(stmt: Statement, env: &mut ConstEnv) -> Statement {
                 value: folded,
             }
         }
-        Statement::Return(Some(expr)) => {
-            Statement::Return(Some(fold_expr_with_env(&expr, env)))
-        }
+        Statement::Return(Some(expr)) => Statement::Return(Some(fold_expr_with_env(&expr, env))),
         Statement::Return(None) => Statement::Return(None),
         Statement::If {
             condition,
@@ -137,16 +135,12 @@ fn fold_statement(stmt: Statement, env: &mut ConstEnv) -> Statement {
             fold_block(&mut body, env);
             Statement::Loop { body }
         }
-        Statement::Expression(expr) => {
-            Statement::Expression(fold_expr_with_env(&expr, env))
-        }
-        Statement::Assignment { target, op, value } => {
-            Statement::Assignment {
-                target: fold_expr_with_env(&target, env),
-                op,
-                value: fold_expr_with_env(&value, env),
-            }
-        }
+        Statement::Expression(expr) => Statement::Expression(fold_expr_with_env(&expr, env)),
+        Statement::Assignment { target, op, value } => Statement::Assignment {
+            target: fold_expr_with_env(&target, env),
+            op,
+            value: fold_expr_with_env(&value, env),
+        },
         Statement::Match { expr, arms } => {
             let folded_expr = fold_expr_with_env(&expr, env);
             let folded_arms: Vec<MatchArm> = arms
@@ -190,7 +184,8 @@ fn fold_expr_with_env(expr: &Expression, env: &ConstEnv) -> Expression {
             fold_unary(*op, &folded)
         }
         Expression::Call(func, args) => {
-            let folded_args: Vec<Expression> = args.iter().map(|a| fold_expr_with_env(a, env)).collect();
+            let folded_args: Vec<Expression> =
+                args.iter().map(|a| fold_expr_with_env(a, env)).collect();
             Expression::Call(Box::new(fold_expr_with_env(func, env)), folded_args)
         }
         Expression::If {
@@ -200,7 +195,9 @@ fn fold_expr_with_env(expr: &Expression, env: &ConstEnv) -> Expression {
         } => {
             let cond = fold_expr_with_env(condition, env);
             let then_e = fold_expr_with_env(then_expr, env);
-            let else_e = else_expr.as_ref().map(|e| Box::new(fold_expr_with_env(e, env)));
+            let else_e = else_expr
+                .as_ref()
+                .map(|e| Box::new(fold_expr_with_env(e, env)));
             // If condition is constant, pick the right branch
             if let Expression::Literal(Literal::Bool(b)) = &cond {
                 if *b {
@@ -239,68 +236,104 @@ fn is_literal(expr: &Expression) -> bool {
 fn fold_binary(left: &Expression, op: BinaryOp, right: &Expression) -> Expression {
     match (left, op, right) {
         // Integer arithmetic
-        (Expression::Literal(Literal::Int(a)), BinaryOp::Add, Expression::Literal(Literal::Int(b))) => {
-            Expression::Literal(Literal::Int(a + b))
-        }
-        (Expression::Literal(Literal::Int(a)), BinaryOp::Sub, Expression::Literal(Literal::Int(b))) => {
-            Expression::Literal(Literal::Int(a - b))
-        }
-        (Expression::Literal(Literal::Int(a)), BinaryOp::Mul, Expression::Literal(Literal::Int(b))) => {
-            Expression::Literal(Literal::Int(a * b))
-        }
-        (Expression::Literal(Literal::Int(a)), BinaryOp::Div, Expression::Literal(Literal::Int(b))) if *b != 0 => {
-            Expression::Literal(Literal::Int(a / b))
-        }
-        (Expression::Literal(Literal::Int(a)), BinaryOp::Mod, Expression::Literal(Literal::Int(b))) if *b != 0 => {
-            Expression::Literal(Literal::Int(a % b))
-        }
+        (
+            Expression::Literal(Literal::Int(a)),
+            BinaryOp::Add,
+            Expression::Literal(Literal::Int(b)),
+        ) => Expression::Literal(Literal::Int(a + b)),
+        (
+            Expression::Literal(Literal::Int(a)),
+            BinaryOp::Sub,
+            Expression::Literal(Literal::Int(b)),
+        ) => Expression::Literal(Literal::Int(a - b)),
+        (
+            Expression::Literal(Literal::Int(a)),
+            BinaryOp::Mul,
+            Expression::Literal(Literal::Int(b)),
+        ) => Expression::Literal(Literal::Int(a * b)),
+        (
+            Expression::Literal(Literal::Int(a)),
+            BinaryOp::Div,
+            Expression::Literal(Literal::Int(b)),
+        ) if *b != 0 => Expression::Literal(Literal::Int(a / b)),
+        (
+            Expression::Literal(Literal::Int(a)),
+            BinaryOp::Mod,
+            Expression::Literal(Literal::Int(b)),
+        ) if *b != 0 => Expression::Literal(Literal::Int(a % b)),
 
         // Float arithmetic
-        (Expression::Literal(Literal::Float(a)), BinaryOp::Add, Expression::Literal(Literal::Float(b))) => {
-            Expression::Literal(Literal::Float(a + b))
-        }
-        (Expression::Literal(Literal::Float(a)), BinaryOp::Sub, Expression::Literal(Literal::Float(b))) => {
-            Expression::Literal(Literal::Float(a - b))
-        }
-        (Expression::Literal(Literal::Float(a)), BinaryOp::Mul, Expression::Literal(Literal::Float(b))) => {
-            Expression::Literal(Literal::Float(a * b))
-        }
-        (Expression::Literal(Literal::Float(a)), BinaryOp::Div, Expression::Literal(Literal::Float(b))) if *b != 0.0 => {
-            Expression::Literal(Literal::Float(a / b))
-        }
+        (
+            Expression::Literal(Literal::Float(a)),
+            BinaryOp::Add,
+            Expression::Literal(Literal::Float(b)),
+        ) => Expression::Literal(Literal::Float(a + b)),
+        (
+            Expression::Literal(Literal::Float(a)),
+            BinaryOp::Sub,
+            Expression::Literal(Literal::Float(b)),
+        ) => Expression::Literal(Literal::Float(a - b)),
+        (
+            Expression::Literal(Literal::Float(a)),
+            BinaryOp::Mul,
+            Expression::Literal(Literal::Float(b)),
+        ) => Expression::Literal(Literal::Float(a * b)),
+        (
+            Expression::Literal(Literal::Float(a)),
+            BinaryOp::Div,
+            Expression::Literal(Literal::Float(b)),
+        ) if *b != 0.0 => Expression::Literal(Literal::Float(a / b)),
 
         // String concatenation
-        (Expression::Literal(Literal::String(a)), BinaryOp::Add, Expression::Literal(Literal::String(b))) => {
-            Expression::Literal(Literal::String(format!("{}{}", a, b)))
-        }
+        (
+            Expression::Literal(Literal::String(a)),
+            BinaryOp::Add,
+            Expression::Literal(Literal::String(b)),
+        ) => Expression::Literal(Literal::String(format!("{}{}", a, b))),
 
         // Integer comparisons
-        (Expression::Literal(Literal::Int(a)), BinaryOp::Eq, Expression::Literal(Literal::Int(b))) => {
-            Expression::Literal(Literal::Bool(a == b))
-        }
-        (Expression::Literal(Literal::Int(a)), BinaryOp::NotEq, Expression::Literal(Literal::Int(b))) => {
-            Expression::Literal(Literal::Bool(a != b))
-        }
-        (Expression::Literal(Literal::Int(a)), BinaryOp::Lt, Expression::Literal(Literal::Int(b))) => {
-            Expression::Literal(Literal::Bool(a < b))
-        }
-        (Expression::Literal(Literal::Int(a)), BinaryOp::Gt, Expression::Literal(Literal::Int(b))) => {
-            Expression::Literal(Literal::Bool(a > b))
-        }
-        (Expression::Literal(Literal::Int(a)), BinaryOp::LtEq, Expression::Literal(Literal::Int(b))) => {
-            Expression::Literal(Literal::Bool(a <= b))
-        }
-        (Expression::Literal(Literal::Int(a)), BinaryOp::GtEq, Expression::Literal(Literal::Int(b))) => {
-            Expression::Literal(Literal::Bool(a >= b))
-        }
+        (
+            Expression::Literal(Literal::Int(a)),
+            BinaryOp::Eq,
+            Expression::Literal(Literal::Int(b)),
+        ) => Expression::Literal(Literal::Bool(a == b)),
+        (
+            Expression::Literal(Literal::Int(a)),
+            BinaryOp::NotEq,
+            Expression::Literal(Literal::Int(b)),
+        ) => Expression::Literal(Literal::Bool(a != b)),
+        (
+            Expression::Literal(Literal::Int(a)),
+            BinaryOp::Lt,
+            Expression::Literal(Literal::Int(b)),
+        ) => Expression::Literal(Literal::Bool(a < b)),
+        (
+            Expression::Literal(Literal::Int(a)),
+            BinaryOp::Gt,
+            Expression::Literal(Literal::Int(b)),
+        ) => Expression::Literal(Literal::Bool(a > b)),
+        (
+            Expression::Literal(Literal::Int(a)),
+            BinaryOp::LtEq,
+            Expression::Literal(Literal::Int(b)),
+        ) => Expression::Literal(Literal::Bool(a <= b)),
+        (
+            Expression::Literal(Literal::Int(a)),
+            BinaryOp::GtEq,
+            Expression::Literal(Literal::Int(b)),
+        ) => Expression::Literal(Literal::Bool(a >= b)),
 
         // Boolean logic
-        (Expression::Literal(Literal::Bool(a)), BinaryOp::And, Expression::Literal(Literal::Bool(b))) => {
-            Expression::Literal(Literal::Bool(*a && *b))
-        }
-        (Expression::Literal(Literal::Bool(a)), BinaryOp::Or, Expression::Literal(Literal::Bool(b))) => {
-            Expression::Literal(Literal::Bool(*a || *b))
-        }
+        (
+            Expression::Literal(Literal::Bool(a)),
+            BinaryOp::And,
+            Expression::Literal(Literal::Bool(b)),
+        ) => Expression::Literal(Literal::Bool(*a && *b)),
+        (
+            Expression::Literal(Literal::Bool(a)),
+            BinaryOp::Or,
+            Expression::Literal(Literal::Bool(b)),
+        ) => Expression::Literal(Literal::Bool(*a || *b)),
 
         // Not foldable – return rebuilt expression
         _ => Expression::Binary(Box::new(left.clone()), op, Box::new(right.clone())),
@@ -319,17 +352,13 @@ fn fold_unary(op: UnaryOp, inner: &Expression) -> Expression {
             Expression::Literal(Literal::Float(-v))
         }
         // Double negation: -(-x) → x
-        (UnaryOp::Neg, Expression::Unary(UnaryOp::Neg, inner2)) => {
-            (**inner2).clone()
-        }
+        (UnaryOp::Neg, Expression::Unary(UnaryOp::Neg, inner2)) => (**inner2).clone(),
         // Boolean not
         (UnaryOp::Not, Expression::Literal(Literal::Bool(v))) => {
             Expression::Literal(Literal::Bool(!v))
         }
         // Double not: !!x → x
-        (UnaryOp::Not, Expression::Unary(UnaryOp::Not, inner2)) => {
-            (**inner2).clone()
-        }
+        (UnaryOp::Not, Expression::Unary(UnaryOp::Not, inner2)) => (**inner2).clone(),
         _ => Expression::Unary(op, Box::new(inner.clone())),
     }
 }

@@ -6,8 +6,8 @@
 //! bytecode representation that sits between the AST and the low-level codegen
 //! OVM opcodes, suitable for interpretation and ahead-of-time compilation.
 
+use anyhow::{anyhow, Context, Result};
 use std::fmt;
-use anyhow::{Result, anyhow, Context};
 
 // ---------------------------------------------------------------------------
 // Magic & version constants
@@ -363,7 +363,10 @@ impl OvmModule {
     fn read_string(bytes: &[u8], pos: &mut usize) -> Result<String> {
         let len = Self::read_u32(bytes, pos)? as usize;
         if *pos + len > bytes.len() {
-            return Err(anyhow!("unexpected end of bytecode reading string of len {}", len));
+            return Err(anyhow!(
+                "unexpected end of bytecode reading string of len {}",
+                len
+            ));
         }
         let s = std::str::from_utf8(&bytes[*pos..*pos + len])
             .context("invalid UTF-8 in bytecode string")?
@@ -628,7 +631,11 @@ impl OvmModule {
             Self::OP_ASSERT => Ok(OpCode::Assert),
             Self::OP_IMPORT => Ok(OpCode::Import(Self::read_string(bytes, pos)?)),
             Self::OP_HALT => Ok(OpCode::Halt),
-            _ => Err(anyhow!("unknown opcode tag 0x{:02x} at position {}", tag, *pos - 1)),
+            _ => Err(anyhow!(
+                "unknown opcode tag 0x{:02x} at position {}",
+                tag,
+                *pos - 1
+            )),
         }
     }
 
@@ -889,11 +896,21 @@ mod tests {
             arity: 0,
             locals_count: 0,
             instructions: vec![
-                OpCode::Add, OpCode::Sub, OpCode::Mul, OpCode::Div,
-                OpCode::Mod, OpCode::Neg,
-                OpCode::Eq, OpCode::Ne, OpCode::Lt, OpCode::Le,
-                OpCode::Gt, OpCode::Ge,
-                OpCode::And, OpCode::Or, OpCode::Not,
+                OpCode::Add,
+                OpCode::Sub,
+                OpCode::Mul,
+                OpCode::Div,
+                OpCode::Mod,
+                OpCode::Neg,
+                OpCode::Eq,
+                OpCode::Ne,
+                OpCode::Lt,
+                OpCode::Le,
+                OpCode::Gt,
+                OpCode::Ge,
+                OpCode::And,
+                OpCode::Or,
+                OpCode::Not,
                 OpCode::Concat,
             ],
         });

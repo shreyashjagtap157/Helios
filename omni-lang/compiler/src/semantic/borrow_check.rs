@@ -8,8 +8,8 @@
 //! - Scope-based lifetime tracking
 //! - Dangling reference and return-of-local-reference detection
 
-use std::collections::HashMap;
 use crate::parser::ast;
+use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
 // Core types
@@ -165,10 +165,7 @@ pub enum BorrowError {
         return_at: Location,
     },
     /// Use of undeclared variable (forwarded from borrow checker context).
-    UndeclaredVariable {
-        variable: String,
-        used_at: Location,
-    },
+    UndeclaredVariable { variable: String, used_at: Location },
     /// Shared borrow attempted while mutable borrow exists.
     SharedBorrowWhileMut {
         variable: String,
@@ -176,44 +173,92 @@ pub enum BorrowError {
         shared_at: Location,
     },
     /// Move inside a loop body (the variable is used again in the next iteration).
-    MoveInLoop {
-        variable: String,
-        move_at: Location,
-    },
+    MoveInLoop { variable: String, move_at: Location },
 }
 
 impl std::fmt::Display for BorrowError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BorrowError::UseAfterMove { variable, moved_at, used_at } => {
-                write!(f, "use of moved value `{}`: moved at stmt {}, used at stmt {}",
-                       variable, moved_at.stmt_index, used_at.stmt_index)
+            BorrowError::UseAfterMove {
+                variable,
+                moved_at,
+                used_at,
+            } => {
+                write!(
+                    f,
+                    "use of moved value `{}`: moved at stmt {}, used at stmt {}",
+                    variable, moved_at.stmt_index, used_at.stmt_index
+                )
             }
-            BorrowError::DoubleMutBorrow { variable, first_borrow, second_borrow } => {
+            BorrowError::DoubleMutBorrow {
+                variable,
+                first_borrow,
+                second_borrow,
+            } => {
                 write!(f, "cannot borrow `{}` as mutable more than once: first at stmt {}, second at stmt {}",
                        variable, first_borrow.stmt_index, second_borrow.stmt_index)
             }
-            BorrowError::MutBorrowWhileShared { variable, shared_at, mut_at } => {
+            BorrowError::MutBorrowWhileShared {
+                variable,
+                shared_at,
+                mut_at,
+            } => {
                 write!(f, "cannot borrow `{}` as mutable while shared borrow exists (shared at stmt {}, mut at stmt {})",
                        variable, shared_at.stmt_index, mut_at.stmt_index)
             }
-            BorrowError::MovedWhileBorrowed { variable, borrow_at, move_at } => {
-                write!(f, "cannot move `{}` while borrowed (borrow at stmt {}, move at stmt {})",
-                       variable, borrow_at.stmt_index, move_at.stmt_index)
+            BorrowError::MovedWhileBorrowed {
+                variable,
+                borrow_at,
+                move_at,
+            } => {
+                write!(
+                    f,
+                    "cannot move `{}` while borrowed (borrow at stmt {}, move at stmt {})",
+                    variable, borrow_at.stmt_index, move_at.stmt_index
+                )
             }
-            BorrowError::DanglingReference { variable, ref_location } => {
-                write!(f, "dangling reference to `{}` at stmt {}", variable, ref_location.stmt_index)
+            BorrowError::DanglingReference {
+                variable,
+                ref_location,
+            } => {
+                write!(
+                    f,
+                    "dangling reference to `{}` at stmt {}",
+                    variable, ref_location.stmt_index
+                )
             }
-            BorrowError::MutationOfImmutable { variable, assign_at } => {
-                write!(f, "cannot assign to immutable variable `{}` at stmt {}", variable, assign_at.stmt_index)
+            BorrowError::MutationOfImmutable {
+                variable,
+                assign_at,
+            } => {
+                write!(
+                    f,
+                    "cannot assign to immutable variable `{}` at stmt {}",
+                    variable, assign_at.stmt_index
+                )
             }
-            BorrowError::ReturnLocalReference { variable, return_at } => {
-                write!(f, "cannot return reference to local variable `{}` at stmt {}", variable, return_at.stmt_index)
+            BorrowError::ReturnLocalReference {
+                variable,
+                return_at,
+            } => {
+                write!(
+                    f,
+                    "cannot return reference to local variable `{}` at stmt {}",
+                    variable, return_at.stmt_index
+                )
             }
             BorrowError::UndeclaredVariable { variable, used_at } => {
-                write!(f, "undeclared variable `{}` at stmt {}", variable, used_at.stmt_index)
+                write!(
+                    f,
+                    "undeclared variable `{}` at stmt {}",
+                    variable, used_at.stmt_index
+                )
             }
-            BorrowError::SharedBorrowWhileMut { variable, mut_at, shared_at } => {
+            BorrowError::SharedBorrowWhileMut {
+                variable,
+                mut_at,
+                shared_at,
+            } => {
                 write!(f, "cannot borrow `{}` as shared while mutable borrow exists (mut at stmt {}, shared at stmt {})",
                        variable, mut_at.stmt_index, shared_at.stmt_index)
             }
@@ -439,7 +484,9 @@ impl BorrowChecker {
             _ => {
                 // Check for active borrows.
                 if state.has_any_borrow() {
-                    let borrow_loc = state.mutable_borrow.as_ref()
+                    let borrow_loc = state
+                        .mutable_borrow
+                        .as_ref()
                         .map(|b| b.location)
                         .or_else(|| state.immutable_borrows.first().map(|b| b.location))
                         .unwrap_or(loc);
@@ -504,7 +551,10 @@ impl BorrowChecker {
                 return;
             }
             if let Some(s) = self.variables.get_mut(var_name) {
-                s.mutable_borrow = Some(MutableBorrow { scope_id, location: loc });
+                s.mutable_borrow = Some(MutableBorrow {
+                    scope_id,
+                    location: loc,
+                });
             }
         } else {
             // Shared borrow conflicts with existing mut borrow.
@@ -517,7 +567,10 @@ impl BorrowChecker {
                 return;
             }
             if let Some(s) = self.variables.get_mut(var_name) {
-                s.immutable_borrows.push(ImmutableBorrow { scope_id, location: loc });
+                s.immutable_borrows.push(ImmutableBorrow {
+                    scope_id,
+                    location: loc,
+                });
             }
         }
 
@@ -662,7 +715,12 @@ impl BorrowChecker {
 
     pub fn check_statement(&mut self, stmt: &ast::Statement) {
         match stmt {
-            ast::Statement::Let { name, mutable, ty, value } => {
+            ast::Statement::Let {
+                name,
+                mutable,
+                ty,
+                value,
+            } => {
                 // Evaluate the RHS first (may move values).
                 self.check_expression(value);
                 // Check if the value is an identifier being moved.
@@ -686,7 +744,11 @@ impl BorrowChecker {
                 }
                 self.declare_variable(name, true); // `var` is always mutable
             }
-            ast::Statement::Assignment { target, op: _, value } => {
+            ast::Statement::Assignment {
+                target,
+                op: _,
+                value,
+            } => {
                 self.check_assignment(target, value);
             }
             ast::Statement::Return(expr_opt) => {
@@ -695,7 +757,11 @@ impl BorrowChecker {
                     self.check_expression(expr);
                 }
             }
-            ast::Statement::If { condition, then_block, else_block } => {
+            ast::Statement::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
                 self.check_expression(condition);
                 self.check_block(then_block);
                 if let Some(eb) = else_block {
@@ -798,7 +864,10 @@ impl BorrowChecker {
             ast::Expression::Identifier(name) => {
                 self.check_use(name);
             }
-            ast::Expression::Borrow { mutable, expr: inner } => {
+            ast::Expression::Borrow {
+                mutable,
+                expr: inner,
+            } => {
                 if let ast::Expression::Identifier(ref name) = **inner {
                     self.add_borrow(name, *mutable);
                 } else {
@@ -811,7 +880,11 @@ impl BorrowChecker {
                     self.check_call_arg(arg);
                 }
             }
-            ast::Expression::MethodCall { receiver, method: _, args } => {
+            ast::Expression::MethodCall {
+                receiver,
+                method: _,
+                args,
+            } => {
                 self.check_expression(receiver);
                 for arg in args {
                     self.check_call_arg(arg);
@@ -859,13 +932,21 @@ impl BorrowChecker {
                 self.check_expression(inner);
             }
             ast::Expression::Range { start, end, .. } => {
-                if let Some(s) = start { self.check_expression(s); }
-                if let Some(e) = end { self.check_expression(e); }
+                if let Some(s) = start {
+                    self.check_expression(s);
+                }
+                if let Some(e) = end {
+                    self.check_expression(e);
+                }
             }
             ast::Expression::Lambda { params: _, body } => {
                 self.check_expression(body);
             }
-            ast::Expression::If { condition, then_expr, else_expr } => {
+            ast::Expression::If {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
                 self.check_expression(condition);
                 self.check_expression(then_expr);
                 if let Some(e) = else_expr {
@@ -881,7 +962,12 @@ impl BorrowChecker {
                     }
                 }
             }
-            ast::Expression::ListComprehension { expr, var: _, iter, filter } => {
+            ast::Expression::ListComprehension {
+                expr,
+                var: _,
+                iter,
+                filter,
+            } => {
                 self.check_expression(iter);
                 self.check_expression(expr);
                 if let Some(f) = filter {
@@ -952,7 +1038,10 @@ impl BorrowChecker {
                 // Passing by value moves the argument.
                 self.mark_moved(name);
             }
-            ast::Expression::Borrow { mutable, expr: inner } => {
+            ast::Expression::Borrow {
+                mutable,
+                expr: inner,
+            } => {
                 if let ast::Expression::Identifier(ref name) = **inner {
                     self.add_borrow(name, *mutable);
                 } else {
@@ -972,7 +1061,11 @@ impl BorrowChecker {
     fn check_return_expression(&mut self, expr: &ast::Expression) {
         let loc = self.loc();
         // If returning a borrow of a local, flag it.
-        if let ast::Expression::Borrow { mutable: _, expr: inner } = expr {
+        if let ast::Expression::Borrow {
+            mutable: _,
+            expr: inner,
+        } = expr
+        {
             if let ast::Expression::Identifier(ref name) = **inner {
                 if let Some(state) = self.variables.get(name) {
                     // If the variable was declared in a non-root scope,
@@ -1013,7 +1106,9 @@ impl BorrowChecker {
         let loc = self.loc();
         for var_name in std::mem::take(&mut self.loop_moves) {
             // Only flag if the variable was declared *outside* the loop scope.
-            let is_loop_local = self.scopes.last()
+            let is_loop_local = self
+                .scopes
+                .last()
                 .map_or(false, |s| s.variables.contains(&var_name));
             if !is_loop_local {
                 self.errors.push(BorrowError::MoveInLoop {
@@ -1037,7 +1132,10 @@ impl BorrowChecker {
     }
 
     fn type_is_mut_reference(ty: Option<&ast::Type>) -> bool {
-        matches!(ty, Some(ast::Type::WithOwnership(_, ast::Ownership::BorrowMut)))
+        matches!(
+            ty,
+            Some(ast::Type::WithOwnership(_, ast::Ownership::BorrowMut))
+        )
     }
 
     fn type_is_shared(ty: &ast::Type) -> bool {
@@ -1122,11 +1220,14 @@ mod tests {
     // ---------------------------------------------------------------
     #[test]
     fn test_use_after_move() {
-        let func = make_function("test", vec![
-            let_stmt("x", false, int_lit(42)),
-            let_stmt("y", false, ident("x")),      // moves x
-            expr_stmt(ident("x")),                  // USE AFTER MOVE
-        ]);
+        let func = make_function(
+            "test",
+            vec![
+                let_stmt("x", false, int_lit(42)),
+                let_stmt("y", false, ident("x")), // moves x
+                expr_stmt(ident("x")),            // USE AFTER MOVE
+            ],
+        );
         let module = make_module(vec![func]);
         let errors = BorrowChecker::check_module(&module);
         assert!(!errors.is_empty(), "expected use-after-move error");
@@ -1138,10 +1239,10 @@ mod tests {
     // ---------------------------------------------------------------
     #[test]
     fn test_valid_sequential_usage() {
-        let func = make_function("test", vec![
-            let_stmt("x", false, int_lit(1)),
-            expr_stmt(ident("x")),
-        ]);
+        let func = make_function(
+            "test",
+            vec![let_stmt("x", false, int_lit(1)), expr_stmt(ident("x"))],
+        );
         let module = make_module(vec![func]);
         let errors = BorrowChecker::check_module(&module);
         assert!(errors.is_empty(), "expected no errors, got {:?}", errors);
@@ -1152,11 +1253,14 @@ mod tests {
     // ---------------------------------------------------------------
     #[test]
     fn test_double_mut_borrow() {
-        let func = make_function("test", vec![
-            let_stmt("x", true, int_lit(1)),
-            let_stmt("a", false, borrow_expr("x", true)),   // &mut x
-            let_stmt("b", false, borrow_expr("x", true)),   // &mut x AGAIN -> error
-        ]);
+        let func = make_function(
+            "test",
+            vec![
+                let_stmt("x", true, int_lit(1)),
+                let_stmt("a", false, borrow_expr("x", true)), // &mut x
+                let_stmt("b", false, borrow_expr("x", true)), // &mut x AGAIN -> error
+            ],
+        );
         let module = make_module(vec![func]);
         let errors = BorrowChecker::check_module(&module);
         assert!(!errors.is_empty(), "expected double-mut-borrow error");
@@ -1168,15 +1272,21 @@ mod tests {
     // ---------------------------------------------------------------
     #[test]
     fn test_mut_borrow_while_shared() {
-        let func = make_function("test", vec![
-            let_stmt("x", true, int_lit(1)),
-            let_stmt("a", false, borrow_expr("x", false)),  // &x
-            let_stmt("b", false, borrow_expr("x", true)),   // &mut x -> error
-        ]);
+        let func = make_function(
+            "test",
+            vec![
+                let_stmt("x", true, int_lit(1)),
+                let_stmt("a", false, borrow_expr("x", false)), // &x
+                let_stmt("b", false, borrow_expr("x", true)),  // &mut x -> error
+            ],
+        );
         let module = make_module(vec![func]);
         let errors = BorrowChecker::check_module(&module);
         assert!(!errors.is_empty(), "expected mut-borrow-while-shared error");
-        assert!(matches!(errors[0], BorrowError::MutBorrowWhileShared { .. }));
+        assert!(matches!(
+            errors[0],
+            BorrowError::MutBorrowWhileShared { .. }
+        ));
     }
 
     // ---------------------------------------------------------------
@@ -1184,15 +1294,21 @@ mod tests {
     // ---------------------------------------------------------------
     #[test]
     fn test_shared_borrow_while_mut() {
-        let func = make_function("test", vec![
-            let_stmt("x", true, int_lit(1)),
-            let_stmt("a", false, borrow_expr("x", true)),   // &mut x
-            let_stmt("b", false, borrow_expr("x", false)),  // &x -> error
-        ]);
+        let func = make_function(
+            "test",
+            vec![
+                let_stmt("x", true, int_lit(1)),
+                let_stmt("a", false, borrow_expr("x", true)), // &mut x
+                let_stmt("b", false, borrow_expr("x", false)), // &x -> error
+            ],
+        );
         let module = make_module(vec![func]);
         let errors = BorrowChecker::check_module(&module);
         assert!(!errors.is_empty(), "expected shared-borrow-while-mut error");
-        assert!(matches!(errors[0], BorrowError::SharedBorrowWhileMut { .. }));
+        assert!(matches!(
+            errors[0],
+            BorrowError::SharedBorrowWhileMut { .. }
+        ));
     }
 
     // ---------------------------------------------------------------
@@ -1200,15 +1316,22 @@ mod tests {
     // ---------------------------------------------------------------
     #[test]
     fn test_multiple_shared_borrows_ok() {
-        let func = make_function("test", vec![
-            let_stmt("x", false, int_lit(1)),
-            let_stmt("a", false, borrow_expr("x", false)),
-            let_stmt("b", false, borrow_expr("x", false)),
-            let_stmt("c", false, borrow_expr("x", false)),
-        ]);
+        let func = make_function(
+            "test",
+            vec![
+                let_stmt("x", false, int_lit(1)),
+                let_stmt("a", false, borrow_expr("x", false)),
+                let_stmt("b", false, borrow_expr("x", false)),
+                let_stmt("c", false, borrow_expr("x", false)),
+            ],
+        );
         let module = make_module(vec![func]);
         let errors = BorrowChecker::check_module(&module);
-        assert!(errors.is_empty(), "multiple shared borrows should be fine, got {:?}", errors);
+        assert!(
+            errors.is_empty(),
+            "multiple shared borrows should be fine, got {:?}",
+            errors
+        );
     }
 
     // ---------------------------------------------------------------
@@ -1216,11 +1339,14 @@ mod tests {
     // ---------------------------------------------------------------
     #[test]
     fn test_moved_while_borrowed() {
-        let func = make_function("test", vec![
-            let_stmt("x", false, int_lit(1)),
-            let_stmt("r", false, borrow_expr("x", false)),  // &x
-            let_stmt("y", false, ident("x")),               // move x -> error
-        ]);
+        let func = make_function(
+            "test",
+            vec![
+                let_stmt("x", false, int_lit(1)),
+                let_stmt("r", false, borrow_expr("x", false)), // &x
+                let_stmt("y", false, ident("x")),              // move x -> error
+            ],
+        );
         let module = make_module(vec![func]);
         let errors = BorrowChecker::check_module(&module);
         assert!(!errors.is_empty(), "expected moved-while-borrowed error");
@@ -1233,24 +1359,29 @@ mod tests {
     #[test]
     fn test_valid_sequential_borrows() {
         // Inner scope borrows x, exits, then outer scope borrows x mutably.
-        let func = make_function("test", vec![
-            let_stmt("x", true, int_lit(1)),
-            // inner scope: borrow &x then release
-            Statement::If {
-                condition: Expression::Literal(Literal::Bool(true)),
-                then_block: Block {
-                    statements: vec![
-                        let_stmt("r", false, borrow_expr("x", false)),
-                    ],
+        let func = make_function(
+            "test",
+            vec![
+                let_stmt("x", true, int_lit(1)),
+                // inner scope: borrow &x then release
+                Statement::If {
+                    condition: Expression::Literal(Literal::Bool(true)),
+                    then_block: Block {
+                        statements: vec![let_stmt("r", false, borrow_expr("x", false))],
+                    },
+                    else_block: None,
                 },
-                else_block: None,
-            },
-            // After scope exit, mut borrow should be fine.
-            let_stmt("m", false, borrow_expr("x", true)),
-        ]);
+                // After scope exit, mut borrow should be fine.
+                let_stmt("m", false, borrow_expr("x", true)),
+            ],
+        );
         let module = make_module(vec![func]);
         let errors = BorrowChecker::check_module(&module);
-        assert!(errors.is_empty(), "sequential borrows should work, got {:?}", errors);
+        assert!(
+            errors.is_empty(),
+            "sequential borrows should work, got {:?}",
+            errors
+        );
     }
 
     // ---------------------------------------------------------------
@@ -1258,28 +1389,34 @@ mod tests {
     // ---------------------------------------------------------------
     #[test]
     fn test_move_in_loop() {
-        let func = make_function("test", vec![
-            let_stmt("data", false, int_lit(100)),
-            Statement::For {
-                var: "i".to_string(),
-                iter: Expression::Range {
-                    start: Some(Box::new(int_lit(0))),
-                    end: Some(Box::new(int_lit(10))),
-                    inclusive: false,
+        let func = make_function(
+            "test",
+            vec![
+                let_stmt("data", false, int_lit(100)),
+                Statement::For {
+                    var: "i".to_string(),
+                    iter: Expression::Range {
+                        start: Some(Box::new(int_lit(0))),
+                        end: Some(Box::new(int_lit(10))),
+                        inclusive: false,
+                    },
+                    body: Block {
+                        statements: vec![
+                            // Move `data` inside loop - error because next iteration
+                            // would try to use it again.
+                            let_stmt("tmp", false, ident("data")),
+                        ],
+                    },
                 },
-                body: Block {
-                    statements: vec![
-                        // Move `data` inside loop - error because next iteration
-                        // would try to use it again.
-                        let_stmt("tmp", false, ident("data")),
-                    ],
-                },
-            },
-        ]);
+            ],
+        );
         let module = make_module(vec![func]);
         let errors = BorrowChecker::check_module(&module);
         assert!(!errors.is_empty(), "expected move-in-loop error");
-        assert!(matches!(errors.last().unwrap(), BorrowError::MoveInLoop { .. }));
+        assert!(matches!(
+            errors.last().unwrap(),
+            BorrowError::MoveInLoop { .. }
+        ));
     }
 
     // ---------------------------------------------------------------
@@ -1287,14 +1424,20 @@ mod tests {
     // ---------------------------------------------------------------
     #[test]
     fn test_return_local_reference() {
-        let func = make_function("test", vec![
-            let_stmt("local", false, int_lit(42)),
-            return_stmt(borrow_expr("local", false)),  // returning &local -> error
-        ]);
+        let func = make_function(
+            "test",
+            vec![
+                let_stmt("local", false, int_lit(42)),
+                return_stmt(borrow_expr("local", false)), // returning &local -> error
+            ],
+        );
         let module = make_module(vec![func]);
         let errors = BorrowChecker::check_module(&module);
         assert!(!errors.is_empty(), "expected return-local-reference error");
-        assert!(matches!(errors[0], BorrowError::ReturnLocalReference { .. }));
+        assert!(matches!(
+            errors[0],
+            BorrowError::ReturnLocalReference { .. }
+        ));
     }
 
     // ---------------------------------------------------------------
@@ -1302,10 +1445,13 @@ mod tests {
     // ---------------------------------------------------------------
     #[test]
     fn test_mutation_of_immutable() {
-        let func = make_function("test", vec![
-            let_stmt("x", false, int_lit(1)),          // immutable
-            assign_stmt("x", int_lit(2)),              // assign -> error
-        ]);
+        let func = make_function(
+            "test",
+            vec![
+                let_stmt("x", false, int_lit(1)), // immutable
+                assign_stmt("x", int_lit(2)),     // assign -> error
+            ],
+        );
         let module = make_module(vec![func]);
         let errors = BorrowChecker::check_module(&module);
         assert!(!errors.is_empty(), "expected mutation-of-immutable error");
@@ -1317,13 +1463,20 @@ mod tests {
     // ---------------------------------------------------------------
     #[test]
     fn test_mutable_assignment_ok() {
-        let func = make_function("test", vec![
-            let_stmt("x", true, int_lit(1)),
-            assign_stmt("x", int_lit(2)),
-        ]);
+        let func = make_function(
+            "test",
+            vec![
+                let_stmt("x", true, int_lit(1)),
+                assign_stmt("x", int_lit(2)),
+            ],
+        );
         let module = make_module(vec![func]);
         let errors = BorrowChecker::check_module(&module);
-        assert!(errors.is_empty(), "mutable assignment should be fine, got {:?}", errors);
+        assert!(
+            errors.is_empty(),
+            "mutable assignment should be fine, got {:?}",
+            errors
+        );
     }
 
     // ---------------------------------------------------------------
@@ -1331,11 +1484,14 @@ mod tests {
     // ---------------------------------------------------------------
     #[test]
     fn test_function_call_moves_arg() {
-        let func = make_function("test", vec![
-            let_stmt("data", false, int_lit(1)),
-            expr_stmt(call_expr("consume", vec![ident("data")])),
-            expr_stmt(ident("data")),  // use after move
-        ]);
+        let func = make_function(
+            "test",
+            vec![
+                let_stmt("data", false, int_lit(1)),
+                expr_stmt(call_expr("consume", vec![ident("data")])),
+                expr_stmt(ident("data")), // use after move
+            ],
+        );
         let module = make_module(vec![func]);
         let errors = BorrowChecker::check_module(&module);
         assert!(!errors.is_empty(), "expected use-after-move from call");
@@ -1347,18 +1503,26 @@ mod tests {
     // ---------------------------------------------------------------
     #[test]
     fn test_borrow_arg_no_move() {
-        let func = make_function("test", vec![
-            let_stmt("data", false, int_lit(1)),
-            expr_stmt(call_expr("read", vec![borrow_expr("data", false)])),
-            expr_stmt(ident("data")),  // should still be usable
-        ]);
+        let func = make_function(
+            "test",
+            vec![
+                let_stmt("data", false, int_lit(1)),
+                expr_stmt(call_expr("read", vec![borrow_expr("data", false)])),
+                expr_stmt(ident("data")), // should still be usable
+            ],
+        );
         let module = make_module(vec![func]);
         let errors = BorrowChecker::check_module(&module);
         // Only borrow errors, no use-after-move.
-        let move_errors: Vec<_> = errors.iter()
+        let move_errors: Vec<_> = errors
+            .iter()
             .filter(|e| matches!(e, BorrowError::UseAfterMove { .. }))
             .collect();
-        assert!(move_errors.is_empty(), "borrow arg should not move, got {:?}", move_errors);
+        assert!(
+            move_errors.is_empty(),
+            "borrow arg should not move, got {:?}",
+            move_errors
+        );
     }
 
     // ---------------------------------------------------------------
@@ -1367,23 +1531,30 @@ mod tests {
     #[test]
     fn test_scope_borrow_release() {
         // After inner scope exits, borrows from that scope are released.
-        let func = make_function("test", vec![
-            let_stmt("x", true, int_lit(1)),
-            Statement::If {
-                condition: Expression::Literal(Literal::Bool(true)),
-                then_block: Block {
-                    statements: vec![
-                        let_stmt("r", false, borrow_expr("x", true)), // &mut x in inner scope
-                    ],
+        let func = make_function(
+            "test",
+            vec![
+                let_stmt("x", true, int_lit(1)),
+                Statement::If {
+                    condition: Expression::Literal(Literal::Bool(true)),
+                    then_block: Block {
+                        statements: vec![
+                            let_stmt("r", false, borrow_expr("x", true)), // &mut x in inner scope
+                        ],
+                    },
+                    else_block: None,
                 },
-                else_block: None,
-            },
-            // After scope exit, x should be unborrowed.
-            assign_stmt("x", int_lit(99)),
-        ]);
+                // After scope exit, x should be unborrowed.
+                assign_stmt("x", int_lit(99)),
+            ],
+        );
         let module = make_module(vec![func]);
         let errors = BorrowChecker::check_module(&module);
-        assert!(errors.is_empty(), "borrow should be released after scope exit, got {:?}", errors);
+        assert!(
+            errors.is_empty(),
+            "borrow should be released after scope exit, got {:?}",
+            errors
+        );
     }
 
     // ---------------------------------------------------------------
@@ -1391,18 +1562,26 @@ mod tests {
     // ---------------------------------------------------------------
     #[test]
     fn test_reinit_after_move() {
-        let func = make_function("test", vec![
-            let_stmt("x", true, int_lit(1)),
-            let_stmt("y", false, ident("x")),    // move x
-            assign_stmt("x", int_lit(2)),        // re-init x
-            expr_stmt(ident("x")),               // OK now
-        ]);
+        let func = make_function(
+            "test",
+            vec![
+                let_stmt("x", true, int_lit(1)),
+                let_stmt("y", false, ident("x")), // move x
+                assign_stmt("x", int_lit(2)),     // re-init x
+                expr_stmt(ident("x")),            // OK now
+            ],
+        );
         let module = make_module(vec![func]);
         let errors = BorrowChecker::check_module(&module);
-        let use_after: Vec<_> = errors.iter()
+        let use_after: Vec<_> = errors
+            .iter()
             .filter(|e| matches!(e, BorrowError::UseAfterMove { .. }))
             .collect();
-        assert!(use_after.is_empty(), "re-init should clear moved state, got {:?}", use_after);
+        assert!(
+            use_after.is_empty(),
+            "re-init should clear moved state, got {:?}",
+            use_after
+        );
     }
 
     // ---------------------------------------------------------------
@@ -1410,17 +1589,18 @@ mod tests {
     // ---------------------------------------------------------------
     #[test]
     fn test_while_loop_move() {
-        let func = make_function("test", vec![
-            let_stmt("data", false, int_lit(1)),
-            Statement::While {
-                condition: Expression::Literal(Literal::Bool(true)),
-                body: Block {
-                    statements: vec![
-                        let_stmt("tmp", false, ident("data")),
-                    ],
+        let func = make_function(
+            "test",
+            vec![
+                let_stmt("data", false, int_lit(1)),
+                Statement::While {
+                    condition: Expression::Literal(Literal::Bool(true)),
+                    body: Block {
+                        statements: vec![let_stmt("tmp", false, ident("data"))],
+                    },
                 },
-            },
-        ]);
+            ],
+        );
         let module = make_module(vec![func]);
         let errors = BorrowChecker::check_module(&module);
         assert!(!errors.is_empty(), "expected move-in-loop error in while");
@@ -1431,19 +1611,27 @@ mod tests {
     // ---------------------------------------------------------------
     #[test]
     fn test_struct_literal_moves_fields() {
-        let func = make_function("test", vec![
-            let_stmt("name", false, Expression::Literal(Literal::String("hello".into()))),
-            expr_stmt(Expression::StructLiteral {
-                name: "Person".into(),
-                fields: vec![
-                    ("name".into(), ident("name")),
-                ],
-            }),
-            expr_stmt(ident("name")),  // use after move
-        ]);
+        let func = make_function(
+            "test",
+            vec![
+                let_stmt(
+                    "name",
+                    false,
+                    Expression::Literal(Literal::String("hello".into())),
+                ),
+                expr_stmt(Expression::StructLiteral {
+                    name: "Person".into(),
+                    fields: vec![("name".into(), ident("name"))],
+                }),
+                expr_stmt(ident("name")), // use after move
+            ],
+        );
         let module = make_module(vec![func]);
         let errors = BorrowChecker::check_module(&module);
-        assert!(!errors.is_empty(), "struct literal should move field values");
+        assert!(
+            !errors.is_empty(),
+            "struct literal should move field values"
+        );
         assert!(matches!(errors[0], BorrowError::UseAfterMove { .. }));
     }
 
@@ -1452,15 +1640,18 @@ mod tests {
     // ---------------------------------------------------------------
     #[test]
     fn test_module_multiple_functions() {
-        let f1 = make_function("ok_func", vec![
-            let_stmt("a", false, int_lit(1)),
-            expr_stmt(ident("a")),
-        ]);
-        let f2 = make_function("bad_func", vec![
-            let_stmt("b", false, int_lit(2)),
-            let_stmt("c", false, ident("b")),
-            expr_stmt(ident("b")),  // use after move
-        ]);
+        let f1 = make_function(
+            "ok_func",
+            vec![let_stmt("a", false, int_lit(1)), expr_stmt(ident("a"))],
+        );
+        let f2 = make_function(
+            "bad_func",
+            vec![
+                let_stmt("b", false, int_lit(2)),
+                let_stmt("c", false, ident("b")),
+                expr_stmt(ident("b")), // use after move
+            ],
+        );
         let module = make_module(vec![f1, f2]);
         let errors = BorrowChecker::check_module(&module);
         assert_eq!(errors.len(), 1, "only bad_func should have an error");

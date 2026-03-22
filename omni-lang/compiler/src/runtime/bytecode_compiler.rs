@@ -5,14 +5,14 @@
 //! [`OpCode`] instructions for each function, producing an [`OvmModule`] that
 //! can be serialized to disk or executed directly by a bytecode interpreter.
 
+use anyhow::Result;
 use std::collections::HashMap;
-use anyhow::{Result};
 
-use crate::parser::ast::{
-    BinaryOp, Block, Expression, Function, Item, Literal, Module,
-    Pattern, Statement, UnaryOp, MatchBody,
-};
 use super::bytecode::{CompiledFunction, OpCode, OvmModule, Value};
+use crate::parser::ast::{
+    BinaryOp, Block, Expression, Function, Item, Literal, MatchBody, Module, Pattern, Statement,
+    UnaryOp,
+};
 
 // ---------------------------------------------------------------------------
 // Scope – local variable tracking
@@ -207,9 +207,7 @@ impl BytecodeCompiler {
         match &self.instructions[placeholder_idx] {
             OpCode::Jump(_) => self.instructions[placeholder_idx] = OpCode::Jump(target),
             OpCode::JumpIf(_) => self.instructions[placeholder_idx] = OpCode::JumpIf(target),
-            OpCode::JumpIfNot(_) => {
-                self.instructions[placeholder_idx] = OpCode::JumpIfNot(target)
-            }
+            OpCode::JumpIfNot(_) => self.instructions[placeholder_idx] = OpCode::JumpIfNot(target),
             _ => {} // shouldn't happen
         }
     }
@@ -677,6 +675,11 @@ impl BytecodeCompiler {
                 self.compile_expression(inner)?;
             }
 
+            // -- ownership annotations (pass-through) --
+            Expression::Shared(inner) | Expression::Own(inner) => {
+                self.compile_expression(inner)?;
+            }
+
             // -- range (simplified: create a 2-element array [start, end]) --
             Expression::Range { start, end, .. } => {
                 if let Some(s) = start {
@@ -1129,8 +1132,15 @@ mod tests {
         }]));
         let instrs = main_instrs(&m);
         // Should contain multiple jumps for break/continue/loop
-        let jump_count = instrs.iter().filter(|op| matches!(op, OpCode::Jump(_))).count();
-        assert!(jump_count >= 2, "expected at least 2 jumps, got {}", jump_count);
+        let jump_count = instrs
+            .iter()
+            .filter(|op| matches!(op, OpCode::Jump(_)))
+            .count();
+        assert!(
+            jump_count >= 2,
+            "expected at least 2 jumps, got {}",
+            jump_count
+        );
     }
 
     #[test]
@@ -1206,10 +1216,7 @@ mod tests {
     #[test]
     fn test_field_access_compiles() {
         let m = compile(&module_with_main(vec![Statement::Expression(
-            Expression::Field(
-                Box::new(Expression::Identifier("obj".into())),
-                "x".into(),
-            ),
+            Expression::Field(Box::new(Expression::Identifier("obj".into())), "x".into()),
         )]));
         let instrs = main_instrs(&m);
         assert!(instrs.contains(&OpCode::LoadField("x".into())));
@@ -1245,8 +1252,10 @@ mod tests {
         ]);
         let ovm = compile(&module);
         let bytes = ovm.serialize();
-        let ovm2 =
-            super::super::bytecode::OvmModule::deserialize(&bytes).expect("deser failed");
-        assert_eq!(ovm.functions[0].instructions, ovm2.functions[0].instructions);
+        let ovm2 = super::super::bytecode::OvmModule::deserialize(&bytes).expect("deser failed");
+        assert_eq!(
+            ovm.functions[0].instructions,
+            ovm2.functions[0].instructions
+        );
     }
 }

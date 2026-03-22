@@ -34,7 +34,7 @@ const EI_OSABI_NONE: u8 = 0;
 
 // ELF types
 const ET_EXEC: u16 = 2; // Executable
-const ET_DYN: u16 = 3;  // Shared object (PIE)
+const ET_DYN: u16 = 3; // Shared object (PIE)
 
 // ELF machine types
 const EM_X86_64: u16 = 0x3E;
@@ -77,9 +77,9 @@ const SHN_UNDEF: u16 = 0;
 const SHN_ABS: u16 = 0xFFF1;
 
 // ELF relocation types (x86-64)
-const R_X86_64_64: u32 = 1;        // Absolute 64-bit
-const R_X86_64_PC32: u32 = 2;      // PC-relative 32-bit
-const R_X86_64_PLT32: u32 = 4;     // PLT-relative 32-bit
+const R_X86_64_64: u32 = 1; // Absolute 64-bit
+const R_X86_64_PC32: u32 = 2; // PC-relative 32-bit
+const R_X86_64_PLT32: u32 = 4; // PLT-relative 32-bit
 
 // Standard ELF virtual base address
 const ELF_VADDR_BASE: u64 = 0x400000;
@@ -147,7 +147,7 @@ const MH_MAGIC_64: u32 = 0xFEED_FACF;
 
 // Mach-O CPU types
 const CPU_TYPE_X86_64: u32 = 0x0100_0007; // CPU_TYPE_X86 | CPU_ARCH_ABI64
-const CPU_TYPE_ARM64: u32 = 0x0100_000C;  // CPU_TYPE_ARM | CPU_ARCH_ABI64
+const CPU_TYPE_ARM64: u32 = 0x0100_000C; // CPU_TYPE_ARM | CPU_ARCH_ABI64
 
 // CPU subtypes
 const CPU_SUBTYPE_ALL: u32 = 3;
@@ -203,17 +203,29 @@ impl TargetPlatform {
     /// Detect the host platform at compile time.
     pub fn host() -> Result<Self> {
         #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-        { return Ok(TargetPlatform::LinuxX86_64); }
+        {
+            return Ok(TargetPlatform::LinuxX86_64);
+        }
         #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-        { return Ok(TargetPlatform::LinuxAarch64); }
+        {
+            return Ok(TargetPlatform::LinuxAarch64);
+        }
         #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-        { return Ok(TargetPlatform::WindowsX86_64); }
+        {
+            return Ok(TargetPlatform::WindowsX86_64);
+        }
         #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
-        { return Ok(TargetPlatform::WindowsAarch64); }
+        {
+            return Ok(TargetPlatform::WindowsAarch64);
+        }
         #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-        { return Ok(TargetPlatform::MacOSX86_64); }
+        {
+            return Ok(TargetPlatform::MacOSX86_64);
+        }
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-        { return Ok(TargetPlatform::MacOSAarch64); }
+        {
+            return Ok(TargetPlatform::MacOSAarch64);
+        }
 
         #[allow(unreachable_code)]
         Err(anyhow!("Unsupported host platform"))
@@ -225,7 +237,11 @@ impl TargetPlatform {
         if t.contains("x86_64") || t.contains("x86-64") || t.contains("amd64") {
             if t.contains("linux") {
                 return Ok(Self::LinuxX86_64);
-            } else if t.contains("windows") || t.contains("win32") || t.contains("msvc") || t.contains("mingw") {
+            } else if t.contains("windows")
+                || t.contains("win32")
+                || t.contains("msvc")
+                || t.contains("mingw")
+            {
                 return Ok(Self::WindowsX86_64);
             } else if t.contains("apple") || t.contains("darwin") || t.contains("macos") {
                 return Ok(Self::MacOSX86_64);
@@ -265,7 +281,9 @@ impl TargetPlatform {
     fn pe_machine(self) -> u16 {
         match self {
             Self::WindowsX86_64 | Self::LinuxX86_64 | Self::MacOSX86_64 => IMAGE_FILE_MACHINE_AMD64,
-            Self::WindowsAarch64 | Self::LinuxAarch64 | Self::MacOSAarch64 => IMAGE_FILE_MACHINE_ARM64,
+            Self::WindowsAarch64 | Self::LinuxAarch64 | Self::MacOSAarch64 => {
+                IMAGE_FILE_MACHINE_ARM64
+            }
         }
     }
 
@@ -491,10 +509,12 @@ impl Linker {
     /// configured [`TargetPlatform`].
     pub fn link(&self) -> Result<Vec<u8>> {
         // Resolve symbols into a virtual-address map.
-        let layout = self.compute_layout()
+        let layout = self
+            .compute_layout()
             .context("Failed to compute section layout")?;
 
-        let resolved = self.resolve_symbols(&layout)
+        let resolved = self
+            .resolve_symbols(&layout)
             .context("Symbol resolution failed")?;
 
         // Merge section data and apply relocations.
@@ -519,7 +539,9 @@ impl Linker {
 
     /// Link and write the executable to the configured output path.
     pub fn link_to_file(&self) -> Result<PathBuf> {
-        let path = self.output_path.clone()
+        let path = self
+            .output_path
+            .clone()
             .ok_or_else(|| anyhow!("No output path set"))?;
         let binary = self.link()?;
         std::fs::write(&path, &binary)
@@ -563,7 +585,11 @@ impl Linker {
         };
 
         let mut vaddr = base + header_size;
-        let page_size = if self.target.is_macos() { MACHO_PAGE_SIZE } else { 0x1000 };
+        let page_size = if self.target.is_macos() {
+            MACHO_PAGE_SIZE
+        } else {
+            0x1000
+        };
 
         // Align vaddr to page boundary.
         vaddr = align_up(vaddr, page_size);
@@ -594,10 +620,13 @@ impl Linker {
         for sym in &self.symbols {
             let addr = match &sym.section {
                 Some(sec_name) => {
-                    let sec_info = layout.get(sec_name)
-                        .ok_or_else(|| anyhow!(
-                            "Symbol '{}' references unknown section '{}'", sym.name, sec_name
-                        ))?;
+                    let sec_info = layout.get(sec_name).ok_or_else(|| {
+                        anyhow!(
+                            "Symbol '{}' references unknown section '{}'",
+                            sym.name,
+                            sec_name
+                        )
+                    })?;
                     sec_info.vaddr + sym.offset
                 }
                 None => sym.offset, // absolute symbol
@@ -615,7 +644,8 @@ impl Linker {
     fn merge_sections(&self, _layout: &SectionLayout) -> HashMap<String, Vec<u8>> {
         let mut merged: HashMap<String, Vec<u8>> = HashMap::new();
         for section in &self.sections {
-            merged.entry(section.name.clone())
+            merged
+                .entry(section.name.clone())
                 .or_default()
                 .extend_from_slice(&section.data);
         }
@@ -630,18 +660,17 @@ impl Linker {
         resolved: &HashMap<String, u64>,
     ) -> Result<()> {
         for reloc in &self.relocations {
-            let target_addr = *resolved.get(&reloc.symbol)
+            let target_addr = *resolved
+                .get(&reloc.symbol)
                 .ok_or_else(|| anyhow!("Undefined symbol in relocation: '{}'", reloc.symbol))?;
 
-            let section_data = merged.get_mut(&reloc.section)
-                .ok_or_else(|| anyhow!(
-                    "Relocation references unknown section '{}'", reloc.section
-                ))?;
+            let section_data = merged.get_mut(&reloc.section).ok_or_else(|| {
+                anyhow!("Relocation references unknown section '{}'", reloc.section)
+            })?;
 
-            let site_sec = layout.get(&reloc.section)
-                .ok_or_else(|| anyhow!(
-                    "Section '{}' not in layout", reloc.section
-                ))?;
+            let site_sec = layout
+                .get(&reloc.section)
+                .ok_or_else(|| anyhow!("Section '{}' not in layout", reloc.section))?;
             let site_addr = site_sec.vaddr + reloc.offset;
 
             match reloc.reloc_type {
@@ -649,8 +678,11 @@ impl Linker {
                     let value = (target_addr as i64 + reloc.addend) as u64;
                     let off = reloc.offset as usize;
                     if off + 8 > section_data.len() {
-                        bail!("Abs64 relocation at offset {} overflows section '{}'",
-                              off, reloc.section);
+                        bail!(
+                            "Abs64 relocation at offset {} overflows section '{}'",
+                            off,
+                            reloc.section
+                        );
                     }
                     section_data[off..off + 8].copy_from_slice(&value.to_le_bytes());
                 }
@@ -659,8 +691,11 @@ impl Linker {
                     let value = (target_addr as i64 + reloc.addend - site_addr as i64) as i32;
                     let off = reloc.offset as usize;
                     if off + 4 > section_data.len() {
-                        bail!("PcRel32 relocation at offset {} overflows section '{}'",
-                              off, reloc.section);
+                        bail!(
+                            "PcRel32 relocation at offset {} overflows section '{}'",
+                            off,
+                            reloc.section
+                        );
                     }
                     section_data[off..off + 4].copy_from_slice(&value.to_le_bytes());
                 }
@@ -700,10 +735,8 @@ impl Linker {
         // Program headers: one PT_LOAD per loadable section.
         let phdr_count = ordered.len() as u16;
         let phdr_offset = ELF64_EHDR_SIZE as u64;
-        let data_start_file = align_up(
-            phdr_offset + phdr_count as u64 * ELF64_PHDR_SIZE as u64,
-            16,
-        );
+        let data_start_file =
+            align_up(phdr_offset + phdr_count as u64 * ELF64_PHDR_SIZE as u64, 16);
 
         // ── Build file content ───────────────────────────────────────────
         let mut binary = Vec::new();
@@ -721,19 +754,19 @@ impl Linker {
         binary.extend_from_slice(&machine.to_le_bytes());
         binary.extend_from_slice(&1u32.to_le_bytes()); // e_version
 
-        binary.extend_from_slice(&entry.to_le_bytes());             // e_entry
-        binary.extend_from_slice(&phdr_offset.to_le_bytes());       // e_phoff
+        binary.extend_from_slice(&entry.to_le_bytes()); // e_entry
+        binary.extend_from_slice(&phdr_offset.to_le_bytes()); // e_phoff
         let shoff_patch_pos = binary.len();
-        binary.extend_from_slice(&0u64.to_le_bytes());              // e_shoff (patched later)
+        binary.extend_from_slice(&0u64.to_le_bytes()); // e_shoff (patched later)
 
-        binary.extend_from_slice(&0u32.to_le_bytes());              // e_flags
-        binary.extend_from_slice(&ELF64_EHDR_SIZE.to_le_bytes());   // e_ehsize
-        binary.extend_from_slice(&ELF64_PHDR_SIZE.to_le_bytes());   // e_phentsize
-        binary.extend_from_slice(&phdr_count.to_le_bytes());        // e_phnum
-        binary.extend_from_slice(&ELF64_SHDR_SIZE.to_le_bytes());   // e_shentsize
+        binary.extend_from_slice(&0u32.to_le_bytes()); // e_flags
+        binary.extend_from_slice(&ELF64_EHDR_SIZE.to_le_bytes()); // e_ehsize
+        binary.extend_from_slice(&ELF64_PHDR_SIZE.to_le_bytes()); // e_phentsize
+        binary.extend_from_slice(&phdr_count.to_le_bytes()); // e_phnum
+        binary.extend_from_slice(&ELF64_SHDR_SIZE.to_le_bytes()); // e_shentsize
         let shnum = (ordered.len() + 1) as u16; // +1 null section
-        binary.extend_from_slice(&shnum.to_le_bytes());             // e_shnum
-        binary.extend_from_slice(&0u16.to_le_bytes());              // e_shstrndx
+        binary.extend_from_slice(&shnum.to_le_bytes()); // e_shnum
+        binary.extend_from_slice(&0u16.to_le_bytes()); // e_shstrndx
 
         // ---------- Program Headers ----------
         struct PhdrEntry {
@@ -820,26 +853,33 @@ impl Linker {
             let is_bss = name == ".bss";
             let sh_type = if is_bss { SHT_NOBITS } else { SHT_PROGBITS };
             let sh_flags = elf_section_shflags(name);
-            let sh_offset = section_file_offsets.get(name.as_str()).copied().unwrap_or(0);
-            let sh_size = if is_bss { info.size } else {
-                merged.get(name.as_str()).map(|d| d.len() as u64).unwrap_or(0)
+            let sh_offset = section_file_offsets
+                .get(name.as_str())
+                .copied()
+                .unwrap_or(0);
+            let sh_size = if is_bss {
+                info.size
+            } else {
+                merged
+                    .get(name.as_str())
+                    .map(|d| d.len() as u64)
+                    .unwrap_or(0)
             };
 
-            binary.extend_from_slice(&0u32.to_le_bytes());                // sh_name (simplified)
-            binary.extend_from_slice(&sh_type.to_le_bytes());             // sh_type
-            binary.extend_from_slice(&sh_flags.to_le_bytes());            // sh_flags
-            binary.extend_from_slice(&info.vaddr.to_le_bytes());          // sh_addr
-            binary.extend_from_slice(&sh_offset.to_le_bytes());           // sh_offset
-            binary.extend_from_slice(&sh_size.to_le_bytes());             // sh_size
-            binary.extend_from_slice(&0u32.to_le_bytes());                // sh_link
-            binary.extend_from_slice(&0u32.to_le_bytes());                // sh_info
-            binary.extend_from_slice(&info.alignment.to_le_bytes());      // sh_addralign
-            binary.extend_from_slice(&0u64.to_le_bytes());                // sh_entsize
+            binary.extend_from_slice(&0u32.to_le_bytes()); // sh_name (simplified)
+            binary.extend_from_slice(&sh_type.to_le_bytes()); // sh_type
+            binary.extend_from_slice(&sh_flags.to_le_bytes()); // sh_flags
+            binary.extend_from_slice(&info.vaddr.to_le_bytes()); // sh_addr
+            binary.extend_from_slice(&sh_offset.to_le_bytes()); // sh_offset
+            binary.extend_from_slice(&sh_size.to_le_bytes()); // sh_size
+            binary.extend_from_slice(&0u32.to_le_bytes()); // sh_link
+            binary.extend_from_slice(&0u32.to_le_bytes()); // sh_info
+            binary.extend_from_slice(&info.alignment.to_le_bytes()); // sh_addralign
+            binary.extend_from_slice(&0u64.to_le_bytes()); // sh_entsize
         }
 
         // Patch e_shoff in the ELF header.
-        binary[shoff_patch_pos..shoff_patch_pos + 8]
-            .copy_from_slice(&shoff.to_le_bytes());
+        binary[shoff_patch_pos..shoff_patch_pos + 8].copy_from_slice(&shoff.to_le_bytes());
 
         Ok(binary)
     }
@@ -876,63 +916,66 @@ impl Linker {
         binary.extend_from_slice(&PE_SIGNATURE);
 
         // ---------- COFF Header (20 bytes) ----------
-        binary.extend_from_slice(&machine.to_le_bytes());                   // Machine
-        binary.extend_from_slice(&num_sections.to_le_bytes());              // NumberOfSections
-        binary.extend_from_slice(&0u32.to_le_bytes());                      // TimeDateStamp
-        binary.extend_from_slice(&0u32.to_le_bytes());                      // PointerToSymbolTable
-        binary.extend_from_slice(&0u32.to_le_bytes());                      // NumberOfSymbols
-        let optional_hdr_size: u16 = 112 + (PE_NUM_DATA_DIRS * 8) as u16;   // PE32+ opt header
-        binary.extend_from_slice(&optional_hdr_size.to_le_bytes());          // SizeOfOptionalHeader
+        binary.extend_from_slice(&machine.to_le_bytes()); // Machine
+        binary.extend_from_slice(&num_sections.to_le_bytes()); // NumberOfSections
+        binary.extend_from_slice(&0u32.to_le_bytes()); // TimeDateStamp
+        binary.extend_from_slice(&0u32.to_le_bytes()); // PointerToSymbolTable
+        binary.extend_from_slice(&0u32.to_le_bytes()); // NumberOfSymbols
+        let optional_hdr_size: u16 = 112 + (PE_NUM_DATA_DIRS * 8) as u16; // PE32+ opt header
+        binary.extend_from_slice(&optional_hdr_size.to_le_bytes()); // SizeOfOptionalHeader
         let characteristics = IMAGE_FILE_EXECUTABLE_IMAGE | IMAGE_FILE_LARGE_ADDRESS_AWARE;
-        binary.extend_from_slice(&characteristics.to_le_bytes());            // Characteristics
+        binary.extend_from_slice(&characteristics.to_le_bytes()); // Characteristics
 
         // ---------- Optional Header (PE32+) ----------
-        binary.extend_from_slice(&PE32_PLUS_MAGIC.to_le_bytes());           // Magic
+        binary.extend_from_slice(&PE32_PLUS_MAGIC.to_le_bytes()); // Magic
         binary.push(14); // MajorLinkerVersion
-        binary.push(0);  // MinorLinkerVersion
+        binary.push(0); // MinorLinkerVersion
 
         // Compute sizes
-        let total_code_size: u32 = ordered.iter()
+        let total_code_size: u32 = ordered
+            .iter()
             .filter(|n| *n == ".text")
             .map(|n| merged.get(n.as_str()).map(|d| d.len() as u32).unwrap_or(0))
             .sum();
-        let total_init_data: u32 = ordered.iter()
+        let total_init_data: u32 = ordered
+            .iter()
             .filter(|n| *n == ".data" || *n == ".rodata")
             .map(|n| merged.get(n.as_str()).map(|d| d.len() as u32).unwrap_or(0))
             .sum();
-        let total_uninit_data: u32 = ordered.iter()
+        let total_uninit_data: u32 = ordered
+            .iter()
             .filter(|n| *n == ".bss")
-            .map(|n| {
-                layout.get(n).map(|i| i.size as u32).unwrap_or(0)
-            })
+            .map(|n| layout.get(n).map(|i| i.size as u32).unwrap_or(0))
             .sum();
 
-        binary.extend_from_slice(&total_code_size.to_le_bytes());           // SizeOfCode
-        binary.extend_from_slice(&total_init_data.to_le_bytes());           // SizeOfInitializedData
-        binary.extend_from_slice(&total_uninit_data.to_le_bytes());         // SizeOfUninitializedData
-        binary.extend_from_slice(&entry_rva.to_le_bytes());                 // AddressOfEntryPoint
+        binary.extend_from_slice(&total_code_size.to_le_bytes()); // SizeOfCode
+        binary.extend_from_slice(&total_init_data.to_le_bytes()); // SizeOfInitializedData
+        binary.extend_from_slice(&total_uninit_data.to_le_bytes()); // SizeOfUninitializedData
+        binary.extend_from_slice(&entry_rva.to_le_bytes()); // AddressOfEntryPoint
 
         // BaseOfCode — RVA of .text
-        let text_rva = layout.get(".text")
+        let text_rva = layout
+            .get(".text")
             .map(|s| (s.vaddr.wrapping_sub(PE_IMAGE_BASE)) as u32)
             .unwrap_or(PE_SECTION_ALIGNMENT);
-        binary.extend_from_slice(&text_rva.to_le_bytes());                  // BaseOfCode
+        binary.extend_from_slice(&text_rva.to_le_bytes()); // BaseOfCode
 
         // PE32+ fields (64-bit)
-        binary.extend_from_slice(&PE_IMAGE_BASE.to_le_bytes());             // ImageBase
-        binary.extend_from_slice(&PE_SECTION_ALIGNMENT.to_le_bytes());      // SectionAlignment
-        binary.extend_from_slice(&PE_FILE_ALIGNMENT.to_le_bytes());         // FileAlignment
-        binary.extend_from_slice(&6u16.to_le_bytes());                      // MajorOSVersion
-        binary.extend_from_slice(&0u16.to_le_bytes());                      // MinorOSVersion
-        binary.extend_from_slice(&0u16.to_le_bytes());                      // MajorImageVersion
-        binary.extend_from_slice(&0u16.to_le_bytes());                      // MinorImageVersion
-        binary.extend_from_slice(&6u16.to_le_bytes());                      // MajorSubsystemVersion
-        binary.extend_from_slice(&0u16.to_le_bytes());                      // MinorSubsystemVersion
-        binary.extend_from_slice(&0u32.to_le_bytes());                      // Win32VersionValue
+        binary.extend_from_slice(&PE_IMAGE_BASE.to_le_bytes()); // ImageBase
+        binary.extend_from_slice(&PE_SECTION_ALIGNMENT.to_le_bytes()); // SectionAlignment
+        binary.extend_from_slice(&PE_FILE_ALIGNMENT.to_le_bytes()); // FileAlignment
+        binary.extend_from_slice(&6u16.to_le_bytes()); // MajorOSVersion
+        binary.extend_from_slice(&0u16.to_le_bytes()); // MinorOSVersion
+        binary.extend_from_slice(&0u16.to_le_bytes()); // MajorImageVersion
+        binary.extend_from_slice(&0u16.to_le_bytes()); // MinorImageVersion
+        binary.extend_from_slice(&6u16.to_le_bytes()); // MajorSubsystemVersion
+        binary.extend_from_slice(&0u16.to_le_bytes()); // MinorSubsystemVersion
+        binary.extend_from_slice(&0u32.to_le_bytes()); // Win32VersionValue
 
         // SizeOfImage — must be a multiple of SectionAlignment.
         // Compute from the highest section end.
-        let image_end = ordered.iter()
+        let image_end = ordered
+            .iter()
             .filter_map(|n| layout.get(n))
             .map(|s| s.vaddr + s.size)
             .max()
@@ -941,7 +984,7 @@ impl Linker {
             (image_end.wrapping_sub(PE_IMAGE_BASE)) as u64,
             PE_SECTION_ALIGNMENT as u64,
         ) as u32;
-        binary.extend_from_slice(&size_of_image.to_le_bytes());             // SizeOfImage
+        binary.extend_from_slice(&size_of_image.to_le_bytes()); // SizeOfImage
 
         // SizeOfHeaders — headers + section table, file-aligned.
         let headers_raw = PE_DOS_HEADER_SIZE
@@ -950,22 +993,22 @@ impl Linker {
             + optional_hdr_size as usize
             + num_sections as usize * 40; // section headers
         let size_of_headers = align_up(headers_raw as u64, PE_FILE_ALIGNMENT as u64) as u32;
-        binary.extend_from_slice(&size_of_headers.to_le_bytes());           // SizeOfHeaders
+        binary.extend_from_slice(&size_of_headers.to_le_bytes()); // SizeOfHeaders
 
-        binary.extend_from_slice(&0u32.to_le_bytes());                      // CheckSum
+        binary.extend_from_slice(&0u32.to_le_bytes()); // CheckSum
         binary.extend_from_slice(&IMAGE_SUBSYSTEM_WINDOWS_CUI.to_le_bytes()); // Subsystem
         let dll_chars = IMAGE_DLLCHARACTERISTICS_HIGH_ENTROPY_VA
             | IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE
             | IMAGE_DLLCHARACTERISTICS_NX_COMPAT
             | IMAGE_DLLCHARACTERISTICS_TERMINAL_SERVER_AWARE;
-        binary.extend_from_slice(&dll_chars.to_le_bytes());                 // DllCharacteristics
+        binary.extend_from_slice(&dll_chars.to_le_bytes()); // DllCharacteristics
 
         // Stack / Heap sizes
-        binary.extend_from_slice(&(1u64 << 20).to_le_bytes());  // SizeOfStackReserve (1 MiB)
-        binary.extend_from_slice(&(4096u64).to_le_bytes());     // SizeOfStackCommit
-        binary.extend_from_slice(&(1u64 << 20).to_le_bytes());  // SizeOfHeapReserve
-        binary.extend_from_slice(&(4096u64).to_le_bytes());     // SizeOfHeapCommit
-        binary.extend_from_slice(&0u32.to_le_bytes());           // LoaderFlags
+        binary.extend_from_slice(&(1u64 << 20).to_le_bytes()); // SizeOfStackReserve (1 MiB)
+        binary.extend_from_slice(&(4096u64).to_le_bytes()); // SizeOfStackCommit
+        binary.extend_from_slice(&(1u64 << 20).to_le_bytes()); // SizeOfHeapReserve
+        binary.extend_from_slice(&(4096u64).to_le_bytes()); // SizeOfHeapCommit
+        binary.extend_from_slice(&0u32.to_le_bytes()); // LoaderFlags
         binary.extend_from_slice(&PE_NUM_DATA_DIRS.to_le_bytes()); // NumberOfRvaAndSizes
 
         // Data directories (all zeroed for minimal executable)
@@ -993,23 +1036,25 @@ impl Linker {
             let virtual_size = if is_bss { info.size as u32 } else { raw_size };
             let section_rva = (info.vaddr.wrapping_sub(PE_IMAGE_BASE)) as u32;
 
-            binary.extend_from_slice(&virtual_size.to_le_bytes());   // VirtualSize
-            binary.extend_from_slice(&section_rva.to_le_bytes());    // VirtualAddress
+            binary.extend_from_slice(&virtual_size.to_le_bytes()); // VirtualSize
+            binary.extend_from_slice(&section_rva.to_le_bytes()); // VirtualAddress
 
-            let aligned_raw = if is_bss { 0u32 } else {
+            let aligned_raw = if is_bss {
+                0u32
+            } else {
                 align_up(raw_size as u64, PE_FILE_ALIGNMENT as u64) as u32
             };
-            binary.extend_from_slice(&aligned_raw.to_le_bytes());    // SizeOfRawData
+            binary.extend_from_slice(&aligned_raw.to_le_bytes()); // SizeOfRawData
             let ptr_raw = if is_bss { 0u32 } else { file_offset };
-            binary.extend_from_slice(&ptr_raw.to_le_bytes());        // PointerToRawData
+            binary.extend_from_slice(&ptr_raw.to_le_bytes()); // PointerToRawData
 
-            binary.extend_from_slice(&0u32.to_le_bytes());           // PointerToRelocations
-            binary.extend_from_slice(&0u32.to_le_bytes());           // PointerToLinenumbers
-            binary.extend_from_slice(&0u16.to_le_bytes());           // NumberOfRelocations
-            binary.extend_from_slice(&0u16.to_le_bytes());           // NumberOfLinenumbers
+            binary.extend_from_slice(&0u32.to_le_bytes()); // PointerToRelocations
+            binary.extend_from_slice(&0u32.to_le_bytes()); // PointerToLinenumbers
+            binary.extend_from_slice(&0u16.to_le_bytes()); // NumberOfRelocations
+            binary.extend_from_slice(&0u16.to_le_bytes()); // NumberOfLinenumbers
 
             let chars = pe_section_characteristics(name);
-            binary.extend_from_slice(&chars.to_le_bytes());          // Characteristics
+            binary.extend_from_slice(&chars.to_le_bytes()); // Characteristics
 
             if !is_bss {
                 file_offset += aligned_raw;
@@ -1060,10 +1105,12 @@ impl Linker {
         //   5. LC_SYMTAB                   (empty symbol table, keeps format valid)
 
         // Group sections into Mach-O segments.
-        let text_sections: Vec<&String> = ordered.iter()
+        let text_sections: Vec<&String> = ordered
+            .iter()
             .filter(|n| *n == ".text" || *n == ".rodata")
             .collect();
-        let data_sections: Vec<&String> = ordered.iter()
+        let data_sections: Vec<&String> = ordered
+            .iter()
             .filter(|n| *n == ".data" || *n == ".bss")
             .collect();
 
@@ -1131,9 +1178,12 @@ impl Linker {
         self.write_macho_segment(
             &mut binary,
             "__PAGEZERO",
-            0, pagezero_vmsize,
-            0, 0,
-            0, 0,
+            0,
+            pagezero_vmsize,
+            0,
+            0,
+            0,
+            0,
             0, // no sections
             lc_pagezero_size,
         );
@@ -1141,12 +1191,14 @@ impl Linker {
         // ---------- LC_SEGMENT_64 __TEXT ----------
         if !text_sections.is_empty() {
             // Compute segment file range and VM range.
-            let seg_vm_start = text_sections.iter()
+            let seg_vm_start = text_sections
+                .iter()
                 .filter_map(|n| layout.get(n.as_str()))
                 .map(|s| s.vaddr)
                 .min()
                 .unwrap_or(0);
-            let seg_vm_end = text_sections.iter()
+            let seg_vm_end = text_sections
+                .iter()
                 .filter_map(|n| layout.get(n.as_str()))
                 .map(|s| s.vaddr + s.size)
                 .max()
@@ -1165,8 +1217,10 @@ impl Linker {
             self.write_macho_segment(
                 &mut binary,
                 "__TEXT",
-                seg_vm_start, seg_vmsize,
-                text_file_offset as u64, seg_filesize,
+                seg_vm_start,
+                seg_vmsize,
+                text_file_offset as u64,
+                seg_filesize,
                 VM_PROT_READ | VM_PROT_EXECUTE,
                 VM_PROT_READ | VM_PROT_EXECUTE,
                 text_sections.len() as u32,
@@ -1177,8 +1231,10 @@ impl Linker {
             let mut sect_file_off = text_file_offset as u64;
             for sec_name in &text_sections {
                 let info = layout.get(sec_name.as_str()).unwrap();
-                let sec_len = merged.get(sec_name.as_str())
-                    .map(|d| d.len() as u64).unwrap_or(0);
+                let sec_len = merged
+                    .get(sec_name.as_str())
+                    .map(|d| d.len() as u64)
+                    .unwrap_or(0);
 
                 let macho_sec_name = macho_section_name(sec_name);
                 let macho_seg_name = "__TEXT";
@@ -1206,12 +1262,14 @@ impl Linker {
 
         // ---------- LC_SEGMENT_64 __DATA ----------
         if !data_sections.is_empty() {
-            let seg_vm_start = data_sections.iter()
+            let seg_vm_start = data_sections
+                .iter()
                 .filter_map(|n| layout.get(n.as_str()))
                 .map(|s| s.vaddr)
                 .min()
                 .unwrap_or(0);
-            let seg_vm_end = data_sections.iter()
+            let seg_vm_end = data_sections
+                .iter()
                 .filter_map(|n| layout.get(n.as_str()))
                 .map(|s| s.vaddr + s.size)
                 .max()
@@ -1241,8 +1299,10 @@ impl Linker {
             self.write_macho_segment(
                 &mut binary,
                 "__DATA",
-                seg_vm_start, seg_vmsize,
-                data_file_offset, seg_filesize,
+                seg_vm_start,
+                seg_vmsize,
+                data_file_offset,
+                seg_filesize,
                 VM_PROT_READ | VM_PROT_WRITE,
                 VM_PROT_READ | VM_PROT_WRITE,
                 data_sections.len() as u32,
@@ -1253,8 +1313,13 @@ impl Linker {
             for sec_name in &data_sections {
                 let info = layout.get(sec_name.as_str()).unwrap();
                 let is_bss = *sec_name == ".bss";
-                let sec_len = if is_bss { info.size } else {
-                    merged.get(sec_name.as_str()).map(|d| d.len() as u64).unwrap_or(0)
+                let sec_len = if is_bss {
+                    info.size
+                } else {
+                    merged
+                        .get(sec_name.as_str())
+                        .map(|d| d.len() as u64)
+                        .unwrap_or(0)
                 };
 
                 let macho_sec_name = macho_section_name(sec_name);
@@ -1283,9 +1348,9 @@ impl Linker {
         binary.extend_from_slice(&lc_unixthread_size.to_le_bytes());
         if cpu_type == CPU_TYPE_X86_64 {
             // x86_64_THREAD_STATE = flavor 4, count 42 (21 uint64 values)
-            binary.extend_from_slice(&4u32.to_le_bytes());   // flavor
-            binary.extend_from_slice(&42u32.to_le_bytes());  // count (number of u32s = 21 regs * 2)
-            // 21 registers: rax..rflags, rip, ... (rip is register index 16)
+            binary.extend_from_slice(&4u32.to_le_bytes()); // flavor
+            binary.extend_from_slice(&42u32.to_le_bytes()); // count (number of u32s = 21 regs * 2)
+                                                            // 21 registers: rax..rflags, rip, ... (rip is register index 16)
             for i in 0u32..21 {
                 if i == 16 {
                     // RIP — set to entry point
@@ -1296,10 +1361,10 @@ impl Linker {
             }
         } else {
             // ARM_THREAD_STATE64 = flavor 6, count 68 (34 uint64 values)
-            binary.extend_from_slice(&6u32.to_le_bytes());   // flavor
-            binary.extend_from_slice(&68u32.to_le_bytes());  // count
-            // 34 registers: x0-x28, fp, lr, sp, pc, cpsr(+pad)
-            // PC is register index 32
+            binary.extend_from_slice(&6u32.to_le_bytes()); // flavor
+            binary.extend_from_slice(&68u32.to_le_bytes()); // count
+                                                            // 34 registers: x0-x28, fp, lr, sp, pc, cpsr(+pad)
+                                                            // PC is register index 32
             for i in 0u32..34 {
                 if i == 32 {
                     binary.extend_from_slice(&entry.to_le_bytes());
@@ -1372,7 +1437,7 @@ impl Linker {
         cmdsize: u32,
     ) {
         buf.extend_from_slice(&LC_SEGMENT_64.to_le_bytes()); // cmd
-        buf.extend_from_slice(&cmdsize.to_le_bytes());       // cmdsize
+        buf.extend_from_slice(&cmdsize.to_le_bytes()); // cmdsize
 
         // segname (16 bytes, zero-padded)
         let mut name_buf = [0u8; 16];
@@ -1417,16 +1482,16 @@ impl Linker {
         sg[..sgl].copy_from_slice(&sgb[..sgl]);
         buf.extend_from_slice(&sg);
 
-        buf.extend_from_slice(&addr.to_le_bytes());         // addr
-        buf.extend_from_slice(&size.to_le_bytes());          // size
-        buf.extend_from_slice(&offset.to_le_bytes());        // offset
-        buf.extend_from_slice(&align_log2.to_le_bytes());    // align (log2)
-        buf.extend_from_slice(&0u32.to_le_bytes());          // reloff
-        buf.extend_from_slice(&0u32.to_le_bytes());          // nreloc
-        buf.extend_from_slice(&flags.to_le_bytes());         // flags
-        buf.extend_from_slice(&0u32.to_le_bytes());          // reserved1
-        buf.extend_from_slice(&0u32.to_le_bytes());          // reserved2
-        buf.extend_from_slice(&0u32.to_le_bytes());          // reserved3 (64-bit only)
+        buf.extend_from_slice(&addr.to_le_bytes()); // addr
+        buf.extend_from_slice(&size.to_le_bytes()); // size
+        buf.extend_from_slice(&offset.to_le_bytes()); // offset
+        buf.extend_from_slice(&align_log2.to_le_bytes()); // align (log2)
+        buf.extend_from_slice(&0u32.to_le_bytes()); // reloff
+        buf.extend_from_slice(&0u32.to_le_bytes()); // nreloc
+        buf.extend_from_slice(&flags.to_le_bytes()); // flags
+        buf.extend_from_slice(&0u32.to_le_bytes()); // reserved1
+        buf.extend_from_slice(&0u32.to_le_bytes()); // reserved2
+        buf.extend_from_slice(&0u32.to_le_bytes()); // reserved3 (64-bit only)
     }
 
     // ── Section ordering ─────────────────────────────────────────────────
@@ -1485,7 +1550,14 @@ impl SectionLayout {
     }
 
     fn add(&mut self, name: String, vaddr: u64, size: u64, alignment: u64) {
-        self.sections.insert(name.clone(), SectionInfo { vaddr, size, alignment });
+        self.sections.insert(
+            name.clone(),
+            SectionInfo {
+                vaddr,
+                size,
+                alignment,
+            },
+        );
         self.order.push(name);
     }
 
@@ -1500,7 +1572,9 @@ impl SectionLayout {
 
 /// Align `value` up to the next multiple of `align` (must be power of two).
 fn align_up(value: u64, align: u64) -> u64 {
-    if align == 0 { return value; }
+    if align == 0 {
+        return value;
+    }
     (value + align - 1) & !(align - 1)
 }
 
@@ -1583,9 +1657,9 @@ mod tests {
     // (exit(0) on Linux).
     fn exit0_code() -> Vec<u8> {
         vec![
-            0x31, 0xFF,             // xor edi, edi
+            0x31, 0xFF, // xor edi, edi
             0xB8, 0x3C, 0x00, 0x00, 0x00, // mov eax, 60
-            0x0F, 0x05,             // syscall
+            0x0F, 0x05, // syscall
         ]
     }
 
@@ -1655,7 +1729,12 @@ mod tests {
         // e_entry at offset 24 (8 bytes, little-endian)
         let entry = u64::from_le_bytes(binary[24..32].try_into().unwrap());
         // Should be >= ELF_VADDR_BASE
-        assert!(entry >= ELF_VADDR_BASE, "entry {:#x} < base {:#x}", entry, ELF_VADDR_BASE);
+        assert!(
+            entry >= ELF_VADDR_BASE,
+            "entry {:#x} < base {:#x}",
+            entry,
+            ELF_VADDR_BASE
+        );
     }
 
     #[test]

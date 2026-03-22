@@ -13,8 +13,8 @@
 pub mod autograd;
 pub mod borrow_check;
 pub mod comprehensive_tests;
-pub mod constraints;
 pub mod const_generics;
+pub mod constraints;
 pub mod edge_cases;
 pub mod error_recovery;
 pub mod inference;
@@ -23,9 +23,9 @@ pub mod lifetimes;
 pub mod monomorphization;
 pub mod optimization;
 pub mod performance;
-pub mod properties;  // Properties & sealed classes support
+pub mod properties; // Properties & sealed classes support
 pub mod traits;
-pub mod type_inference;  // Constraint-based Hindley-Milner type inference engine
+pub mod type_inference; // Constraint-based Hindley-Milner type inference engine
 pub mod types;
 
 #[cfg(test)]
@@ -149,25 +149,36 @@ fn types_equal(a: &Type, b: &Type) -> bool {
         }
 
         // Associated types: <T as Trait>::Type
-        (Type::AssocType(t1, ty1), Type::AssocType(t2, ty2)) => {
-            t1 == t2 && ty1 == ty2
-        }
+        (Type::AssocType(t1, ty1), Type::AssocType(t2, ty2)) => t1 == t2 && ty1 == ty2,
 
         // Trait objects: dyn Trait
-        (Type::TraitObject { principal: p1, supertraits: s1, lifetime: l1 },
-         Type::TraitObject { principal: p2, supertraits: s2, lifetime: l2 }) => {
-            p1 == p2 && s1 == s2 && l1 == l2
-        }
+        (
+            Type::TraitObject {
+                principal: p1,
+                supertraits: s1,
+                lifetime: l1,
+            },
+            Type::TraitObject {
+                principal: p2,
+                supertraits: s2,
+                lifetime: l2,
+            },
+        ) => p1 == p2 && s1 == s2 && l1 == l2,
 
         // Where-constrained types
-        (Type::WhereConstrained { base: b1, bounds: bo1 },
-         Type::WhereConstrained { base: b2, bounds: bo2 }) => {
-            types_equal(b1, b2) && bo1 == bo2
-        }
+        (
+            Type::WhereConstrained {
+                base: b1,
+                bounds: bo1,
+            },
+            Type::WhereConstrained {
+                base: b2,
+                bounds: bo2,
+            },
+        ) => types_equal(b1, b2) && bo1 == bo2,
 
         // Higher-ranked types
-        (Type::HigherRanked { bound: b1 },
-         Type::HigherRanked { bound: b2 }) => {
+        (Type::HigherRanked { bound: b1 }, Type::HigherRanked { bound: b2 }) => {
             format!("{:?}", b1) == format!("{:?}", b2)
         }
 
@@ -455,7 +466,7 @@ pub struct Analyzer {
     next_lifetime_id: usize,
     active_lifetimes: HashMap<String, Lifetime>,
     borrow_graph: Vec<BorrowInfo>, // All active borrows
-    
+
     // Phase 3 Integration: New module instances
     /// Constraint solver for type inference
     constraint_solver: constraints::ConstraintSolver,
@@ -1271,10 +1282,10 @@ impl Analyzer {
 
         // Try to retrieve the generic function definition and monomorphize it
         if let Some(generic_func) = self.generic_functions.get(func_name).cloned() {
-            use crate::semantic::monomorphization::{TypeSubstitution, StatementSubstitutor};
-            
+            use crate::semantic::monomorphization::{StatementSubstitutor, TypeSubstitution};
+
             let mut substitution = TypeSubstitution::new();
-            
+
             // Map type arguments (T, U, V, etc.) to concrete types
             let type_param_names = vec!["T", "U", "V", "W", "X"];
             for (i, type_arg) in type_args.iter().enumerate() {
@@ -1282,11 +1293,11 @@ impl Analyzer {
                     substitution.add(type_param_names[i].to_string(), type_arg.clone());
                 }
             }
-            
+
             // Transform function body by substituting type parameters
             let stmt_sub = StatementSubstitutor::new(substitution.clone());
             let mut typed_body = Vec::new();
-            
+
             // Transform statements from the original function body
             for stmt in &generic_func.body.statements {
                 let transformed = stmt_sub.transform_statement(stmt);
@@ -1305,7 +1316,7 @@ impl Analyzer {
                     }
                 }
             }
-            
+
             self.monomorphized.insert(
                 mangled_name.clone(),
                 MonomorphizedFunc {
@@ -2140,48 +2151,70 @@ impl Analyzer {
     }
 
     // ===== Phase 3 Integration Methods =====
-    
+
     /// Integrate constraint solver into expression analysis
     /// Collects constraints and solves them for inferred types
-    fn check_expression_with_constraints(&mut self, expr: &Expression) -> Result<Type, SemanticError> {
+    fn check_expression_with_constraints(
+        &mut self,
+        expr: &Expression,
+    ) -> Result<Type, SemanticError> {
         // Analyze the expression normally
         let typed_expr = self.analyze_expression(expr)?;
-        
+
         // For now, this is a hook point. Future: collect constraints during analysis
         // and solve them here to improve type inference
         Ok(typed_expr.ty)
     }
-    
+
     /// Integrate trait resolver into generic type checking
     /// Validates that concrete types satisfy trait bounds on generic parameters
-    fn check_generic_trait_bounds(&mut self, type_param: &str, bounds: &[String], concrete_type: &Type) -> Result<(), SemanticError> {
+    fn check_generic_trait_bounds(
+        &mut self,
+        type_param: &str,
+        bounds: &[String],
+        concrete_type: &Type,
+    ) -> Result<(), SemanticError> {
         for trait_name in bounds {
             // Use trait resolver to check bounds
-            if !self.trait_resolver.implements_trait(concrete_type, trait_name) {
-                return Err(SemanticError::TraitBoundError(
-                    format!("Type {:?} does not implement trait {}", concrete_type, trait_name)
-                ));
+            if !self
+                .trait_resolver
+                .implements_trait(concrete_type, trait_name)
+            {
+                return Err(SemanticError::TraitBoundError(format!(
+                    "Type {:?} does not implement trait {}",
+                    concrete_type, trait_name
+                )));
             }
         }
         Ok(())
     }
-    
+
     /// Integrate borrow checker into variable binding
     /// Tracks variable ownership and enforces borrow rules
-    fn define_variable_with_borrow_check(&mut self, name: String, ty: Type, mutable: bool) -> Result<(), SemanticError> {
+    fn define_variable_with_borrow_check(
+        &mut self,
+        name: String,
+        ty: Type,
+        mutable: bool,
+    ) -> Result<(), SemanticError> {
         // Define in scope
         self.define_symbol(name.clone(), ty, mutable)?;
-        
+
         // Also track in borrow checker
-        self.borrow_checker.bind_variable(name)
+        self.borrow_checker
+            .bind_variable(name)
             .map_err(|e| SemanticError::BorrowError(e))?;
-        
+
         Ok(())
     }
-    
+
     /// Integrate borrow checker into borrow operations
     /// Tracks shared and mutable borrows with scope awareness
-    fn check_borrow_with_enforcement(&mut self, name: &str, mutable: bool) -> Result<(), SemanticError> {
+    fn check_borrow_with_enforcement(
+        &mut self,
+        name: &str,
+        mutable: bool,
+    ) -> Result<(), SemanticError> {
         if mutable {
             self.borrow_checker.borrow_mut_compat(name)
         } else {
@@ -2190,15 +2223,18 @@ impl Analyzer {
         .map_err(|e| SemanticError::BorrowError(e))?;
         Ok(())
     }
-    
+
     /// Integrate borrow checker into move operations
     /// Prevents use-after-move and enforces move semantics
     fn check_move_with_enforcement(&mut self, name: &str) -> Result<(), SemanticError> {
-        self.borrow_checker.move_var(name)
-            .map_err(|e| SemanticError::MoveError { name: name.to_string() })?;
+        self.borrow_checker
+            .move_var(name)
+            .map_err(|e| SemanticError::MoveError {
+                name: name.to_string(),
+            })?;
         Ok(())
     }
-    
+
     /// Integrate monomorphization into generic function calls
     /// Instantiates generic functions with concrete types
     fn instantiate_generic_function_integrated(
@@ -2206,60 +2242,67 @@ impl Analyzer {
         func_name: &str,
         type_args: &[Type],
     ) -> Result<String, SemanticError> {
-        use crate::semantic::monomorphization::{TypeSubstitution, StatementSubstitutor};
-        
+        use crate::semantic::monomorphization::{StatementSubstitutor, TypeSubstitution};
+
         // Get original generic function
-        let generic_func = self.generic_functions
+        let generic_func = self
+            .generic_functions
             .get(func_name)
-            .ok_or_else(|| SemanticError::UndefinedSymbol { name: func_name.to_string() })?
+            .ok_or_else(|| SemanticError::UndefinedSymbol {
+                name: func_name.to_string(),
+            })?
             .clone();
-        
+
         // Create type substitution
         let mut subst = TypeSubstitution::new();
-        
+
         // Collect all trait bounds to check
-        let bounds_to_check: Vec<(String, String, Type)> = if let Some(bounds) = self.generic_bounds.get(func_name) {
-            let type_param_names: Vec<String> = (0..type_args.len())
-                .map(|i| format!("T{}", i))
-                .collect();
-            
-            let mut checks = Vec::new();
-            for (param_name, concrete_type) in type_param_names.iter().zip(type_args) {
-                subst.add(param_name.clone(), concrete_type.clone());
-                
-                // Check trait bounds on the concrete type
-                if let Some(trait_bounds) = self.generic_bounds.get(param_name) {
-                    for trait_name in trait_bounds {
-                        checks.push((param_name.clone(), trait_name.clone(), concrete_type.clone()));
+        let bounds_to_check: Vec<(String, String, Type)> =
+            if let Some(bounds) = self.generic_bounds.get(func_name) {
+                let type_param_names: Vec<String> =
+                    (0..type_args.len()).map(|i| format!("T{}", i)).collect();
+
+                let mut checks = Vec::new();
+                for (param_name, concrete_type) in type_param_names.iter().zip(type_args) {
+                    subst.add(param_name.clone(), concrete_type.clone());
+
+                    // Check trait bounds on the concrete type
+                    if let Some(trait_bounds) = self.generic_bounds.get(param_name) {
+                        for trait_name in trait_bounds {
+                            checks.push((
+                                param_name.clone(),
+                                trait_name.clone(),
+                                concrete_type.clone(),
+                            ));
+                        }
                     }
                 }
-            }
-            checks
-        } else {
-            // No bounds info, just map generics directly
-            for (i, concrete_type) in type_args.iter().enumerate() {
-                subst.add(format!("T{}", i), concrete_type.clone());
-            }
-            Vec::new()
-        };
-        
+                checks
+            } else {
+                // No bounds info, just map generics directly
+                for (i, concrete_type) in type_args.iter().enumerate() {
+                    subst.add(format!("T{}", i), concrete_type.clone());
+                }
+                Vec::new()
+            };
+
         // Now check all bounds
         for (param_name, trait_name, concrete_type) in bounds_to_check {
             self.check_generic_trait_bounds(&param_name, &[trait_name], &concrete_type)?;
         }
-        
+
         // Create mangled name
         let mut mangled = func_name.to_string();
         for ty in type_args {
             mangled.push('_');
             mangled.push_str(&self.type_to_string(ty));
         }
-        
+
         // Check if already monomorphized
         if self.monomorphized.contains_key(&mangled) {
             return Ok(mangled);
         }
-        
+
         // Monomorphize function body
         let substituted_body: Vec<TypedStatement> = generic_func
             .body
@@ -2271,7 +2314,7 @@ impl Analyzer {
                 self.statement_to_typed(&transformed).ok()
             })
             .collect();
-        
+
         // Store monomorphized function
         self.monomorphized.insert(
             mangled.clone(),
@@ -2282,15 +2325,16 @@ impl Analyzer {
                 typed_body: substituted_body,
             },
         );
-        
+
         Ok(mangled)
     }
-    
+
     /// Helper to convert Statement to TypedStatement
     fn statement_to_typed(&mut self, stmt: &Statement) -> Result<TypedStatement, SemanticError> {
         match stmt {
             Statement::Let { name, value, .. } => {
-                let typed_value = self.analyze_expression(value)
+                let typed_value = self
+                    .analyze_expression(value)
                     .unwrap_or_else(|_| TypedExpr {
                         kind: TypedExprKind::Identifier("_".to_string()),
                         ty: Type::Named("_".to_string()),
@@ -2302,21 +2346,24 @@ impl Analyzer {
                 })
             }
             Statement::Return(expr) => {
-                let typed_expr = expr.as_ref()
+                let typed_expr = expr
+                    .as_ref()
                     .map(|e| self.analyze_expression(e))
                     .transpose()
                     .ok()
                     .flatten()
-                    .or_else(|| Some(TypedExpr {
-                        kind: TypedExprKind::Identifier("_".to_string()),
-                        ty: Type::Named("()".to_string()),
-                    }));
+                    .or_else(|| {
+                        Some(TypedExpr {
+                            kind: TypedExprKind::Identifier("_".to_string()),
+                            ty: Type::Named("()".to_string()),
+                        })
+                    });
                 Ok(TypedStatement::Return(typed_expr))
             }
             _ => Ok(TypedStatement::Expr(TypedExpr {
                 kind: TypedExprKind::Identifier("_".to_string()),
                 ty: Type::Named("()".to_string()),
-            }))
+            })),
         }
     }
 

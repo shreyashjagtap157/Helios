@@ -13,17 +13,19 @@
     mismatched_lifetime_syntaxes
 )]
 
+pub mod brain;
 pub mod codegen;
 pub mod diagnostics;
 pub mod enhancements;
 pub mod ir;
 pub mod lexer;
+pub mod modes;
+pub mod monitor;
 pub mod optimizer;
 pub mod parser;
+pub mod resolver;
 pub mod runtime;
 pub mod semantic;
-pub mod brain;
-pub mod monitor;
 
 // Re-export key types
 pub use diagnostics::{
@@ -31,4 +33,12 @@ pub use diagnostics::{
 };
 pub use enhancements::{
     MemoryPool, PerformanceMetrics, SIMDInfo, SecurityHardening, VectorizationAnalyzer,
+};
+pub use modes::{
+    allowed_zones, is_memory_op_allowed, Feature, MemoryOperation, MemoryZone, MemoryZoneChecker,
+    ModuleChecker, ModuleMode, PackageManifest,
+};
+pub use resolver::{
+    resolve_all, Annotations, ConcurrencyStrategy, ExecMode, MemoryStrategy, ResolverContext,
+    ResolverDecision, ResolverLog,
 };

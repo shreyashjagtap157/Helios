@@ -1,9 +1,9 @@
 #![allow(dead_code)]
 //! C++ Interoperability Layer
-//! 
+//!
 //! Handles Itanium C++ ABI name mangling and VTable generation.
 
-use crate::parser::ast::{Type, Ownership};
+use crate::parser::ast::{Ownership, Type};
 
 /// Mangle a function name according to Itanium C++ ABI
 pub fn mangle_function(name: &str, params: &[Type], class_name: Option<&str>) -> String {
@@ -50,14 +50,14 @@ fn mangle_type(ty: &Type) -> String {
         Type::Named(name) => {
             // Class type: 3Mat
             format!("{}{}", name.len(), name)
-        },
+        }
         Type::WithOwnership(inner, own) => {
             match own {
                 Ownership::RawPointer => format!("P{}", mangle_type(inner)), // *T
                 Ownership::Borrow | Ownership::BorrowMut => format!("R{}", mangle_type(inner)), // &T
                 _ => mangle_type(inner),
             }
-        },
+        }
         _ => "v".to_string(), // Fallback void
     }
 }
@@ -66,11 +66,11 @@ fn mangle_type(ty: &Type) -> String {
 pub fn generate_vtable(class_name: &str, methods: &[&str]) -> String {
     let mut vtable = String::new();
     vtable.push_str(&format!("struct {}_VTable {{\n", class_name));
-    
+
     for (i, _method) in methods.iter().enumerate() {
         vtable.push_str(&format!("    fn_{}: usize,\n", i));
     }
-    
+
     vtable.push_str("}");
     vtable
 }

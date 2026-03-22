@@ -161,21 +161,23 @@ mod tests {
             }],
             return_type: Some(Type::Named("T".to_string())),
             body: Block {
-                statements: vec![
-                    Statement::Return(Some(Expression::Identifier("x".to_string())))
-                ],
+                statements: vec![Statement::Return(Some(Expression::Identifier(
+                    "x".to_string(),
+                )))],
             },
         };
-        
+
         // Store the generic function
-        analyzer.generic_functions.insert("identity".to_string(), generic_func);
-        
+        analyzer
+            .generic_functions
+            .insert("identity".to_string(), generic_func);
+
         // Monomorphize with concrete type
         let mangled = analyzer.monomorphize("identity", &[Type::I64]).unwrap();
-        
+
         // Verify it created a monomorphized entry
         assert!(analyzer.monomorphized.contains_key(&mangled));
-        
+
         // The typed_body should be generated
         let mono_func = &analyzer.monomorphized[&mangled];
         assert_eq!(mono_func.original_name, "identity");

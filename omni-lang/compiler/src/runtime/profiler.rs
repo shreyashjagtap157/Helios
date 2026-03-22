@@ -1,12 +1,12 @@
 #![allow(dead_code)]
 //! Advanced PGO (Profile-Guided Optimization)
-//! 
+//!
 //! Runtime profiling, multi-versioning, prefetch injection, cost models.
 
 use std::collections::HashMap;
+use std::fs;
 use std::sync::RwLock;
 use std::time::Instant;
-use std::fs;
 
 lazy_static::lazy_static! {
     static ref PROFILER: RwLock<RuntimeProfiler> = RwLock::new(RuntimeProfiler::new());
@@ -54,7 +54,7 @@ impl RuntimeProfiler {
         if !PROFILER.read().unwrap().sampling_enabled {
             return;
         }
-        
+
         let mut profiler = PROFILER.write().unwrap();
         let metrics = profiler.metrics.entry(name.to_string()).or_default();
         metrics.call_count += 1;
@@ -64,7 +64,7 @@ impl RuntimeProfiler {
         if !PROFILER.read().unwrap().sampling_enabled {
             return;
         }
-        
+
         let mut profiler = PROFILER.write().unwrap();
         if let Some(metrics) = profiler.metrics.get_mut(name) {
             metrics.total_time_ns += duration_ns;
@@ -75,7 +75,7 @@ impl RuntimeProfiler {
         if !PROFILER.read().unwrap().sampling_enabled {
             return;
         }
-        
+
         let mut profiler = PROFILER.write().unwrap();
         if let Some(metrics) = profiler.metrics.get_mut(name) {
             metrics.cache_misses += 1;
@@ -83,7 +83,9 @@ impl RuntimeProfiler {
     }
 
     fn identify_hot_functions(&mut self) {
-        let mut sorted: Vec<_> = self.metrics.iter()
+        let mut sorted: Vec<_> = self
+            .metrics
+            .iter()
             .map(|(k, v)| (k.clone(), v.call_count))
             .collect();
         sorted.sort_by(|a, b| b.1.cmp(&a.1));
@@ -191,14 +193,25 @@ impl CpuFeatureDetector {
             unsafe {
                 let result = std::arch::x86_64::__cpuid(0);
                 let vendor_bytes: [u8; 12] = [
-                    result.ebx as u8, (result.ebx >> 8) as u8, (result.ebx >> 16) as u8, (result.ebx >> 24) as u8,
-                    result.edx as u8, (result.edx >> 8) as u8, (result.edx >> 16) as u8, (result.edx >> 24) as u8,
-                    result.ecx as u8, (result.ecx >> 8) as u8, (result.ecx >> 16) as u8, (result.ecx >> 24) as u8,
+                    result.ebx as u8,
+                    (result.ebx >> 8) as u8,
+                    (result.ebx >> 16) as u8,
+                    (result.ebx >> 24) as u8,
+                    result.edx as u8,
+                    (result.edx >> 8) as u8,
+                    (result.edx >> 16) as u8,
+                    (result.edx >> 24) as u8,
+                    result.ecx as u8,
+                    (result.ecx >> 8) as u8,
+                    (result.ecx >> 16) as u8,
+                    (result.ecx >> 24) as u8,
                 ];
                 return String::from_utf8_lossy(&vendor_bytes).to_string();
             }
             #[cfg(not(target_feature = "sse"))]
-            { "x86_64".to_string() }
+            {
+                "x86_64".to_string()
+            }
         }
         #[cfg(not(target_arch = "x86_64"))]
         {
@@ -227,7 +240,7 @@ impl PrefetchInjector {
     /// Analyze strided access patterns and inject prefetch instructions
     pub fn analyze_and_inject(ir: &mut crate::ir::IrFunction) -> usize {
         let mut prefetches_added = 0;
-        
+
         for block in &mut ir.blocks {
             let mut i = 0;
             while i < block.instructions.len() {
@@ -241,7 +254,7 @@ impl PrefetchInjector {
                 i += 1;
             }
         }
-        
+
         prefetches_added
     }
 
@@ -284,19 +297,19 @@ impl UnrollCostModel {
     ) -> usize {
         // Available vector registers
         let vector_regs = if features.has_avx512f { 32 } else { 16 };
-        
+
         // Estimate registers needed per iteration
         let regs_per_iter = (loop_body_instructions / 4).max(1);
-        
+
         // Max unroll without spilling
         let max_unroll_by_regs = vector_regs / regs_per_iter;
-        
+
         // Don't unroll too much if trip count is small
         let max_unroll_by_trips = trip_count_estimate / 4;
-        
+
         // Balance instruction cache pressure
         let max_unroll_by_icache = 8; // Conservative
-        
+
         max_unroll_by_regs
             .min(max_unroll_by_trips)
             .min(max_unroll_by_icache)
@@ -312,13 +325,13 @@ impl InstructionScheduler {
     pub fn schedule(block: &mut crate::ir::IrBlock, _target: MicroArch) {
         // Get latency table for target
         let _latencies = Self::get_latency_table(&_target);
-        
+
         // Simple heuristic: interleave loads with compute to hide latency
         // Real impl would do full list scheduling with dependency DAG
         let mut loads = Vec::new();
         let mut computes = Vec::new();
         let mut others = Vec::new();
-        
+
         for inst in &block.instructions {
             match inst {
                 crate::ir::IrInstruction::Load { .. } => loads.push(inst.clone()),
@@ -326,12 +339,12 @@ impl InstructionScheduler {
                 _ => others.push(inst.clone()),
             }
         }
-        
+
         // Interleave: load, compute, load, compute, ...
         let mut scheduled = Vec::new();
         let mut li = 0;
         let mut ci = 0;
-        
+
         while li < loads.len() || ci < computes.len() {
             if li < loads.len() {
                 scheduled.push(loads[li].clone());
@@ -342,7 +355,7 @@ impl InstructionScheduler {
                 ci += 1;
             }
         }
-        
+
         scheduled.extend(others);
         block.instructions = scheduled;
     }
@@ -351,7 +364,7 @@ impl InstructionScheduler {
         // Build simple dependency graph based on def-use chains
         let mut deps = vec![vec![]; instructions.len()];
         let mut defs: HashMap<String, usize> = HashMap::new();
-        
+
         for (i, inst) in instructions.iter().enumerate() {
             // Check uses
             let uses = Self::get_uses(inst);
@@ -360,16 +373,16 @@ impl InstructionScheduler {
                     deps[i].push(def_idx);
                 }
             }
-            
+
             // Record definitions
             if let Some(def) = Self::get_def(inst) {
                 defs.insert(def, i);
             }
         }
-        
+
         deps
     }
-    
+
     fn get_def(inst: &crate::ir::IrInstruction) -> Option<String> {
         match inst {
             crate::ir::IrInstruction::Alloca { dest, .. } => Some(dest.clone()),
@@ -380,7 +393,7 @@ impl InstructionScheduler {
             _ => None,
         }
     }
-    
+
     fn get_uses(inst: &crate::ir::IrInstruction) -> Vec<String> {
         match inst {
             crate::ir::IrInstruction::Load { ptr, .. } => vec![ptr.clone()],
@@ -423,7 +436,11 @@ impl HotSpotRecompiler {
         let profiler = PROFILER.read().unwrap();
         if let Some(metrics) = profiler.metrics.get(func_name) {
             if metrics.call_count >= Self::RECOMPILE_THRESHOLD {
-                log::info!("Recompiling hot function: {} (calls: {})", func_name, metrics.call_count);
+                log::info!(
+                    "Recompiling hot function: {} (calls: {})",
+                    func_name,
+                    metrics.call_count
+                );
                 Self::recompile_with_aggressive_opts(func_name);
             }
         }
@@ -432,16 +449,27 @@ impl HotSpotRecompiler {
     fn recompile_with_aggressive_opts(func_name: &str) {
         let features = CpuFeatureDetector::detect();
         let kernel_version = CpuFeatureDetector::select_kernel_version(func_name, &features);
-        
+
         // Look up tuning cache for optimal parameters
         let cache = TUNING_CACHE.read().unwrap();
         if let Some(entry) = cache.lookup(func_name, &[]) {
-            log::info!("JIT: Using cached config: tile={}x{}x{}, unroll={}, {:.1} GFLOPS", 
-                entry.tile_m, entry.tile_n, entry.tile_k, entry.unroll_factor, entry.measured_gflops);
+            log::info!(
+                "JIT: Using cached config: tile={}x{}x{}, unroll={}, {:.1} GFLOPS",
+                entry.tile_m,
+                entry.tile_n,
+                entry.tile_k,
+                entry.unroll_factor,
+                entry.measured_gflops
+            );
         }
-        
-        log::info!("JIT: Recompiling {} -> {} with aggressive opts (AVX512={}, AVX2={})", 
-            func_name, kernel_version, features.has_avx512f, features.has_avx2);
+
+        log::info!(
+            "JIT: Recompiling {} -> {} with aggressive opts (AVX512={}, AVX2={})",
+            func_name,
+            kernel_version,
+            features.has_avx512f,
+            features.has_avx2
+        );
     }
 }
 
@@ -458,36 +486,42 @@ impl OmniProfiler {
             start_time: None,
         }
     }
-    
+
     pub fn start(&mut self) {
         self.active = true;
         self.start_time = Some(Instant::now());
         RuntimeProfiler::start_profiling();
     }
-    
+
     pub fn stop(&mut self) {
         if self.active {
             RuntimeProfiler::stop_profiling();
             self.active = false;
         }
     }
-    
+
     pub fn report(&self) -> Option<String> {
         let profiler = PROFILER.read().ok()?;
         if profiler.metrics.is_empty() {
             return None;
         }
-        
-        let elapsed = self.start_time.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
-        
+
+        let elapsed = self
+            .start_time
+            .map(|t| t.elapsed().as_secs_f64())
+            .unwrap_or(0.0);
+
         let mut report = format!("=== Omni Profiler Report ({:.3}s) ===\n", elapsed);
-        report.push_str(&format!("{:<30} {:>10} {:>12} {:>10}\n", "Function", "Calls", "Time (µs)", "Avg (µs)"));
+        report.push_str(&format!(
+            "{:<30} {:>10} {:>12} {:>10}\n",
+            "Function", "Calls", "Time (µs)", "Avg (µs)"
+        ));
         report.push_str(&"-".repeat(64));
         report.push('\n');
-        
+
         let mut sorted: Vec<_> = profiler.metrics.iter().collect();
         sorted.sort_by(|a, b| b.1.total_time_ns.cmp(&a.1.total_time_ns));
-        
+
         for (name, metrics) in sorted.iter().take(20) {
             let total_us = metrics.total_time_ns as f64 / 1000.0;
             let avg_us = if metrics.call_count > 0 {
@@ -495,10 +529,12 @@ impl OmniProfiler {
             } else {
                 0.0
             };
-            report.push_str(&format!("{:<30} {:>10} {:>12.1} {:>10.1}\n", 
-                name, metrics.call_count, total_us, avg_us));
+            report.push_str(&format!(
+                "{:<30} {:>10} {:>12.1} {:>10.1}\n",
+                name, metrics.call_count, total_us, avg_us
+            ));
         }
-        
+
         // Hot functions
         if !profiler.hot_functions.is_empty() {
             report.push_str("\nHot Functions (recompilation candidates):\n");
@@ -508,7 +544,7 @@ impl OmniProfiler {
                 }
             }
         }
-        
+
         Some(report)
     }
 }

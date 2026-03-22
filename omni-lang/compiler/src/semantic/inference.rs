@@ -1,5 +1,5 @@
 //! Type inference using constraint generation and solving
-//! 
+//!
 //! Implements Hindley-Milner style type inference with:
 //! - Constraint collection from expressions
 //! - Robinson's unification algorithm
@@ -49,12 +49,8 @@ impl TypeVarSubst {
                 }
                 ty.clone()
             }
-            Type::Array(elem, len) => {
-                Type::Array(Box::new(self.apply(elem)), len.clone())
-            }
-            Type::Slice(elem) => {
-                Type::Slice(Box::new(self.apply(elem)))
-            }
+            Type::Array(elem, len) => Type::Array(Box::new(self.apply(elem)), len.clone()),
+            Type::Slice(elem) => Type::Slice(Box::new(self.apply(elem))),
             Type::Function(params, ret) => {
                 let subst_params = params.iter().map(|p| self.apply(p)).collect();
                 let subst_ret = ret.as_ref().map(|r| Box::new(self.apply(r)));
@@ -131,15 +127,15 @@ impl ConstraintSolver {
 
         // Structured types
         match (&t1, &t2) {
-            (Type::Array(e1, _), Type::Array(e2, _)) => {
-                self.unify(e1, e2)
-            }
-            (Type::Slice(e1), Type::Slice(e2)) => {
-                self.unify(e1, e2)
-            }
+            (Type::Array(e1, _), Type::Array(e2, _)) => self.unify(e1, e2),
+            (Type::Slice(e1), Type::Slice(e2)) => self.unify(e1, e2),
             (Type::Function(p1, r1), Type::Function(p2, r2)) => {
                 if p1.len() != p2.len() {
-                    return Err(format!("Function arity mismatch: {} vs {}", p1.len(), p2.len()));
+                    return Err(format!(
+                        "Function arity mismatch: {} vs {}",
+                        p1.len(),
+                        p2.len()
+                    ));
                 }
                 // Unify parameters
                 for (a, b) in p1.iter().zip(p2.iter()) {
@@ -194,9 +190,7 @@ impl ConstraintSolver {
                 params.iter().any(|p| self.occurs_check(var_id, p))
                     || ret.as_ref().map_or(false, |r| self.occurs_check(var_id, r))
             }
-            Type::Generic(_, args) => {
-                args.iter().any(|a| self.occurs_check(var_id, a))
-            }
+            Type::Generic(_, args) => args.iter().any(|a| self.occurs_check(var_id, a)),
             Type::WithOwnership(inner, _) => self.occurs_check(var_id, &inner),
             _ => false,
         }
@@ -225,12 +219,20 @@ impl ConstraintSolver {
         let a = self.subst.apply(a);
         let b = self.subst.apply(b);
         match (&a, &b) {
-            (Type::U8, Type::U8) | (Type::U16, Type::U16) | (Type::U32, Type::U32)
-            | (Type::U64, Type::U64) | (Type::Usize, Type::Usize)
-            | (Type::I8, Type::I8) | (Type::I16, Type::I16) | (Type::I32, Type::I32)
-            | (Type::I64, Type::I64) | (Type::Isize, Type::Isize)
-            | (Type::F32, Type::F32) | (Type::F64, Type::F64)
-            | (Type::Bool, Type::Bool) | (Type::Str, Type::Str)
+            (Type::U8, Type::U8)
+            | (Type::U16, Type::U16)
+            | (Type::U32, Type::U32)
+            | (Type::U64, Type::U64)
+            | (Type::Usize, Type::Usize)
+            | (Type::I8, Type::I8)
+            | (Type::I16, Type::I16)
+            | (Type::I32, Type::I32)
+            | (Type::I64, Type::I64)
+            | (Type::Isize, Type::Isize)
+            | (Type::F32, Type::F32)
+            | (Type::F64, Type::F64)
+            | (Type::Bool, Type::Bool)
+            | (Type::Str, Type::Str)
             | (Type::SelfOwned, Type::SelfOwned) => true,
 
             (Type::Named(n1), Type::Named(n2)) => n1 == n2,
@@ -240,7 +242,8 @@ impl ConstraintSolver {
 
             (Type::Function(p1, r1), Type::Function(p2, r2)) => {
                 p1.len() == p2.len()
-                    && p1.iter()
+                    && p1
+                        .iter()
                         .zip(p2.iter())
                         .all(|(a, b)| self.types_equal(a, b))
                     && match (r1, r2) {
@@ -253,7 +256,8 @@ impl ConstraintSolver {
             (Type::Generic(n1, a1), Type::Generic(n2, a2)) => {
                 n1 == n2
                     && a1.len() == a2.len()
-                    && a1.iter()
+                    && a1
+                        .iter()
                         .zip(a2.iter())
                         .all(|(x, y)| self.types_equal(x, y))
             }
@@ -308,7 +312,7 @@ mod tests {
         let mut solver = ConstraintSolver::new();
         let var = solver.subst.fresh_var();
         let recursive_type = Type::Function(vec![var.clone()], Some(Box::new(var.clone())));
-        
+
         // This should fail the occurs check
         let result = solver.unify(&var, &recursive_type);
         assert!(result.is_err());

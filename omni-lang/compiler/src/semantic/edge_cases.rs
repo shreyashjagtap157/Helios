@@ -8,8 +8,8 @@
 //! - Complex lifetime scenarios
 
 use crate::parser::ast::*;
-use crate::semantic::traits::*;
 use crate::semantic::lifetimes::*;
+use crate::semantic::traits::*;
 use std::collections::{HashMap, HashSet};
 
 /// Advanced scenario handler
@@ -148,11 +148,7 @@ impl EdgeCaseHandler {
     }
 
     /// Handle variance checking for complex scenarios
-    pub fn check_variance(
-        &self,
-        ty: &Type,
-        variance: &Variance,
-    ) -> Result<(), String> {
+    pub fn check_variance(&self, ty: &Type, variance: &Variance) -> Result<(), String> {
         match (ty, variance) {
             (Type::WithOwnership(inner, _), Variance::Covariant) => {
                 // References are covariant in their inner type
@@ -237,19 +233,12 @@ impl AdvancedUnification {
     }
 
     /// Handle higher-rank unification
-    pub fn unify_higher_rank(
-        &self,
-        left: &Type,
-        right: &Type,
-    ) -> Result<bool, String> {
+    pub fn unify_higher_rank(&self, left: &Type, right: &Type) -> Result<bool, String> {
         // Higher-rank unification requires special handling
         // This is a placeholder for the actual implementation
 
         match (left, right) {
-            (
-                Type::HigherRanked { .. },
-                Type::HigherRanked { .. },
-            ) => Ok(true),
+            (Type::HigherRanked { .. }, Type::HigherRanked { .. }) => Ok(true),
             _ => Err("Higher-rank unification not supported for non-higher-rank types".to_string()),
         }
     }
@@ -305,10 +294,7 @@ mod tests {
     #[test]
     fn test_higher_order_function() {
         let handler = EdgeCaseHandler::new();
-        let param_type = Type::Function(
-            vec![Type::I32],
-            Some(Box::new(Type::I32)),
-        );
+        let param_type = Type::Function(vec![Type::I32], Some(Box::new(Type::I32)));
         let return_type = Type::I32;
         let result = handler.resolve_higher_order_function(&param_type, &return_type);
         assert!(result.is_ok());

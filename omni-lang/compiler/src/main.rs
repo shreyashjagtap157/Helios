@@ -1,37 +1,39 @@
 //! Omni Compiler - Main Entry Point
-//! 
+//!
 //! The Omni programming language compiler for Project HELIOS.
 //! Supports multiple backends: LLVM (native), OVM (bytecode), and hybrid.
 //! Features hardware-adaptive compilation and universal execution model.
 
-mod lexer;
-mod parser;
-mod semantic;
-mod ir;
-mod runtime;
 mod codegen;
+mod ir;
+mod lexer;
+mod modes;
 mod monitor;
-use sysinfo::{System, SystemExt, ProcessExt};
+mod parser;
+mod resolver;
+mod runtime;
+mod semantic;
 use std::fs::File;
+use sysinfo::{ProcessExt, System, SystemExt};
 // `pprof` is only available on Unix targets (native signal-based sampling).
 #[cfg(unix)]
 use pprof::ProfilerGuard;
 
+use anyhow::Result;
 use clap::{Parser, ValueEnum};
 use std::path::PathBuf;
-use anyhow::Result;
 
 /// Code generation target
 #[derive(Debug, Clone, Copy, ValueEnum, Default)]
 pub enum Target {
     #[cfg(feature = "llvm")]
-    Llvm,       // LLVM IR -> native code
+    Llvm, // LLVM IR -> native code
     #[default]
-    Ovm,        // OVM bytecode for managed execution
+    Ovm, // OVM bytecode for managed execution
     #[cfg(feature = "llvm")]
-    Hybrid,     // Both native and managed
+    Hybrid, // Both native and managed
     #[cfg(feature = "llvm")]
-    Native,     // Direct native code (no runtime)
+    Native, // Direct native code (no runtime)
 }
 
 impl From<Target> for codegen::CodegenTarget {
@@ -90,7 +92,7 @@ struct Args {
     /// Optimization level (0-3)
     #[arg(short = 'O', long, default_value = "2")]
     opt_level: u8,
-    
+
     /// Generate DWARF debug info
     #[arg(short = 'g', long)]
     debug_info: bool,
@@ -98,11 +100,23 @@ struct Args {
     /// Enable PGO profiling
     #[arg(long)]
     profile: bool,
-    
+
     /// Detect and optimize for current hardware
     #[arg(long)]
     hardware_adaptive: bool,
-    
+
+    /// Enable deterministic mode (freeze resolver behavior, no heuristics)
+    #[arg(long)]
+    deterministic: bool,
+
+    /// Module mode: script, hosted, or bare_metal
+    #[arg(long, default_value = "hosted")]
+    mode: String,
+
+    /// Resolver log output directory
+    #[arg(long)]
+    resolver_log: Option<PathBuf>,
+
     /// Arguments to pass to the program when using --run
     #[arg(last = true)]
     program_args: Vec<String>,
@@ -113,9 +127,7 @@ fn main() -> Result<()> {
 
     // Initialize logging
     if args.verbose {
-        env_logger::Builder::from_env(
-            env_logger::Env::default().default_filter_or("debug")
-        ).init();
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug")).init();
     } else {
         env_logger::init();
     }
@@ -154,19 +166,27 @@ fn main() -> Result<()> {
                 } else {
                     sys.refresh_process(pid);
                 }
-                    if let Some(p) = sys.process(pid) {
-                        log::info!("monitor: tokens={} items={} cpu={:.2}% mem={} KB virt={} KB last_hb={}", tokens, items, p.cpu_usage(), p.memory(), p.virtual_memory(), last);
-                        // Detect stagnation: internal counters unchanged for several samples
-                        if tokens == prev_tokens && items == prev_items && last == prev_last {
-                            stagnant_count += 1;
-                        } else {
-                            stagnant_count = 0;
-                        }
-                        // If we've seen no internal progress for 8 seconds, write a dump
-                        if stagnant_count >= 8 {
-                            // include rich parser snapshot
-                            let (cur, preview, errors) = monitor::rich_snapshot();
-                            let dump = format!(
+                if let Some(p) = sys.process(pid) {
+                    log::info!(
+                        "monitor: tokens={} items={} cpu={:.2}% mem={} KB virt={} KB last_hb={}",
+                        tokens,
+                        items,
+                        p.cpu_usage(),
+                        p.memory(),
+                        p.virtual_memory(),
+                        last
+                    );
+                    // Detect stagnation: internal counters unchanged for several samples
+                    if tokens == prev_tokens && items == prev_items && last == prev_last {
+                        stagnant_count += 1;
+                    } else {
+                        stagnant_count = 0;
+                    }
+                    // If we've seen no internal progress for 8 seconds, write a dump
+                    if stagnant_count >= 8 {
+                        // include rich parser snapshot
+                        let (cur, preview, errors) = monitor::rich_snapshot();
+                        let dump = format!(
                                 "STALLED: tokens={} items={} cpu={:.2}% last_hb={} parser_cur={}\npreview:\n{}\nerrors:\n{}\n",
                                 tokens,
                                 items,
@@ -176,44 +196,64 @@ fn main() -> Result<()> {
                                 preview.join("\n"),
                                 errors.join("\n")
                             );
-                            let fname = format!("diagnostics/monitor_stall_{}.log", chrono::Utc::now().format("%Y%m%dT%H%M%S"));
-                            let _ = std::fs::write(&fname, dump.as_bytes());
-                            log::warn!("monitor: detected stall; wrote {}", fname);
-                            // Also attempt to write an in-process CPU flamegraph snapshot if profiling is active
-                            #[cfg(unix)]
-                            {
-                                if let Some(g) = &guard {
-                                    if let Ok(report) = g.report().build() {
-                                        let fg_name = format!("diagnostics/monitor_flame_{}.svg", chrono::Utc::now().format("%Y%m%dT%H%M%S"));
-                                        match File::create(&fg_name) {
-                                            Ok(mut f) => {
-                                                if let Err(e) = report.flamegraph(&mut f) {
-                                                    log::error!("monitor: failed to write flamegraph {}: {}", fg_name, e);
-                                                } else {
-                                                    log::warn!("monitor: wrote flamegraph {}", fg_name);
-                                                }
-                                            }
-                                            Err(e) => {
-                                                log::error!("monitor: failed to create flamegraph file {}: {}", fg_name, e);
+                        let fname = format!(
+                            "diagnostics/monitor_stall_{}.log",
+                            chrono::Utc::now().format("%Y%m%dT%H%M%S")
+                        );
+                        let _ = std::fs::write(&fname, dump.as_bytes());
+                        log::warn!("monitor: detected stall; wrote {}", fname);
+                        // Also attempt to write an in-process CPU flamegraph snapshot if profiling is active
+                        #[cfg(unix)]
+                        {
+                            if let Some(g) = &guard {
+                                if let Ok(report) = g.report().build() {
+                                    let fg_name = format!(
+                                        "diagnostics/monitor_flame_{}.svg",
+                                        chrono::Utc::now().format("%Y%m%dT%H%M%S")
+                                    );
+                                    match File::create(&fg_name) {
+                                        Ok(mut f) => {
+                                            if let Err(e) = report.flamegraph(&mut f) {
+                                                log::error!(
+                                                    "monitor: failed to write flamegraph {}: {}",
+                                                    fg_name,
+                                                    e
+                                                );
+                                            } else {
+                                                log::warn!("monitor: wrote flamegraph {}", fg_name);
                                             }
                                         }
-                                    } else {
-                                        log::debug!("monitor: profiler report not ready yet");
+                                        Err(e) => {
+                                            log::error!(
+                                                "monitor: failed to create flamegraph file {}: {}",
+                                                fg_name,
+                                                e
+                                            );
+                                        }
                                     }
+                                } else {
+                                    log::debug!("monitor: profiler report not ready yet");
                                 }
                             }
-                            #[cfg(not(unix))]
-                            {
-                                log::debug!("monitor: in-process profiler not available on this platform (non-Unix)");
-                            }
-                            stagnant_count = 0; // reset after writing a dump
                         }
-                        prev_tokens = tokens;
-                        prev_items = items;
-                        prev_last = last;
-                    } else {
-                        log::info!("monitor: tokens={} items={} process {} not found last_hb={}", tokens, items, std::process::id(), last);
+                        #[cfg(not(unix))]
+                        {
+                            log::debug!("monitor: in-process profiler not available on this platform (non-Unix)");
+                        }
+                        stagnant_count = 0; // reset after writing a dump
                     }
+                    prev_tokens = tokens;
+                    prev_items = items;
+                    prev_last = last;
+                } else {
+                    log::info!(
+                        "monitor: tokens={} items={} process {} not found last_hb={}",
+                        tokens,
+                        items,
+                        std::process::id(),
+                        last
+                    );
+                }
                 std::thread::sleep(std::time::Duration::from_secs(1));
             }
             log::info!("monitor: shutting down");
@@ -225,8 +265,13 @@ fn main() -> Result<()> {
     // Hardware detection for adaptive compilation
     if args.hardware_adaptive {
         let hw = codegen::ovm::HardwareConfig::detect();
-        log::info!("Detected hardware: {:?} with {:?} SIMD, {} cores, {}MB RAM",
-            hw.cpu_arch, hw.simd_level, hw.core_count, hw.available_memory / 1024 / 1024);
+        log::info!(
+            "Detected hardware: {:?} with {:?} SIMD, {} cores, {}MB RAM",
+            hw.cpu_arch,
+            hw.simd_level,
+            hw.core_count,
+            hw.available_memory / 1024 / 1024
+        );
         if hw.has_gpu {
             log::info!("GPU detected - enabling GPU acceleration");
         }
@@ -242,19 +287,19 @@ fn main() -> Result<()> {
         log::info!("Starting Runtime Environment...");
         let mut runtime = runtime::Runtime::new();
         runtime.run(&args.input)?;
-        
+
         // Dump profile on exit
         if args.profile {
-             let metrics = runtime::profiler::RuntimeProfiler::stop_profiling();
-             log::info!("PGO Profile collected: {} functions", metrics.len());
+            let metrics = runtime::profiler::RuntimeProfiler::stop_profiling();
+            log::info!("PGO Profile collected: {} functions", metrics.len());
         }
     } else {
         // Compilation Mode
         log::info!("Compiling: {:?}", args.input);
-        
+
         // Read source file
         let source = std::fs::read_to_string(&args.input)?;
-        
+
         // Compilation pipeline
         compile(&source, &args)?;
     }
@@ -267,16 +312,79 @@ fn main() -> Result<()> {
 }
 
 fn compile(source: &str, args: &Args) -> Result<()> {
+    // Parse module mode
+    let module_mode: modes::ModuleMode = args.mode.parse().map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    // Run module checker
+    let mut checker = modes::ModuleChecker::new(module_mode);
+    // TODO: detect actual feature usage from AST and check against mode
+
+    // Phase 0: Resolver engines
+    log::debug!("Phase 0: Resolver engines (mode: {})", module_mode);
+    let annotations = resolver::Annotations::default(); // TODO: parse from AST annotations
+    let resolver_ctx = resolver::ResolverContext {
+        module_name: args
+            .input
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string(),
+        mode: module_mode,
+        annotations,
+        target_triple: "x86_64-unknown-linux-gnu".to_string(),
+        opt_level: args.opt_level,
+        deterministic: args.deterministic,
+        hotness_data: None,
+    };
+    let resolver_log = resolver::resolve_all(&resolver_ctx);
+    log::info!(
+        "Resolver: exec={}, mem={}, conc={}",
+        resolver_log.final_decision.execution,
+        resolver_log.final_decision.memory,
+        resolver_log.final_decision.concurrency
+    );
+
+    // Write resolver log if requested
+    if let Some(ref log_dir) = args.resolver_log {
+        std::fs::create_dir_all(log_dir)?;
+        resolver::write_resolver_log(&resolver_log, log_dir)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+    }
+
+    if args.deterministic {
+        log::info!("Deterministic mode: resolver decisions frozen to profile defaults");
+    }
+
     // Phase 1: Lexical analysis
     log::debug!("Phase 1: Lexical analysis");
     let tokens = lexer::tokenize(source)?;
     // heartbeat: tokens produced
     monitor::update_heartbeat();
-    
+
     // Phase 2: Parsing
     log::debug!("Phase 2: Parsing");
     monitor::update_heartbeat();
     let ast = parser::parse(tokens)?;
+
+    // Phase 2.1: Memory zone enforcement
+    log::debug!("Phase 2.1: Memory zone enforcement (mode: {})", module_mode);
+    let mut mz_checker = modes::MemoryZoneChecker::new(module_mode);
+    // Walk AST items to detect memory operations
+    for item in &ast.items {
+        match item {
+            parser::ast::Item::Function(func) => {
+                for stmt in &func.body.statements {
+                    check_memory_ops_stmt(stmt, &mut mz_checker, &func.name);
+                }
+            }
+            _ => {}
+        }
+    }
+    if !mz_checker.is_valid() {
+        for v in mz_checker.validate() {
+            eprintln!("warning[E007]: memory zone: {}", v);
+        }
+    }
 
     // Phase 2.5: Type inference (fatal for concrete mismatches)
     log::debug!("Phase 2.5: Type inference");
@@ -289,12 +397,8 @@ fn compile(source: &str, args: &Args) -> Result<()> {
             }
         }
         Err(errors) => {
-            let hard_errors: Vec<_> = errors.iter()
-                .filter(|e| is_hard_type_error(e))
-                .collect();
-            let warnings: Vec<_> = errors.iter()
-                .filter(|e| !is_hard_type_error(e))
-                .collect();
+            let hard_errors: Vec<_> = errors.iter().filter(|e| is_hard_type_error(e)).collect();
+            let warnings: Vec<_> = errors.iter().filter(|e| !is_hard_type_error(e)).collect();
             for w in &warnings {
                 eprintln!("warning: type inference: {}", w);
             }
@@ -329,9 +433,11 @@ fn compile(source: &str, args: &Args) -> Result<()> {
     log::debug!("Phase 4: IR generation");
     monitor::update_heartbeat();
     let omni_ir = ir::generate(typed_ast).map_err(|e| anyhow::anyhow!("{}", e))?;
-    
+
     if args.emit_ir {
-        let ir_path = args.output.clone()
+        let ir_path = args
+            .output
+            .clone()
             .unwrap_or_else(|| args.input.with_extension("oir"));
         std::fs::write(&ir_path, omni_ir.to_string())?;
         log::info!("Wrote Omni IR to {:?}", ir_path);
@@ -341,15 +447,13 @@ fn compile(source: &str, args: &Args) -> Result<()> {
     // Phase 5: Code generation with target selection
     log::debug!("Phase 5: Code generation (target: {:?})", args.target);
     monitor::update_heartbeat();
-    let output_path = args.output.clone()
+    let output_path = args
+        .output
+        .clone()
         .unwrap_or_else(|| args.input.with_extension(""));
-    
-    codegen::generate_with_target(
-        omni_ir, 
-        &output_path, 
-        args.opt_level, 
-        args.target.into()
-    ).map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    codegen::generate_with_target(omni_ir, &output_path, args.opt_level, args.target.into())
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     // DWARF Emission
     if args.debug_info {
@@ -402,4 +506,163 @@ fn is_hard_type_error(err: &semantic::type_inference::TypeError) -> bool {
     // (function call argument mismatches, return type mismatches, etc.
     //  may be false positives due to missing built-in signatures).
     false
+}
+
+/// Walk a statement tree and check memory operations against the zone checker.
+fn check_memory_ops_stmt(
+    stmt: &parser::ast::Statement,
+    checker: &mut modes::MemoryZoneChecker,
+    func_name: &str,
+) {
+    use parser::ast::Statement;
+
+    match stmt {
+        Statement::Let { value, .. }
+        | Statement::Var {
+            value: Some(value), ..
+        } => {
+            check_memory_ops_expr(value, checker, func_name);
+        }
+        Statement::Return(Some(expr)) => {
+            check_memory_ops_expr(expr, checker, func_name);
+        }
+        Statement::Expression(expr) => {
+            check_memory_ops_expr(expr, checker, func_name);
+        }
+        Statement::If {
+            condition,
+            then_block,
+            else_block,
+        } => {
+            check_memory_ops_expr(condition, checker, func_name);
+            for s in &then_block.statements {
+                check_memory_ops_stmt(s, checker, func_name);
+            }
+            if let Some(eb) = else_block {
+                for s in &eb.statements {
+                    check_memory_ops_stmt(s, checker, func_name);
+                }
+            }
+        }
+        Statement::While { condition, body }
+        | Statement::For {
+            iter: condition,
+            body,
+            ..
+        } => {
+            check_memory_ops_expr(condition, checker, func_name);
+            for s in &body.statements {
+                check_memory_ops_stmt(s, checker, func_name);
+            }
+        }
+        Statement::Assignment { value, .. } => {
+            check_memory_ops_expr(value, checker, func_name);
+        }
+        _ => {}
+    }
+}
+
+/// Walk an expression tree and detect memory operations.
+fn check_memory_ops_expr(
+    expr: &parser::ast::Expression,
+    checker: &mut modes::MemoryZoneChecker,
+    func_name: &str,
+) {
+    use parser::ast::Expression;
+
+    match expr {
+        // Array literal — GC allocation
+        Expression::Array(items) => {
+            checker.check_operation(
+                modes::MemoryOperation::GcAlloc,
+                &format!("{}: array literal", func_name),
+            );
+            for item in items {
+                check_memory_ops_expr(item, checker, func_name);
+            }
+        }
+        // Struct literal — GC allocation
+        Expression::StructLiteral { fields, .. } => {
+            checker.check_operation(
+                modes::MemoryOperation::GcAlloc,
+                &format!("{}: struct literal", func_name),
+            );
+            for (_, val) in fields {
+                check_memory_ops_expr(val, checker, func_name);
+            }
+        }
+        // Borrow — ownership operation
+        Expression::Borrow { mutable, .. } => {
+            if *mutable {
+                checker.check_operation(
+                    modes::MemoryOperation::MutableBorrow,
+                    &format!("{}: mutable borrow", func_name),
+                );
+            } else {
+                checker.check_operation(
+                    modes::MemoryOperation::SharedBorrow,
+                    &format!("{}: shared borrow", func_name),
+                );
+            }
+        }
+        // Ownership annotations
+        Expression::Shared(inner) => {
+            checker.check_operation(
+                modes::MemoryOperation::SharedBorrow,
+                &format!("{}: shared ownership", func_name),
+            );
+            check_memory_ops_expr(inner, checker, func_name);
+        }
+        Expression::Own(inner) => {
+            checker.check_operation(
+                modes::MemoryOperation::OwnershipMove,
+                &format!("{}: own ownership", func_name),
+            );
+            check_memory_ops_expr(inner, checker, func_name);
+        }
+        // Function calls — check for allocation patterns
+        Expression::Call(callee, args) => {
+            if let Expression::Path(_, method) = callee.as_ref() {
+                match method.as_str() {
+                    "new" | "from" => {
+                        checker.check_operation(
+                            modes::MemoryOperation::GcAlloc,
+                            &format!("{}: {}::{}()", func_name, "type", method),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            for arg in args {
+                check_memory_ops_expr(arg, checker, func_name);
+            }
+        }
+        // Recurse into sub-expressions
+        Expression::Binary(left, _, right) => {
+            check_memory_ops_expr(left, checker, func_name);
+            check_memory_ops_expr(right, checker, func_name);
+        }
+        Expression::Unary(_, inner) | Expression::Deref(inner) | Expression::Await(inner) => {
+            check_memory_ops_expr(inner, checker, func_name);
+        }
+        Expression::Field(inner, _) | Expression::Path(inner, _) => {
+            check_memory_ops_expr(inner, checker, func_name);
+        }
+        Expression::Index(obj, idx) => {
+            check_memory_ops_expr(obj, checker, func_name);
+            check_memory_ops_expr(idx, checker, func_name);
+        }
+        Expression::Tuple(items) => {
+            for item in items {
+                check_memory_ops_expr(item, checker, func_name);
+            }
+        }
+        Expression::MethodCall { receiver, args, .. } => {
+            check_memory_ops_expr(receiver, checker, func_name);
+            for arg in args {
+                check_memory_ops_expr(arg, checker, func_name);
+            }
+        }
+        _ => {}
+    }
 }

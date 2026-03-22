@@ -46,7 +46,9 @@ impl TypeCache {
     /// Get cached type equality
     pub fn get_equality(&self, t1_str: &str, t2_str: &str) -> Option<bool> {
         if let Ok(cache) = self.equality_cache.lock() {
-            cache.get(&(t1_str.to_string(), t2_str.to_string())).copied()
+            cache
+                .get(&(t1_str.to_string(), t2_str.to_string()))
+                .copied()
         } else {
             None
         }
@@ -62,7 +64,9 @@ impl TypeCache {
     /// Get cached unification
     pub fn get_unification(&self, t1_str: &str, t2_str: &str) -> Option<Option<Type>> {
         if let Ok(cache) = self.unification_cache.lock() {
-            cache.get(&(t1_str.to_string(), t2_str.to_string())).cloned()
+            cache
+                .get(&(t1_str.to_string(), t2_str.to_string()))
+                .cloned()
         } else {
             None
         }
@@ -96,7 +100,9 @@ impl TypeCache {
     /// Get cached trait resolution
     pub fn get_trait(&self, ty_str: &str, trait_name: &str) -> Option<bool> {
         if let Ok(cache) = self.trait_cache.lock() {
-            cache.get(&(ty_str.to_string(), trait_name.to_string())).copied()
+            cache
+                .get(&(ty_str.to_string(), trait_name.to_string()))
+                .copied()
         } else {
             None
         }
@@ -112,7 +118,9 @@ impl TypeCache {
     /// Get cached associated type
     pub fn get_assoc(&self, trait_type: &str, type_name: &str) -> Option<Type> {
         if let Ok(cache) = self.assoc_cache.lock() {
-            cache.get(&(trait_type.to_string(), type_name.to_string())).cloned()
+            cache
+                .get(&(trait_type.to_string(), type_name.to_string()))
+                .cloned()
         } else {
             None
         }
@@ -120,11 +128,21 @@ impl TypeCache {
 
     /// Clear all caches
     pub fn clear(&self) {
-        if let Ok(mut c) = self.equality_cache.lock() { c.clear(); }
-        if let Ok(mut c) = self.unification_cache.lock() { c.clear(); }
-        if let Ok(mut c) = self.mono_cache.lock() { c.clear(); }
-        if let Ok(mut c) = self.trait_cache.lock() { c.clear(); }
-        if let Ok(mut c) = self.assoc_cache.lock() { c.clear(); }
+        if let Ok(mut c) = self.equality_cache.lock() {
+            c.clear();
+        }
+        if let Ok(mut c) = self.unification_cache.lock() {
+            c.clear();
+        }
+        if let Ok(mut c) = self.mono_cache.lock() {
+            c.clear();
+        }
+        if let Ok(mut c) = self.trait_cache.lock() {
+            c.clear();
+        }
+        if let Ok(mut c) = self.assoc_cache.lock() {
+            c.clear();
+        }
     }
 
     /// Get cache statistics
@@ -192,7 +210,9 @@ impl ConstraintSolvingOptimizer {
 
     /// Get most frequent patterns
     pub fn hot_patterns(&self) -> Vec<(String, usize)> {
-        let mut patterns: Vec<_> = self.pattern_frequency.iter()
+        let mut patterns: Vec<_> = self
+            .pattern_frequency
+            .iter()
             .map(|(k, v)| (k.clone(), *v))
             .collect();
         patterns.sort_by_key(|(_, count)| std::cmp::Reverse(*count));

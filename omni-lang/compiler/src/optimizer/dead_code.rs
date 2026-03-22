@@ -362,10 +362,7 @@ mod tests {
     #[test]
     fn test_remove_after_break() {
         let mut block = Block {
-            statements: vec![
-                Statement::Break,
-                Statement::Expression(int(99)),
-            ],
+            statements: vec![Statement::Break, Statement::Expression(int(99))],
         };
         eliminate_in_block(&mut block);
         assert_eq!(block.statements.len(), 1);
@@ -374,10 +371,7 @@ mod tests {
     #[test]
     fn test_remove_after_continue() {
         let mut block = Block {
-            statements: vec![
-                Statement::Continue,
-                Statement::Expression(int(42)),
-            ],
+            statements: vec![Statement::Continue, Statement::Expression(int(42))],
         };
         eliminate_in_block(&mut block);
         assert_eq!(block.statements.len(), 1);
@@ -493,10 +487,7 @@ mod tests {
                     path: vec!["std".into(), "io".into()],
                     alias: None,
                 }),
-                make_fn(
-                    "main",
-                    vec![Statement::Expression(ident("io"))],
-                ),
+                make_fn("main", vec![Statement::Expression(ident("io"))]),
             ],
         };
         eliminate_dead_code(&mut module);

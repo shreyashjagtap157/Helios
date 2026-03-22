@@ -8,9 +8,7 @@
 //! - Linker integration for external linking
 
 use crate::codegen::native_codegen::{AluOp, MachineInst};
-use crate::ir::{
-    IrFunction, IrInstruction, IrTerminator, IrType, IrValue,
-};
+use crate::ir::{IrFunction, IrInstruction, IrTerminator, IrType, IrValue};
 use log::info;
 use std::collections::HashMap;
 

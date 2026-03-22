@@ -149,43 +149,71 @@ pub struct ConstDecl {
 #[derive(Debug, Clone)]
 pub enum Type {
     // Primitives
-    U8, U16, U32, U64, Usize,
-    I8, I16, I32, I64, Isize,
-    F32, F64,
+    U8,
+    U16,
+    U32,
+    U64,
+    Usize,
+    I8,
+    I16,
+    I32,
+    I64,
+    Isize,
+    F32,
+    F64,
     Bool,
     Str,
-    
+
     // Compound
-    Array(Box<Type>, Option<Box<Expression>>),  // [T; N] or [T]
-    Slice(Box<Type>),                           // [T]
-    Named(String),                              // Custom types
-    Generic(String, Vec<Type>),                 // HashMap<K, V>
-    Function(Vec<Type>, Option<Box<Type>>),     // fn(A, B) -> C
-    
+    Array(Box<Type>, Option<Box<Expression>>), // [T; N] or [T]
+    Slice(Box<Type>),                          // [T]
+    Named(String),                             // Custom types
+    Generic(String, Vec<Type>),                // HashMap<K, V>
+    Function(Vec<Type>, Option<Box<Type>>),    // fn(A, B) -> C
+
     // Ownership modifiers
     WithOwnership(Box<Type>, Ownership),
-    
+
     // Self types for methods
     SelfOwned,
-    SelfRef { mutable: bool },
-    
+    SelfRef {
+        mutable: bool,
+    },
+
     // Phase 4+: Advanced features
-    TraitObject { principal: String, supertraits: Vec<String>, lifetime: Option<String> }, // dyn Trait + 'a
+    TraitObject {
+        principal: String,
+        supertraits: Vec<String>,
+        lifetime: Option<String>,
+    }, // dyn Trait + 'a
     AssocType(String, String), // Trait::Type (trait, type_name)
-    ConstGeneric(String), // const T: usize style
-    WhereConstrained { base: Box<Type>, bounds: Vec<String> }, // T where T: Trait
-    HigherRanked { bound: String }, // for<'a> syntax
+    ConstGeneric(String),      // const T: usize style
+    WhereConstrained {
+        base: Box<Type>,
+        bounds: Vec<String>,
+    }, // T where T: Trait
+    HigherRanked {
+        bound: String,
+    }, // for<'a> syntax
 }
 
 impl PartialEq for Type {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Type::U8, Type::U8) | (Type::U16, Type::U16) | (Type::U32, Type::U32)
-            | (Type::U64, Type::U64) | (Type::Usize, Type::Usize)
-            | (Type::I8, Type::I8) | (Type::I16, Type::I16) | (Type::I32, Type::I32)
-            | (Type::I64, Type::I64) | (Type::Isize, Type::Isize)
-            | (Type::F32, Type::F32) | (Type::F64, Type::F64)
-            | (Type::Bool, Type::Bool) | (Type::Str, Type::Str)
+            (Type::U8, Type::U8)
+            | (Type::U16, Type::U16)
+            | (Type::U32, Type::U32)
+            | (Type::U64, Type::U64)
+            | (Type::Usize, Type::Usize)
+            | (Type::I8, Type::I8)
+            | (Type::I16, Type::I16)
+            | (Type::I32, Type::I32)
+            | (Type::I64, Type::I64)
+            | (Type::Isize, Type::Isize)
+            | (Type::F32, Type::F32)
+            | (Type::F64, Type::F64)
+            | (Type::Bool, Type::Bool)
+            | (Type::Str, Type::Str)
             | (Type::SelfOwned, Type::SelfOwned) => true,
             (Type::Named(n1), Type::Named(n2)) => n1 == n2,
             (Type::Generic(n1, a1), Type::Generic(n2, a2)) => n1 == n2 && a1 == a2,
@@ -196,12 +224,28 @@ impl PartialEq for Type {
             (Type::SelfRef { mutable: m1 }, Type::SelfRef { mutable: m2 }) => m1 == m2,
             (Type::AssocType(t1, n1), Type::AssocType(t2, n2)) => t1 == t2 && n1 == n2,
             (Type::ConstGeneric(n1), Type::ConstGeneric(n2)) => n1 == n2,
-            (Type::TraitObject { principal: p1, supertraits: s1, lifetime: l1 },
-             Type::TraitObject { principal: p2, supertraits: s2, lifetime: l2 }) => {
-                p1 == p2 && s1 == s2 && l1 == l2
-            }
-            (Type::WhereConstrained { base: b1, bounds: bo1 }, 
-             Type::WhereConstrained { base: b2, bounds: bo2 }) => b1 == b2 && bo1 == bo2,
+            (
+                Type::TraitObject {
+                    principal: p1,
+                    supertraits: s1,
+                    lifetime: l1,
+                },
+                Type::TraitObject {
+                    principal: p2,
+                    supertraits: s2,
+                    lifetime: l2,
+                },
+            ) => p1 == p2 && s1 == s2 && l1 == l2,
+            (
+                Type::WhereConstrained {
+                    base: b1,
+                    bounds: bo1,
+                },
+                Type::WhereConstrained {
+                    base: b2,
+                    bounds: bo2,
+                },
+            ) => b1 == b2 && bo1 == bo2,
             (Type::HigherRanked { bound: b1 }, Type::HigherRanked { bound: b2 }) => b1 == b2,
             _ => false,
         }
@@ -242,7 +286,7 @@ pub enum Statement {
     },
     Assignment {
         target: Expression,
-        op: Option<BinaryOp>,  // None = simple assign (=), Some = compound (+=, -=, etc.)
+        op: Option<BinaryOp>, // None = simple assign (=), Some = compound (+=, -=, etc.)
         value: Expression,
     },
     Return(Option<Expression>),
@@ -325,7 +369,7 @@ pub enum Expression {
     },
     Field(Box<Expression>, String),
     Index(Box<Expression>, Box<Expression>),
-    Path(Box<Expression>, String),  // module::item
+    Path(Box<Expression>, String), // module::item
     Array(Vec<Expression>),
     StructLiteral {
         name: String,
@@ -369,6 +413,8 @@ pub enum Expression {
     Some(Box<Expression>),
     Ok(Box<Expression>),
     Err(Box<Expression>),
+    Shared(Box<Expression>),
+    Own(Box<Expression>),
 }
 
 /// Literal values
@@ -385,13 +431,24 @@ pub enum Literal {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BinaryOp {
     // Arithmetic
-    Add, Sub, Mul, Div, Mod,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
     // Comparison
-    Eq, NotEq, Lt, Gt, LtEq, GtEq,
+    Eq,
+    NotEq,
+    Lt,
+    Gt,
+    LtEq,
+    GtEq,
     // Logical
-    And, Or,
+    And,
+    Or,
     // Range
-    Range, RangeInclusive,
+    Range,
+    RangeInclusive,
 }
 
 impl BinaryOp {
@@ -411,6 +468,6 @@ impl BinaryOp {
 /// Unary operators
 #[derive(Debug, Clone, Copy)]
 pub enum UnaryOp {
-    Neg,  // -
-    Not,  // !
+    Neg, // -
+    Not, // !
 }

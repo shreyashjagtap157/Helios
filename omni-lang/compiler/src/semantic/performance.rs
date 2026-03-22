@@ -66,7 +66,8 @@ impl SemanticProfiler {
         if let Some((name, start)) = self.stack.pop() {
             let duration = start.elapsed();
 
-            let entry = self.operations
+            let entry = self
+                .operations
                 .entry(name.clone())
                 .or_insert_with(|| OperationMetrics::new(name));
             entry.duration += duration;
@@ -189,7 +190,13 @@ impl CompilationMetrics {
         self.start_time.map(|start| start.elapsed())
     }
 
-    pub fn record_phase(&mut self, phase: &str, duration: Duration, errors: usize, warnings: usize) {
+    pub fn record_phase(
+        &mut self,
+        phase: &str,
+        duration: Duration,
+        errors: usize,
+        warnings: usize,
+    ) {
         self.phase_metrics.insert(
             phase.to_string(),
             PhaseMetrics {
@@ -214,10 +221,7 @@ impl CompilationMetrics {
     }
 
     pub fn total_duration(&self) -> Duration {
-        self.phase_metrics
-            .values()
-            .map(|p| p.duration)
-            .sum()
+        self.phase_metrics.values().map(|p| p.duration).sum()
     }
 
     pub fn format_report(&self) -> String {
@@ -237,10 +241,16 @@ impl CompilationMetrics {
         }
 
         if let Some(total) = self.end() {
-            report.push_str(&format!("\nTotal compilation time: {:.3}ms\n", total.as_secs_f64() * 1000.0));
+            report.push_str(&format!(
+                "\nTotal compilation time: {:.3}ms\n",
+                total.as_secs_f64() * 1000.0
+            ));
         }
 
-        report.push_str(&format!("Critical path: {:.3}ms\n", self.critical_path().as_secs_f64() * 1000.0));
+        report.push_str(&format!(
+            "Critical path: {:.3}ms\n",
+            self.critical_path().as_secs_f64() * 1000.0
+        ));
 
         report
     }

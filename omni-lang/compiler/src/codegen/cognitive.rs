@@ -65,25 +65,38 @@ impl PatternRecognizer {
     }
 
     /// Analyze a function's IR to detect patterns
-    pub fn analyze_function(&mut self, name: &str, instruction_count: usize, has_loops: bool, has_recursion: bool, has_branches: u32) -> PatternAnalysis {
+    pub fn analyze_function(
+        &mut self,
+        name: &str,
+        instruction_count: usize,
+        has_loops: bool,
+        has_recursion: bool,
+        has_branches: u32,
+    ) -> PatternAnalysis {
         let mut patterns = Vec::new();
         let mut confidence: f64 = 0.5;
 
         // Detect tight loops
         if has_loops && instruction_count < 50 {
-            patterns.push(CodePattern::TightLoop { estimated_iterations: 1000 });
+            patterns.push(CodePattern::TightLoop {
+                estimated_iterations: 1000,
+            });
             confidence += 0.15;
         }
 
         // Detect tail recursion candidates
         if has_recursion {
-            patterns.push(CodePattern::TailRecursion { depth_estimate: 100 });
+            patterns.push(CodePattern::TailRecursion {
+                depth_estimate: 100,
+            });
             confidence += 0.1;
         }
 
         // Detect branch-heavy code
         if has_branches > 4 {
-            patterns.push(CodePattern::BranchHeavy { branch_count: has_branches });
+            patterns.push(CodePattern::BranchHeavy {
+                branch_count: has_branches,
+            });
             confidence += 0.1;
         }
 
@@ -95,14 +108,17 @@ impl PatternRecognizer {
 
         // GPU candidate detection
         if has_loops && instruction_count > 100 {
-            patterns.push(CodePattern::GpuCandidate { parallelism_factor: 0.8 });
+            patterns.push(CodePattern::GpuCandidate {
+                parallelism_factor: 0.8,
+            });
             confidence += 0.05;
         }
 
         confidence = confidence.min(1.0);
 
         // Record history
-        self.pattern_history.insert(name.to_string(), patterns.clone());
+        self.pattern_history
+            .insert(name.to_string(), patterns.clone());
 
         let strategy = self.suggest_strategy(&patterns);
 
@@ -116,16 +132,28 @@ impl PatternRecognizer {
 
     /// Suggest an optimization strategy based on detected patterns
     fn suggest_strategy(&self, patterns: &[CodePattern]) -> OptimizationStrategy {
-        if patterns.iter().any(|p| matches!(p, CodePattern::GpuCandidate { .. })) {
+        if patterns
+            .iter()
+            .any(|p| matches!(p, CodePattern::GpuCandidate { .. }))
+        {
             return OptimizationStrategy::GpuOffload;
         }
-        if patterns.iter().any(|p| matches!(p, CodePattern::TightLoop { .. })) {
+        if patterns
+            .iter()
+            .any(|p| matches!(p, CodePattern::TightLoop { .. }))
+        {
             return OptimizationStrategy::AggressiveOptimize;
         }
-        if patterns.iter().any(|p| matches!(p, CodePattern::PureFunction)) {
+        if patterns
+            .iter()
+            .any(|p| matches!(p, CodePattern::PureFunction))
+        {
             return OptimizationStrategy::Inline;
         }
-        if patterns.iter().any(|p| matches!(p, CodePattern::MemoryIntensive { .. })) {
+        if patterns
+            .iter()
+            .any(|p| matches!(p, CodePattern::MemoryIntensive { .. }))
+        {
             return OptimizationStrategy::MemoryOptimize;
         }
         OptimizationStrategy::Standard
@@ -243,10 +271,8 @@ impl HeuristicEngine {
 
     /// Register a new heuristic with initial weight
     pub fn register_heuristic(&mut self, name: &str, initial_weight: f64) {
-        self.heuristics.insert(
-            name.to_string(),
-            Heuristic::new(name, initial_weight),
-        );
+        self.heuristics
+            .insert(name.to_string(), Heuristic::new(name, initial_weight));
     }
 
     /// Query a heuristic — should we apply this optimization?
@@ -259,10 +285,7 @@ impl HeuristicEngine {
 
     /// Get the weight of a heuristic
     pub fn get_weight(&self, name: &str) -> f64 {
-        self.heuristics
-            .get(name)
-            .map(|h| h.weight)
-            .unwrap_or(0.0)
+        self.heuristics.get(name).map(|h| h.weight).unwrap_or(0.0)
     }
 
     /// Make a decision and log it
@@ -343,7 +366,11 @@ impl AdaptiveScheduler {
     pub fn enqueue(&mut self, task: CompilationTask) {
         self.queue.push(task);
         // Sort by priority descending (highest priority first)
-        self.queue.sort_by(|a, b| b.priority.partial_cmp(&a.priority).unwrap_or(std::cmp::Ordering::Equal));
+        self.queue.sort_by(|a, b| {
+            b.priority
+                .partial_cmp(&a.priority)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
     }
 
     /// Get the next task within time budget
@@ -354,7 +381,10 @@ impl AdaptiveScheduler {
 
         let remaining = self.remaining_budget();
         // Find the highest-priority task that fits in the budget
-        let idx = self.queue.iter().position(|t| t.estimated_cost_ms <= remaining)?;
+        let idx = self
+            .queue
+            .iter()
+            .position(|t| t.estimated_cost_ms <= remaining)?;
         let task = self.queue.remove(idx);
         self.time_budget_ms -= task.estimated_cost_ms;
         Some(task)
@@ -498,7 +528,10 @@ impl CognitiveCompiler {
             // Apply heuristic-guided decisions
             match &task.strategy {
                 OptimizationStrategy::Inline => {
-                    if self.heuristics.decide("inline_small_functions", &task.function_name) {
+                    if self
+                        .heuristics
+                        .decide("inline_small_functions", &task.function_name)
+                    {
                         self.compilation_stats.inlines += 1;
                         self.compilation_stats.optimizations_applied += 1;
                     } else {
@@ -506,7 +539,10 @@ impl CognitiveCompiler {
                     }
                 }
                 OptimizationStrategy::GpuOffload => {
-                    if self.heuristics.decide("gpu_offload_threshold", &task.function_name) {
+                    if self
+                        .heuristics
+                        .decide("gpu_offload_threshold", &task.function_name)
+                    {
                         self.compilation_stats.gpu_offloads += 1;
                         self.compilation_stats.optimizations_applied += 1;
                     } else {
@@ -565,15 +601,24 @@ mod tests {
     fn test_pattern_recognizer_tight_loop() {
         let mut recognizer = PatternRecognizer::new();
         let analysis = recognizer.analyze_function("sum_array", 30, true, false, 1);
-        assert!(analysis.patterns.iter().any(|p| matches!(p, CodePattern::TightLoop { .. })));
-        assert_eq!(analysis.suggested_strategy, OptimizationStrategy::AggressiveOptimize);
+        assert!(analysis
+            .patterns
+            .iter()
+            .any(|p| matches!(p, CodePattern::TightLoop { .. })));
+        assert_eq!(
+            analysis.suggested_strategy,
+            OptimizationStrategy::AggressiveOptimize
+        );
     }
 
     #[test]
     fn test_pattern_recognizer_pure_function() {
         let mut recognizer = PatternRecognizer::new();
         let analysis = recognizer.analyze_function("add", 5, false, false, 0);
-        assert!(analysis.patterns.iter().any(|p| matches!(p, CodePattern::PureFunction)));
+        assert!(analysis
+            .patterns
+            .iter()
+            .any(|p| matches!(p, CodePattern::PureFunction)));
         assert_eq!(analysis.suggested_strategy, OptimizationStrategy::Inline);
     }
 
@@ -581,22 +626,34 @@ mod tests {
     fn test_pattern_recognizer_gpu_candidate() {
         let mut recognizer = PatternRecognizer::new();
         let analysis = recognizer.analyze_function("matrix_mul", 200, true, false, 2);
-        assert!(analysis.patterns.iter().any(|p| matches!(p, CodePattern::GpuCandidate { .. })));
-        assert_eq!(analysis.suggested_strategy, OptimizationStrategy::GpuOffload);
+        assert!(analysis
+            .patterns
+            .iter()
+            .any(|p| matches!(p, CodePattern::GpuCandidate { .. })));
+        assert_eq!(
+            analysis.suggested_strategy,
+            OptimizationStrategy::GpuOffload
+        );
     }
 
     #[test]
     fn test_pattern_recognizer_branch_heavy() {
         let mut recognizer = PatternRecognizer::new();
         let analysis = recognizer.analyze_function("dispatch", 60, false, false, 10);
-        assert!(analysis.patterns.iter().any(|p| matches!(p, CodePattern::BranchHeavy { branch_count: 10 })));
+        assert!(analysis
+            .patterns
+            .iter()
+            .any(|p| matches!(p, CodePattern::BranchHeavy { branch_count: 10 })));
     }
 
     #[test]
     fn test_pattern_recognizer_tail_recursion() {
         let mut recognizer = PatternRecognizer::new();
         let analysis = recognizer.analyze_function("factorial", 15, false, true, 1);
-        assert!(analysis.patterns.iter().any(|p| matches!(p, CodePattern::TailRecursion { .. })));
+        assert!(analysis
+            .patterns
+            .iter()
+            .any(|p| matches!(p, CodePattern::TailRecursion { .. })));
     }
 
     #[test]

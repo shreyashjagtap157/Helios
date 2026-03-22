@@ -1,21 +1,22 @@
-
 #[cfg(test)]
 mod tests {
-    use crate::ir::{IrFunction, IrBlock, IrInstruction, IrTerminator, IrType, IrValue, IrBinOp, IrConst};
-    use crate::codegen::opt::{OptimizationPass, dce::DeadCodeElimination, const_prop::ConstantPropagation};
+    use crate::codegen::opt::{
+        const_prop::ConstantPropagation, dce::DeadCodeElimination, OptimizationPass,
+    };
+    use crate::ir::{
+        IrBinOp, IrBlock, IrConst, IrFunction, IrInstruction, IrTerminator, IrType, IrValue,
+    };
 
     fn create_test_function(name: &str, instructions: Vec<IrInstruction>) -> IrFunction {
         IrFunction {
             name: name.to_string(),
             params: vec![],
             return_type: IrType::Void,
-            blocks: vec![
-                IrBlock {
-                    label: "entry".to_string(),
-                    instructions,
-                    terminator: IrTerminator::Return(None),
-                }
-            ],
+            blocks: vec![IrBlock {
+                label: "entry".to_string(),
+                instructions,
+                terminator: IrTerminator::Return(None),
+            }],
             locals: vec![],
         }
     }
@@ -50,15 +51,24 @@ mod tests {
         let pass = ConstantPropagation;
         let changed = pass.run(&mut func);
 
-        assert!(changed, "Constant propagation should have changed the function");
+        assert!(
+            changed,
+            "Constant propagation should have changed the function"
+        );
 
         // Check if v3 is now adding constants
         let block = &func.blocks[0];
         let v3_inst = &block.instructions[2];
-        
+
         if let IrInstruction::BinOp { left, right, .. } = v3_inst {
-            assert!(matches!(left, IrValue::Const(IrConst::Int(5))), "Left operand should be const 5");
-            assert!(matches!(right, IrValue::Const(IrConst::Int(10))), "Right operand should be const 10");
+            assert!(
+                matches!(left, IrValue::Const(IrConst::Int(5))),
+                "Left operand should be const 5"
+            );
+            assert!(
+                matches!(right, IrValue::Const(IrConst::Int(10))),
+                "Right operand should be const 10"
+            );
         } else {
             panic!("Expected BinOp for v3");
         }
@@ -70,7 +80,7 @@ mod tests {
         // v2 = v1 + 10  (unused)
         // return
         let instructions = vec![
-             IrInstruction::BinOp {
+            IrInstruction::BinOp {
                 dest: "v1".to_string(),
                 op: IrBinOp::Add,
                 left: IrValue::Const(IrConst::Int(5)),
@@ -89,14 +99,18 @@ mod tests {
         let changed = pass.run(&mut func);
 
         assert!(changed, "DCE should have removed unused instructions");
-        
+
         // v2 should be gone. v1 should be gone (recursively), unless v1 is used in terminator?
         // In our create_test_function, terminator returns Void (None).
         // So both should be removed.
-        
-        assert_eq!(func.blocks[0].instructions.len(), 0, "All instructions should be removed");
+
+        assert_eq!(
+            func.blocks[0].instructions.len(),
+            0,
+            "All instructions should be removed"
+        );
     }
-    
+
     #[test]
     fn test_dce_keeps_side_effects() {
         // call foo() (side effect)
@@ -107,29 +121,32 @@ mod tests {
                 func: "foo".to_string(),
                 args: vec![],
             },
-             IrInstruction::BinOp {
+            IrInstruction::BinOp {
                 dest: "v1".to_string(),
                 op: IrBinOp::Add,
                 left: IrValue::Const(IrConst::Int(5)),
                 right: IrValue::Const(IrConst::Int(5)),
             },
         ];
-        
+
         let mut func = create_test_function("test_dce_effects", instructions);
         let pass = DeadCodeElimination;
         pass.run(&mut func);
-        
+
         assert_eq!(func.blocks[0].instructions.len(), 1, "Should keep the call");
-        assert!(matches!(func.blocks[0].instructions[0], IrInstruction::Call { .. }));
+        assert!(matches!(
+            func.blocks[0].instructions[0],
+            IrInstruction::Call { .. }
+        ));
     }
 
     #[test]
     fn test_licm() {
-        use crate::ir::{IrTerminator, IrBlock};
-        
+        use crate::ir::{IrBlock, IrTerminator};
+
         // CFG: entry -> loop -> exit
         // loop has back-edge to itself
-        
+
         let mut func = IrFunction {
             name: "test_licm".to_string(),
             params: vec![],
@@ -151,7 +168,7 @@ mod tests {
                             right: IrValue::Const(IrConst::Int(5)),
                         },
                         // Loop variant: depends on phi (simulated) or just not invariant
-                         IrInstruction::BinOp {
+                        IrInstruction::BinOp {
                             dest: "v2".to_string(),
                             op: IrBinOp::Add,
                             left: IrValue::Var("v1".to_string()),
@@ -172,24 +189,32 @@ mod tests {
             ],
             locals: vec![],
         };
-        
+
         let pass = crate::codegen::opt::licm::LoopInvariantCodeMotion;
         let changed = pass.run(&mut func);
-        
+
         assert!(changed, "LICM should have hoisted instructions");
-        
+
         // Check entry block for hoisted instruction v1
         let entry_insts = &func.blocks[0].instructions;
-        assert_eq!(entry_insts.len(), 1, "Entry block should have 1 hoisted instruction");
+        assert_eq!(
+            entry_insts.len(),
+            1,
+            "Entry block should have 1 hoisted instruction"
+        );
         if let IrInstruction::BinOp { dest, .. } = &entry_insts[0] {
             assert_eq!(dest, "v1", "v1 should be hoisted");
         } else {
             panic!("Expected BinOp hoisted in entry");
         }
-        
+
         // Loop block should have v2 but not v1
         let loop_insts = &func.blocks[1].instructions;
-        assert_eq!(loop_insts.len(), 1, "Loop block should have 1 instruction left");
+        assert_eq!(
+            loop_insts.len(),
+            1,
+            "Loop block should have 1 instruction left"
+        );
         if let IrInstruction::BinOp { dest, .. } = &loop_insts[0] {
             assert_eq!(dest, "v2", "v2 should remain in loop");
         }

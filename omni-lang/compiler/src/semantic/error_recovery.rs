@@ -27,36 +27,36 @@ pub enum ErrorCode {
     UnboundTypeVar,
     AmbiguousType,
     InvalidTypeApplication,
-    
+
     // Lifetime errors
     LifetimeOutlivesMismatch,
     MissingLifetime,
     AmbiguousLifetime,
     LifetimeInference,
-    
+
     // Trait errors
     TraitNotFound,
     TraitBoundNotSatisfied,
     IncoherentImpl,
     InvalidTraitObject,
-    
+
     // Associated type errors
     AssocTypeNotFound,
     AssocTypeBindingMismatch,
-    
+
     // Where clause errors
     WhereBoundNotSatisfied,
     InvalidWhereBound,
-    
+
     // Const generic errors
     ConstGenericNotFound,
     ConstEvaluationError,
     ConstBindingMismatch,
-    
+
     // Generic errors
     GenericAritryMismatch,
     InvalidGenericBound,
-    
+
     // Other errors
     UnknownError,
 }
@@ -230,18 +230,14 @@ impl ErrorRecovery {
     /// Try to recover from error
     pub fn attempt_recovery(&self, error: &SemanticError) -> Option<String> {
         match error.code {
-            ErrorCode::TypeMismatch => Some(
-                "Consider checking type compatibility".to_string(),
-            ),
-            ErrorCode::UnboundTypeVar => Some(
-                "Add explicit type annotation".to_string(),
-            ),
-            ErrorCode::TraitBoundNotSatisfied => Some(
-                "Implement the required trait for this type".to_string(),
-            ),
-            ErrorCode::LifetimeOutlivesMismatch => Some(
-                "Review lifetime constraints in your code".to_string(),
-            ),
+            ErrorCode::TypeMismatch => Some("Consider checking type compatibility".to_string()),
+            ErrorCode::UnboundTypeVar => Some("Add explicit type annotation".to_string()),
+            ErrorCode::TraitBoundNotSatisfied => {
+                Some("Implement the required trait for this type".to_string())
+            }
+            ErrorCode::LifetimeOutlivesMismatch => {
+                Some("Review lifetime constraints in your code".to_string())
+            }
             _ => None,
         }
     }
@@ -347,11 +343,7 @@ mod tests {
     fn test_diagnostic_collector() {
         let mut collector = DiagnosticCollector::new();
         let ctx = ErrorContext::new("test.omni".to_string(), 1, 1, "code".to_string());
-        let error = SemanticError::new(
-            ErrorCode::TypeMismatch,
-            "Test error".to_string(),
-            ctx,
-        );
+        let error = SemanticError::new(ErrorCode::TypeMismatch, "Test error".to_string(), ctx);
         collector.add_error(error);
         assert!(collector.has_errors());
         assert_eq!(collector.error_count(), 1);
@@ -360,6 +352,9 @@ mod tests {
     #[test]
     fn test_error_code_display() {
         assert_eq!(ErrorCode::TypeMismatch.to_string(), "E001: Type Mismatch");
-        assert_eq!(ErrorCode::TraitNotFound.to_string(), "E201: Trait Not Found");
+        assert_eq!(
+            ErrorCode::TraitNotFound.to_string(),
+            "E201: Trait Not Found"
+        );
     }
 }

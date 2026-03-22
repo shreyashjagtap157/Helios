@@ -85,16 +85,15 @@ impl ConstEvaluator {
         match expr {
             Expression::Literal(Literal::Int(n)) => Ok(ConstValue::Int(*n)),
             Expression::Literal(Literal::Bool(b)) => Ok(ConstValue::Bool(*b)),
-            Expression::Identifier(name) => {
-                self.const_bindings
-                    .get(name)
-                    .cloned()
-                    .ok_or_else(|| format!("Unknown const {}", name))
-            }
+            Expression::Identifier(name) => self
+                .const_bindings
+                .get(name)
+                .cloned()
+                .ok_or_else(|| format!("Unknown const {}", name)),
             Expression::Binary(left, op, right) => {
                 let lval = self.evaluate(left)?;
                 let rval = self.evaluate(right)?;
-                
+
                 match (lval, rval, op) {
                     (ConstValue::UInt(l), ConstValue::UInt(r), BinaryOp::Add) => {
                         Ok(ConstValue::UInt(l + r))
