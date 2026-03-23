@@ -24,7 +24,7 @@ use clap::{Parser, ValueEnum};
 use std::path::PathBuf;
 
 /// Code generation target
-#[derive(Debug, Clone, Copy, ValueEnum, Default)]
+#[derive(Debug, Clone, Copy, ValueEnum, Default, PartialEq)]
 pub enum Target {
     #[cfg(feature = "llvm")]
     Llvm, // LLVM IR -> native code
@@ -429,7 +429,22 @@ fn compile(source: &str, args: &Args) -> Result<()> {
     monitor::update_heartbeat();
     let typed_ast = semantic::analyze(ast)?;
 
-    // Phase 4: IR generation
+    // Determine output path early (needed by both OVM direct and IR paths)
+    let output_path = args
+        .output
+        .clone()
+        .unwrap_or_else(|| args.input.with_extension(""));
+
+    // Phase 4-5: Code generation
+    // For OVM target, use direct typed AST → OVM bytecode (bypasses IR)
+    if args.target == Target::Ovm && !args.emit_ir {
+        log::debug!("Phase 4-5: Direct OVM codegen from typed AST");
+        monitor::update_heartbeat();
+        return codegen::ovm_direct::generate_ovm_direct(&typed_ast, &output_path)
+            .map_err(|e| anyhow::anyhow!("{}", e));
+    }
+
+    // Phase 4: IR generation (for LLVM/native targets or --emit-ir)
     log::debug!("Phase 4: IR generation");
     monitor::update_heartbeat();
     let omni_ir = ir::generate(typed_ast).map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -447,10 +462,6 @@ fn compile(source: &str, args: &Args) -> Result<()> {
     // Phase 5: Code generation with target selection
     log::debug!("Phase 5: Code generation (target: {:?})", args.target);
     monitor::update_heartbeat();
-    let output_path = args
-        .output
-        .clone()
-        .unwrap_or_else(|| args.input.with_extension(""));
 
     codegen::generate_with_target(omni_ir, &output_path, args.opt_level, args.target.into())
         .map_err(|e| anyhow::anyhow!("{}", e))?;

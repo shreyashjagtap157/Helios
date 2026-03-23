@@ -204,20 +204,27 @@ pub enum OvmVisibility {
     Public = 1,
 }
 
+/// Loop context for break/continue backpatching (used by ovm_direct)
+pub struct LoopContext {
+    pub break_addrs: Vec<usize>,
+    pub continue_target: usize,
+}
+
 /// Bytecode generator context
-struct OvmCodegen {
-    constants: Vec<OvmConstant>,
-    const_map: HashMap<String, u32>,
-    label_offsets: HashMap<String, u32>,
-    current_bytecode: Vec<u8>,
-    local_indices: HashMap<String, u16>,
-    arg_indices: HashMap<String, u16>,
-    func_indices: HashMap<String, u32>,
-    hardware: Option<HardwareConfig>,
+pub struct OvmCodegen {
+    pub constants: Vec<OvmConstant>,
+    pub const_map: HashMap<String, u32>,
+    pub label_offsets: HashMap<String, u32>,
+    pub current_bytecode: Vec<u8>,
+    pub local_indices: HashMap<String, u16>,
+    pub arg_indices: HashMap<String, u16>,
+    pub func_indices: HashMap<String, u32>,
+    pub hardware: Option<HardwareConfig>,
+    pub loop_contexts: Vec<LoopContext>,
 }
 
 impl OvmCodegen {
-    fn new() -> Self {
+    pub fn new() -> Self {
         OvmCodegen {
             constants: Vec::new(),
             const_map: HashMap::new(),
@@ -225,11 +232,13 @@ impl OvmCodegen {
             current_bytecode: Vec::new(),
             local_indices: HashMap::new(),
             arg_indices: HashMap::new(),
+            func_indices: HashMap::new(),
             hardware: None,
+            loop_contexts: Vec::new(),
         }
     }
 
-    fn add_constant(&mut self, value: OvmConstant) -> u32 {
+    pub fn add_constant(&mut self, value: OvmConstant) -> u32 {
         let key = format!("{:?}", value);
         if let Some(&idx) = self.const_map.get(&key) {
             return idx;
@@ -240,35 +249,35 @@ impl OvmCodegen {
         idx
     }
 
-    fn emit(&mut self, opcode: OvmOpcode) {
+    pub fn emit(&mut self, opcode: OvmOpcode) {
         self.current_bytecode.push(opcode as u8);
     }
 
-    fn emit_u8(&mut self, value: u8) {
+    pub fn emit_u8(&mut self, value: u8) {
         self.current_bytecode.push(value);
     }
 
-    fn emit_u16(&mut self, value: u16) {
+    pub fn emit_u16(&mut self, value: u16) {
         self.current_bytecode
             .extend_from_slice(&value.to_le_bytes());
     }
 
-    fn emit_u32(&mut self, value: u32) {
+    pub fn emit_u32(&mut self, value: u32) {
         self.current_bytecode
             .extend_from_slice(&value.to_le_bytes());
     }
 
-    fn emit_i32(&mut self, value: i32) {
+    pub fn emit_i32(&mut self, value: i32) {
         self.current_bytecode
             .extend_from_slice(&value.to_le_bytes());
     }
 
-    fn emit_u64(&mut self, value: u64) {
+    pub fn emit_u64(&mut self, value: u64) {
         self.current_bytecode
             .extend_from_slice(&value.to_le_bytes());
     }
 
-    fn current_offset(&self) -> u32 {
+    pub fn current_offset(&self) -> u32 {
         self.current_bytecode.len() as u32
     }
 }
@@ -291,6 +300,11 @@ pub fn generate_ovm(ir: IrModule, output: &Path) -> Result<(), String> {
     let mut codegen = OvmCodegen::new();
     codegen.hardware = Some(hw);
     let mut functions = Vec::new();
+
+    // Build function index map first
+    for (i, ir_func) in ir.functions.iter().enumerate() {
+        codegen.func_indices.insert(ir_func.name.clone(), i as u32);
+    }
 
     for ir_func in &ir.functions {
         debug!("Compiling function: {}", ir_func.name);
@@ -353,6 +367,37 @@ fn compile_function(codegen: &mut OvmCodegen, func: &IrFunction) -> Result<OvmFu
         codegen.local_indices.insert(name.clone(), i as u16);
     }
 
+    // Index all local variables and IR temp variables
+    let mut next_local = func.params.len() as u16;
+    for (name, _) in &func.locals {
+        if !codegen.local_indices.contains_key(name) {
+            codegen.local_indices.insert(name.clone(), next_local);
+            next_local += 1;
+        }
+    }
+    // Also scan for IR temp variables (e.g., %t0, %t1) and allocas
+    for block in &func.blocks {
+        for inst in &block.instructions {
+            match inst {
+                IrInstruction::Load { dest, .. }
+                | IrInstruction::Alloca { dest, .. }
+                | IrInstruction::BinOp { dest, .. }
+                | IrInstruction::Call {
+                    dest: Some(dest), ..
+                }
+                | IrInstruction::NativeCall {
+                    dest: Some(dest), ..
+                } => {
+                    if !codegen.local_indices.contains_key(dest) {
+                        codegen.local_indices.insert(dest.clone(), next_local);
+                        next_local += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     // First pass: collect label offsets
     let mut offset = 0u32;
     for block in &func.blocks {
@@ -384,12 +429,86 @@ fn compile_function(codegen: &mut OvmCodegen, func: &IrFunction) -> Result<OvmFu
     })
 }
 
+/// Push an IrValue onto the OVM stack
+fn emit_push_value(codegen: &mut OvmCodegen, value: &crate::ir::IrValue) {
+    match value {
+        crate::ir::IrValue::Const(crate::ir::IrConst::Int(n)) => {
+            codegen.emit(OvmOpcode::PushI64);
+            codegen.emit_u64(*n as u64);
+        }
+        crate::ir::IrValue::Const(crate::ir::IrConst::Float(f)) => {
+            codegen.emit(OvmOpcode::PushF64);
+            codegen.emit_u64(f.to_bits());
+        }
+        crate::ir::IrValue::Const(crate::ir::IrConst::Bool(b)) => {
+            codegen.emit(if *b {
+                OvmOpcode::PushTrue
+            } else {
+                OvmOpcode::PushFalse
+            });
+        }
+        crate::ir::IrValue::Const(crate::ir::IrConst::Str(s)) => {
+            let idx = codegen.add_constant(OvmConstant::String(s.clone()));
+            codegen.emit(OvmOpcode::PushStr);
+            codegen.emit_u32(idx);
+        }
+        crate::ir::IrValue::Var(name) => {
+            if let Some(&idx) = codegen.local_indices.get(name) {
+                codegen.emit(OvmOpcode::LoadLoc);
+                codegen.emit_u16(idx);
+            } else {
+                codegen.emit(OvmOpcode::PushNull);
+            }
+        }
+        _ => {
+            codegen.emit(OvmOpcode::PushNull);
+        }
+    }
+}
+
+/// Store stack top into a dest local variable slot
+fn emit_store_dest(codegen: &mut OvmCodegen, dest: &str) {
+    if let Some(&idx) = codegen.local_indices.get(dest) {
+        codegen.emit(OvmOpcode::StoreLoc);
+        codegen.emit_u16(idx);
+    }
+}
+
 fn instruction_size(inst: &IrInstruction) -> u32 {
     match inst {
-        IrInstruction::Alloca { .. } => 3,   // opcode(1) + u16(2)
-        IrInstruction::Load { .. } => 3,     // opcode(1) + u16(2) [worst case: local]
-        IrInstruction::Store { .. } => 3,    // opcode(1) + u16(2) [worst case: local]
-        IrInstruction::BinOp { .. } => 1,    // opcode(1)
+        IrInstruction::Alloca { .. } => 3, // opcode(1) + u16(2)
+        IrInstruction::Load { .. } => 7,   // LoadLoc(3) + StoreLoc(3) + Pop(1)
+        IrInstruction::Store { value, .. } => {
+            let val_size = match value {
+                crate::ir::IrValue::Const(crate::ir::IrConst::Int(_)) => 9,
+                crate::ir::IrValue::Const(crate::ir::IrConst::Float(_)) => 9,
+                crate::ir::IrValue::Const(crate::ir::IrConst::Bool(_)) => 1,
+                crate::ir::IrValue::Const(crate::ir::IrConst::Str(_)) => 5,
+                crate::ir::IrValue::Var(_) => 3,
+                _ => 1,
+            };
+            val_size + 3 // push value + store opcode(1) + u16(2)
+        }
+        IrInstruction::BinOp { left, right, .. } => {
+            // Push operands + opcode + StoreLoc(3) + Pop(1)
+            let left_size = match left {
+                crate::ir::IrValue::Const(crate::ir::IrConst::Int(_)) => 9,
+                crate::ir::IrValue::Const(crate::ir::IrConst::Float(_)) => 9,
+                crate::ir::IrValue::Const(crate::ir::IrConst::Bool(_)) => 1,
+                crate::ir::IrValue::Const(crate::ir::IrConst::Str(_)) => 5,
+                crate::ir::IrValue::Var(_) => 3,
+                _ => 1,
+            };
+            let right_size = match right {
+                crate::ir::IrValue::Const(crate::ir::IrConst::Int(_)) => 9,
+                crate::ir::IrValue::Const(crate::ir::IrConst::Float(_)) => 9,
+                crate::ir::IrValue::Const(crate::ir::IrConst::Bool(_)) => 1,
+                crate::ir::IrValue::Const(crate::ir::IrConst::Str(_)) => 5,
+                crate::ir::IrValue::Var(_) => 3,
+                _ => 1,
+            };
+            left_size + right_size + 1 + 3 + 1 // push operands + opcode + StoreLoc + Pop
+        }
         IrInstruction::Call { .. } => 5,     // opcode(1) + u32(4)
         IrInstruction::GetField { .. } => 3, // opcode(1) + u16(2)
         // New instruction variants
@@ -449,20 +568,53 @@ fn compile_instruction(codegen: &mut OvmCodegen, inst: &IrInstruction) -> Result
             codegen.local_indices.insert(dest.clone(), idx);
         }
 
-        IrInstruction::Load {
-            dest: _,
-            ptr,
-            ty: _,
-        } => {
+        IrInstruction::Load { dest, ptr, ty: _ } => {
             if let Some(&idx) = codegen.local_indices.get(ptr) {
                 codegen.emit(OvmOpcode::LoadLoc);
                 codegen.emit_u16(idx);
             } else {
-                codegen.emit(OvmOpcode::Load64);
+                codegen.emit(OvmOpcode::PushNull);
             }
+            // Store result in dest local so subsequent Var references can load it
+            emit_store_dest(codegen, dest);
+            // Pop the value — the consuming instruction will load from the dest local
+            codegen.emit(OvmOpcode::Pop);
         }
 
-        IrInstruction::Store { ptr, value: _ } => {
+        IrInstruction::Store { ptr, value } => {
+            // Push the value to store
+            match value {
+                crate::ir::IrValue::Const(crate::ir::IrConst::Int(n)) => {
+                    codegen.emit(OvmOpcode::PushI64);
+                    codegen.emit_u64(*n as u64);
+                }
+                crate::ir::IrValue::Const(crate::ir::IrConst::Float(f)) => {
+                    codegen.emit(OvmOpcode::PushF64);
+                    codegen.emit_u64(f.to_bits());
+                }
+                crate::ir::IrValue::Const(crate::ir::IrConst::Bool(b)) => {
+                    codegen.emit(if *b {
+                        OvmOpcode::PushTrue
+                    } else {
+                        OvmOpcode::PushFalse
+                    });
+                }
+                crate::ir::IrValue::Const(crate::ir::IrConst::Str(s)) => {
+                    let idx = codegen.add_constant(OvmConstant::String(s.clone()));
+                    codegen.emit(OvmOpcode::PushStr);
+                    codegen.emit_u32(idx);
+                }
+                crate::ir::IrValue::Var(name) => {
+                    if let Some(&idx) = codegen.local_indices.get(name) {
+                        codegen.emit(OvmOpcode::LoadLoc);
+                        codegen.emit_u16(idx);
+                    }
+                }
+                _ => {
+                    codegen.emit(OvmOpcode::PushNull);
+                }
+            }
+            // Store into the target
             if let Some(&idx) = codegen.local_indices.get(ptr) {
                 codegen.emit(OvmOpcode::StoreLoc);
                 codegen.emit_u16(idx);
@@ -472,11 +624,15 @@ fn compile_instruction(codegen: &mut OvmCodegen, inst: &IrInstruction) -> Result
         }
 
         IrInstruction::BinOp {
-            dest: _,
+            dest,
             op,
-            left: _,
-            right: _,
+            left,
+            right,
         } => {
+            // Push operands using helper
+            emit_push_value(codegen, right);
+            emit_push_value(codegen, left);
+            // Emit the operation
             let opcode = match op {
                 IrBinOp::Add => OvmOpcode::AddI64,
                 IrBinOp::Sub => OvmOpcode::SubI64,
@@ -493,55 +649,28 @@ fn compile_instruction(codegen: &mut OvmCodegen, inst: &IrInstruction) -> Result
                 IrBinOp::Ge => OvmOpcode::Ge,
             };
             codegen.emit(opcode);
+            // Store result in dest local
+            emit_store_dest(codegen, dest);
+            // Pop from stack — consuming instructions load from dest local
+            codegen.emit(OvmOpcode::Pop);
         }
 
-        IrInstruction::Call {
-            dest: _,
-            func,
-            args,
-        } => {
+        IrInstruction::Call { dest, func, args } => {
             // Push arguments onto the stack before the call
             for arg in args {
-                match arg {
-                    crate::ir::IrValue::Const(crate::ir::IrConst::Int(n)) => {
-                        codegen.emit(OvmOpcode::PushI64);
-                        codegen.emit_u64(*n as u64);
-                    }
-                    crate::ir::IrValue::Const(crate::ir::IrConst::Float(f)) => {
-                        codegen.emit(OvmOpcode::PushF64);
-                        codegen.emit_u64(f.to_bits());
-                    }
-                    crate::ir::IrValue::Const(crate::ir::IrConst::Bool(b)) => {
-                        codegen.emit(if *b {
-                            OvmOpcode::PushTrue
-                        } else {
-                            OvmOpcode::PushFalse
-                        });
-                    }
-                    crate::ir::IrValue::Const(crate::ir::IrConst::Str(s)) => {
-                        let idx = codegen.add_constant(OvmConstant::String(s.clone()));
-                        codegen.emit(OvmOpcode::PushStr);
-                        codegen.emit_u32(idx);
-                    }
-                    crate::ir::IrValue::Var(name) => {
-                        if let Some(&idx) = codegen.local_indices.get(name) {
-                            codegen.emit(OvmOpcode::LoadLoc);
-                            codegen.emit_u16(idx);
-                        } else if let Some(&idx) = codegen.arg_indices.get(name) {
-                            codegen.emit(OvmOpcode::LoadArg);
-                            codegen.emit_u16(idx);
-                        } else {
-                            codegen.emit(OvmOpcode::PushNull);
-                        }
-                    }
-                    _ => {
-                        codegen.emit(OvmOpcode::PushNull);
-                    }
-                }
+                emit_push_value(codegen, arg);
             }
-            let func_idx = codegen.add_constant(OvmConstant::String(func.clone()));
+            let func_idx = codegen
+                .func_indices
+                .get(func)
+                .copied()
+                .unwrap_or_else(|| codegen.add_constant(OvmConstant::String(func.clone())));
             codegen.emit(OvmOpcode::Call);
             codegen.emit_u32(func_idx);
+            // Store return value in IR temp local so subsequent Var references find it
+            if let Some(d) = dest {
+                emit_store_dest(codegen, d);
+            }
         }
 
         IrInstruction::GetField {
@@ -594,7 +723,11 @@ fn compile_instruction(codegen: &mut OvmCodegen, inst: &IrInstruction) -> Result
             func,
             captures: _,
         } => {
-            let func_idx = codegen.add_constant(OvmConstant::String(func.clone()));
+            let func_idx = codegen
+                .func_indices
+                .get(func)
+                .copied()
+                .unwrap_or_else(|| codegen.add_constant(OvmConstant::String(func.clone())));
             codegen.emit(OvmOpcode::LoadConst);
             codegen.emit_u32(func_idx);
             codegen.emit(OvmOpcode::New);
@@ -616,7 +749,11 @@ fn compile_instruction(codegen: &mut OvmCodegen, inst: &IrInstruction) -> Result
             func,
             args: _,
         } => {
-            let func_idx = codegen.add_constant(OvmConstant::String(func.clone()));
+            let func_idx = codegen
+                .func_indices
+                .get(func)
+                .copied()
+                .unwrap_or_else(|| codegen.add_constant(OvmConstant::String(func.clone())));
             codegen.emit(OvmOpcode::LoadConst);
             codegen.emit_u32(func_idx);
             codegen.emit(OvmOpcode::Syscall);
@@ -691,38 +828,14 @@ fn compile_instruction(codegen: &mut OvmCodegen, inst: &IrInstruction) -> Result
         } => {
             // Push arguments onto the stack
             for arg in args {
-                match arg {
-                    crate::ir::IrValue::Const(crate::ir::IrConst::Str(s)) => {
-                        let str_idx = codegen.add_constant(OvmConstant::String(s.clone()));
-                        codegen.emit(OvmOpcode::PushStr);
-                        codegen.emit_u32(str_idx);
-                    }
-                    crate::ir::IrValue::Const(crate::ir::IrConst::Int(n)) => {
-                        codegen.emit(OvmOpcode::PushI64);
-                        codegen.emit_u64(*n as u64);
-                    }
-                    crate::ir::IrValue::Const(crate::ir::IrConst::Bool(b)) => {
-                        if *b {
-                            codegen.emit(OvmOpcode::PushTrue);
-                        } else {
-                            codegen.emit(OvmOpcode::PushFalse);
-                        }
-                    }
-                    crate::ir::IrValue::Var(name) => {
-                        if let Some(&idx) = codegen.local_indices.get(name) {
-                            codegen.emit(OvmOpcode::LoadLoc);
-                            codegen.emit_u16(idx);
-                        }
-                    }
-                    _ => {}
-                }
+                emit_push_value(codegen, arg);
             }
-
             // Emit native call: push the qualified name, then Syscall
             let native_name = format!("{}::{}", module, func);
             let name_idx = codegen.add_constant(OvmConstant::String(native_name));
             codegen.emit(OvmOpcode::Syscall);
             codegen.emit_u16(name_idx as u16);
+            // Don't store — the IR's Store instruction handles saving if needed
         }
 
         IrInstruction::BoundsCheck { index, length } => {
@@ -819,7 +932,7 @@ fn estimate_max_stack(func: &IrFunction) -> u16 {
 }
 
 /// Serialize OVM module to bytes
-fn serialize_module(module: &OvmModule) -> Result<Vec<u8>, String> {
+pub fn serialize_module(module: &OvmModule) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
 
     // Magic number "OVM\0"

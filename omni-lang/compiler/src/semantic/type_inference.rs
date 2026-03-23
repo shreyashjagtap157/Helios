@@ -546,6 +546,11 @@ impl InferenceEngine {
             ast::Type::ConstGeneric(name) => Type::Generic(name.clone()),
             ast::Type::WhereConstrained { base, .. } => self.from_ast_type(base),
             ast::Type::HigherRanked { bound } => Type::Generic(bound.clone()),
+            ast::Type::Tuple(elems) => {
+                let elem_tys: Vec<Type> = elems.iter().map(|e| self.from_ast_type(e)).collect();
+                Type::Tuple(elem_tys)
+            }
+            ast::Type::Nullable(inner) => Type::Nullable(Box::new(self.from_ast_type(inner))),
         }
     }
 

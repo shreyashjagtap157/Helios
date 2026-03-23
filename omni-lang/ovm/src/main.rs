@@ -40,6 +40,8 @@ enum V {
     F64(f64),
     Bool(bool),
     Str(String),
+    Array(std::rc::Rc<std::cell::RefCell<Vec<V>>>),
+    Object(std::rc::Rc<std::cell::RefCell<std::collections::HashMap<String, V>>>),
 }
 
 struct Frame {
@@ -56,6 +58,7 @@ struct VM {
     stack: Vec<V>,
     frames: Vec<Frame>,
     pc: usize,
+    global_locals: [V; 256],
 }
 
 impl VM {
@@ -68,6 +71,7 @@ impl VM {
             stack: Vec::with_capacity(4096),
             frames: Vec::with_capacity(256),
             pc: 0,
+            global_locals: std::array::from_fn(|_| V::Null),
         };
         if data.len() >= 84 && &data[0..4] == b"OVM\0" {
             vm.load(data);
@@ -275,40 +279,62 @@ impl VM {
                     self.push(a);
                     self.push(b);
                 }
+                0x0E => {
+                    // Rot: rotate top 3 stack values [a, b, c] → [c, a, b]
+                    let c = self.pop();
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(b);
+                    self.push(c);
+                    self.push(a);
+                }
                 0x0F => {
                     self.pop();
                 }
 
                 // Arithmetic i64 (0x10-0x17)
                 0x10 => {
-                    let r = self.pi();
-                    let l = self.pi();
-                    self.push(V::I64(l + r));
+                    let left = self.pop(); // left operand (on top, pushed last)
+                    let right = self.pop(); // right operand (at bottom, pushed first)
+                    match (&left, &right) {
+                        (V::Str(a), V::Str(b)) => {
+                            self.push(V::Str(format!("{}{}", a, b)));
+                        }
+                        (V::Str(a), _) => {
+                            self.push(V::Str(format!("{}{}", a, self.vs(&right))));
+                        }
+                        (_, V::Str(b)) => {
+                            self.push(V::Str(format!("{}{}", self.vs(&left), b)));
+                        }
+                        _ => {
+                            self.push(V::I64(self.vi(&left) + self.vi(&right)));
+                        }
+                    }
                 }
                 0x11 => {
-                    let r = self.pi();
                     let l = self.pi();
+                    let r = self.pi();
                     self.push(V::I64(l - r));
                 }
                 0x12 => {
-                    let r = self.pi();
                     let l = self.pi();
+                    let r = self.pi();
                     self.push(V::I64(l * r));
                 }
                 0x13 => {
+                    let l = self.pi();
                     let r = self.pi();
                     if r == 0 {
                         return Err("div0".into());
                     }
-                    let l = self.pi();
                     self.push(V::I64(l / r));
                 }
                 0x14 => {
+                    let l = self.pi();
                     let r = self.pi();
                     if r == 0 {
                         return Err("mod0".into());
                     }
-                    let l = self.pi();
                     self.push(V::I64(l % r));
                 }
                 0x15 => {
@@ -318,23 +344,23 @@ impl VM {
 
                 // Arithmetic f64 (0x18-0x1F)
                 0x18 => {
-                    let r = self.pf();
                     let l = self.pf();
+                    let r = self.pf();
                     self.push(V::F64(l + r));
                 }
                 0x19 => {
-                    let r = self.pf();
                     let l = self.pf();
+                    let r = self.pf();
                     self.push(V::F64(l - r));
                 }
                 0x1A => {
-                    let r = self.pf();
                     let l = self.pf();
+                    let r = self.pf();
                     self.push(V::F64(l * r));
                 }
                 0x1B => {
-                    let r = self.pf();
                     let l = self.pf();
+                    let r = self.pf();
                     self.push(V::F64(l / r));
                 }
                 0x1C => {
@@ -354,18 +380,18 @@ impl VM {
 
                 // Bitwise (0x30-0x36)
                 0x30 => {
-                    let r = self.pi();
                     let l = self.pi();
+                    let r = self.pi();
                     self.push(V::I64(l & r));
                 }
                 0x31 => {
-                    let r = self.pi();
                     let l = self.pi();
+                    let r = self.pi();
                     self.push(V::I64(l | r));
                 }
                 0x32 => {
-                    let r = self.pi();
                     let l = self.pi();
+                    let r = self.pi();
                     self.push(V::I64(l ^ r));
                 }
                 0x33 => {
@@ -373,46 +399,46 @@ impl VM {
                     self.push(V::I64(!v));
                 }
                 0x34 => {
-                    let r = self.pi();
                     let l = self.pi();
+                    let r = self.pi();
                     self.push(V::I64(l << r));
                 }
                 0x35 => {
-                    let r = self.pi();
                     let l = self.pi();
+                    let r = self.pi();
                     self.push(V::I64(l >> r));
                 }
 
                 // Comparison (0x40-0x47)
                 0x40 => {
-                    let r = self.pop();
                     let l = self.pop();
+                    let r = self.pop();
                     self.push(V::Bool(self.eq(&l, &r)));
                 }
                 0x41 => {
-                    let r = self.pop();
                     let l = self.pop();
+                    let r = self.pop();
                     self.push(V::Bool(!self.eq(&l, &r)));
                 }
                 0x42 => {
-                    let r = self.pi();
-                    let l = self.pi();
-                    self.push(V::Bool(l < r));
+                    let l = self.pop();
+                    let r = self.pop();
+                    self.push(V::Bool(self.vcmp_lt(&l, &r)));
                 }
                 0x43 => {
-                    let r = self.pi();
-                    let l = self.pi();
-                    self.push(V::Bool(l <= r));
+                    let l = self.pop();
+                    let r = self.pop();
+                    self.push(V::Bool(self.vcmp_le(&l, &r)));
                 }
                 0x44 => {
-                    let r = self.pi();
-                    let l = self.pi();
-                    self.push(V::Bool(l > r));
+                    let l = self.pop();
+                    let r = self.pop();
+                    self.push(V::Bool(self.vcmp_gt(&l, &r)));
                 }
                 0x45 => {
-                    let r = self.pi();
-                    let l = self.pi();
-                    self.push(V::Bool(l >= r));
+                    let l = self.pop();
+                    let r = self.pop();
+                    self.push(V::Bool(self.vcmp_ge(&l, &r)));
                 }
                 0x47 => {
                     let v = self.pop();
@@ -469,6 +495,7 @@ impl VM {
                                 let v = self.pop();
                                 let l = match &v {
                                     V::Str(s) => s.len() as i64,
+                                    V::Array(a) => a.borrow().len() as i64,
                                     _ => 0,
                                 };
                                 self.push(V::I64(l));
@@ -537,32 +564,64 @@ impl VM {
                         return Ok(());
                     }
                 }
+                0x59 => {
+                    // CallInd: indirect call — function index on stack
+                    let func_val = self.pop();
+                    let idx = self.vi(&func_val) as usize;
+                    if idx < self.funcs.len() {
+                        let faddr = self.funcs[idx].1;
+                        let param_count = self.funcs[idx].2 as usize;
+                        let mut args = Vec::with_capacity(param_count);
+                        for _ in 0..param_count {
+                            args.push(self.pop());
+                        }
+                        args.reverse();
+                        let mut frame = Frame {
+                            ret_pc: self.pc,
+                            base: self.stack.len(),
+                            locals: std::array::from_fn(|_| V::Null),
+                        };
+                        for (i, arg) in args.into_iter().enumerate() {
+                            if i < 128 {
+                                frame.locals[i] = arg;
+                            }
+                        }
+                        self.frames.push(frame);
+                        self.pc = faddr;
+                        continue;
+                    }
+                }
 
                 // Locals (0x60-0x65)
                 0x60 => {
-                    let i = self.code[self.pc] as usize;
-                    self.pc += 1;
-                    if let Some(f) = self.frames.last() {
-                        if i < 128 {
-                            self.push(f.locals[i].clone());
+                    let i = self.ru16() as usize;
+                    let v = if let Some(f) = self.frames.last() {
+                        if i < f.locals.len() {
+                            f.locals[i].clone()
                         } else {
-                            self.push(V::Null);
+                            V::Null
                         }
-                    }
+                    } else if i < 256 {
+                        self.global_locals[i].clone()
+                    } else {
+                        V::Null
+                    };
+                    self.push(v);
                 }
                 0x61 => {
-                    let i = self.code[self.pc] as usize;
-                    self.pc += 1;
+                    let i = self.ru16() as usize;
                     let v = self.pop();
                     if let Some(f) = self.frames.last_mut() {
-                        if i < 128 {
+                        if i < f.locals.len() {
                             f.locals[i] = v;
                         }
+                    } else if i < 256 {
+                        self.global_locals[i] = v;
                     }
                 }
                 0x64 => {
-                    /* alloc_loc — skip u16 */
-                    self.pc += 2;
+                    /* alloc_loc — true no-op, don't push anything */
+                    let _ = self.ru16(); // skip operand
                 }
 
                 // Globals (0x70-0x72)
@@ -580,6 +639,134 @@ impl VM {
                         self.push(self.consts[i].clone());
                     } else {
                         self.push(V::Null);
+                    }
+                }
+
+                // Objects/Structs (0x90-0x95)
+                0x90 => {
+                    // New: create object — type name index u32, field count u16
+                    let _type_idx = self.ru32();
+                    let field_count = self.ru16() as usize;
+                    let mut obj = std::collections::HashMap::new();
+                    // Fields are pushed as key-value pairs (name, value)
+                    let mut vals = Vec::with_capacity(field_count * 2);
+                    for _ in 0..field_count * 2 {
+                        vals.push(self.pop());
+                    }
+                    vals.reverse();
+                    let mut i = 0;
+                    while i < vals.len() {
+                        let key = self.vs(&vals[i]);
+                        let val = vals[i + 1].clone();
+                        obj.insert(key, val);
+                        i += 2;
+                    }
+                    self.push(V::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
+                }
+                0x91 => {
+                    // GetField: object on stack, field name index u32
+                    let field_idx = self.ru32() as usize;
+                    let obj = self.pop();
+                    let field_name = if field_idx < self.consts.len() {
+                        self.vs(&self.consts[field_idx].clone())
+                    } else {
+                        String::new()
+                    };
+                    match &obj {
+                        V::Object(o) => {
+                            let val = o.borrow().get(&field_name).cloned().unwrap_or(V::Null);
+                            self.push(val);
+                        }
+                        _ => self.push(V::Null),
+                    }
+                }
+                0x92 => {
+                    // SetField: value on stack top, object below, field name u32
+                    let field_idx = self.ru32() as usize;
+                    let val = self.pop();
+                    let field_name = if field_idx < self.consts.len() {
+                        self.vs(&self.consts[field_idx].clone())
+                    } else {
+                        String::new()
+                    };
+                    if let Some(obj) = self.stack.last() {
+                        if let V::Object(o) = obj {
+                            o.borrow_mut().insert(field_name, val);
+                        }
+                    }
+                    self.pop(); // pop the object we peeked at
+                }
+
+                // Arrays (0xA0-0xA4)
+                0xA0 => {
+                    // NewArray: count elements from stack, create array
+                    let count = self.ru32() as usize;
+                    let mut arr = Vec::with_capacity(count);
+                    for _ in 0..count {
+                        arr.push(self.pop());
+                    }
+                    arr.reverse();
+                    self.push(V::Array(std::rc::Rc::new(std::cell::RefCell::new(arr))));
+                }
+                0xA1 => {
+                    // ArrayLen: push length of array on stack
+                    let v = self.pop();
+                    let len = match &v {
+                        V::Array(a) => a.borrow().len() as i64,
+                        V::Str(s) => s.len() as i64,
+                        _ => 0,
+                    };
+                    self.push(V::I64(len));
+                }
+                0xA2 => {
+                    // ArrayGet: array, index on stack → push element
+                    let idx_val = self.pop();
+                    let arr_val = self.pop();
+                    let idx = self.vi(&idx_val) as usize;
+                    match &arr_val {
+                        V::Array(a) => {
+                            let borrowed = a.borrow();
+                            let val = borrowed.get(idx).cloned().unwrap_or(V::Null);
+                            self.push(val);
+                        }
+                        V::Str(s) => {
+                            let ch = s.as_bytes().get(idx).copied().unwrap_or(0);
+                            self.push(V::I64(ch as i64));
+                        }
+                        _ => self.push(V::Null),
+                    }
+                }
+                0xA3 => {
+                    // ArraySet: stack has [..., array, index, value] (value on top)
+                    // Peek (don't pop) the array so we modify the original RefCell
+                    let val = self.pop();
+                    let idx_val = self.pop();
+                    let idx = self.vi(&idx_val) as usize;
+                    if let Some(arr_val) = self.stack.last() {
+                        if let V::Array(a) = arr_val {
+                            let mut borrowed = a.borrow_mut();
+                            if idx < borrowed.len() {
+                                borrowed[idx] = val;
+                            }
+                        }
+                    }
+                    self.pop(); // pop the array we peeked at
+                }
+                0xA4 => {
+                    // ArraySlice: array, start, end on stack
+                    let end_val = self.pop();
+                    let start_val = self.pop();
+                    let arr_val = self.pop();
+                    let start = self.vi(&start_val) as usize;
+                    let end = self.vi(&end_val) as usize;
+                    if let V::Array(a) = &arr_val {
+                        let borrowed = a.borrow();
+                        let slice: Vec<V> = borrowed[start..end.min(borrowed.len())].to_vec();
+                        self.push(V::Array(std::rc::Rc::new(std::cell::RefCell::new(slice))));
+                    } else {
+                        self.push(V::Array(std::rc::Rc::new(std::cell::RefCell::new(
+                            Vec::new(),
+                        ))));
                     }
                 }
 
@@ -726,6 +913,8 @@ impl VM {
             V::I64(i) => *i != 0,
             V::F64(f) => *f != 0.0,
             V::Str(s) => !s.is_empty(),
+            V::Array(arr) => !arr.borrow().is_empty(),
+            V::Object(_) => true,
         }
     }
     fn vs(&self, v: &V) -> String {
@@ -735,6 +924,18 @@ impl VM {
             V::I64(i) => i.to_string(),
             V::F64(f) => f.to_string(),
             V::Str(s) => s.clone(),
+            V::Array(arr) => {
+                let items: Vec<String> = arr.borrow().iter().map(|v| self.vs(v)).collect();
+                format!("[{}]", items.join(", "))
+            }
+            V::Object(obj) => {
+                let entries: Vec<String> = obj
+                    .borrow()
+                    .iter()
+                    .map(|(k, v)| format!("{}: {}", k, self.vs(v)))
+                    .collect();
+                format!("{{{}}}", entries.join(", "))
+            }
         }
     }
     fn vt(&self, v: &V) -> &'static str {
@@ -744,6 +945,8 @@ impl VM {
             V::I64(_) => "int",
             V::F64(_) => "float",
             V::Str(_) => "string",
+            V::Array(_) => "array",
+            V::Object(_) => "object",
         }
     }
     fn pv(&self, v: &V) {
@@ -757,6 +960,44 @@ impl VM {
             (V::Bool(x), V::Bool(y)) => x == y,
             (V::Null, V::Null) => true,
             _ => false,
+        }
+    }
+    fn to_f64(&self, v: &V) -> f64 {
+        match v {
+            V::I64(i) => *i as f64,
+            V::F64(f) => *f,
+            V::Bool(b) => {
+                if *b {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+            _ => 0.0,
+        }
+    }
+    fn vcmp_lt(&self, a: &V, b: &V) -> bool {
+        match (a, b) {
+            (V::I64(x), V::I64(y)) => x < y,
+            _ => self.to_f64(a) < self.to_f64(b),
+        }
+    }
+    fn vcmp_le(&self, a: &V, b: &V) -> bool {
+        match (a, b) {
+            (V::I64(x), V::I64(y)) => x <= y,
+            _ => self.to_f64(a) <= self.to_f64(b),
+        }
+    }
+    fn vcmp_gt(&self, a: &V, b: &V) -> bool {
+        match (a, b) {
+            (V::I64(x), V::I64(y)) => x > y,
+            _ => self.to_f64(a) > self.to_f64(b),
+        }
+    }
+    fn vcmp_ge(&self, a: &V, b: &V) -> bool {
+        match (a, b) {
+            (V::I64(x), V::I64(y)) => x >= y,
+            _ => self.to_f64(a) >= self.to_f64(b),
         }
     }
     fn ri64(&mut self) -> i64 {

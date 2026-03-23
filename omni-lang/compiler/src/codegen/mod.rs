@@ -26,6 +26,7 @@ pub mod opt;
 pub mod optimizer;
 pub mod optimizing_jit;
 pub mod ovm;
+pub mod ovm_direct;
 pub mod python_buffer;
 pub mod python_interop;
 pub mod self_hosting;

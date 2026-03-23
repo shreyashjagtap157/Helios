@@ -849,18 +849,29 @@ impl IrGenerator {
             self.gen_statement(stmt, &mut instructions, &mut blocks, &mut current_block);
         }
 
-        // Ensure we have a terminator
-        let terminator = if instructions.is_empty() {
-            IrTerminator::Return(None)
-        } else {
-            IrTerminator::Return(None)
-        };
+        // Ensure we have a terminator — only add ret void if the last block doesn't have one
+        let needs_trailing_return = blocks
+            .last()
+            .map(|b| matches!(b.terminator, IrTerminator::Return(None)))
+            .unwrap_or(true)
+            && instructions.is_empty();
 
-        blocks.push(IrBlock {
-            label: current_block,
-            instructions,
-            terminator,
-        });
+        if !instructions.is_empty() {
+            // There are instructions without a terminator — add ret void
+            blocks.push(IrBlock {
+                label: current_block,
+                instructions,
+                terminator: IrTerminator::Return(None),
+            });
+        } else if blocks.is_empty() {
+            // Empty function — add a ret void block
+            blocks.push(IrBlock {
+                label: "entry".to_string(),
+                instructions: Vec::new(),
+                terminator: IrTerminator::Return(None),
+            });
+        }
+        // If the last block already has a Return(Some(...)) terminator, leave it as-is
 
         IrFunction {
             name: f.name,
@@ -1237,6 +1248,34 @@ impl IrGenerator {
             TypedStatement::Expr(expr) => {
                 self.gen_expr(expr, instructions);
             }
+            TypedStatement::Pass => {} // No-op
+            TypedStatement::Yield(expr) => {
+                if let Some(e) = expr {
+                    let val = self.gen_expr(e, instructions);
+                    instructions.push(IrInstruction::Store {
+                        ptr: "$yield_val".into(),
+                        value: val,
+                    });
+                }
+            }
+            TypedStatement::Spawn(expr) => {
+                let func = self.gen_expr(expr, instructions);
+                if let IrValue::Var(name) = func {
+                    instructions.push(IrInstruction::AsyncSpawn {
+                        dest: self.fresh_temp(),
+                        func: name,
+                        args: vec![],
+                    });
+                }
+            }
+            TypedStatement::Select { arms } => {
+                // Lower select to first arm body as fallback
+                if let Some(arm) = arms.first() {
+                    for s in &arm.body {
+                        self.gen_statement(s, instructions, blocks, current_block);
+                    }
+                }
+            }
         }
     }
 
@@ -1504,6 +1543,61 @@ impl IrGenerator {
                     });
                 }
                 IrValue::Var(dest)
+            }
+            // New expression variants — generate IR fallback
+            TypedExprKind::Range { start, end, .. } => {
+                let s = start
+                    .as_ref()
+                    .map(|e| self.gen_expr(e, instructions))
+                    .unwrap_or(IrValue::Const(IrConst::Int(0)));
+                let _e = end.as_ref().map(|e| self.gen_expr(e, instructions));
+                s // Return start value as fallback
+            }
+            TypedExprKind::Lambda { body, .. } => self.gen_expr(body, instructions),
+            TypedExprKind::Tuple(elems) => {
+                let dest = self.fresh_temp();
+                let elem_vals: Vec<_> = elems
+                    .iter()
+                    .map(|e| self.gen_expr(e, instructions))
+                    .collect();
+                let _ = elem_vals;
+                IrValue::Var(dest)
+            }
+            TypedExprKind::Await(inner) => {
+                let val = self.gen_expr(inner, instructions);
+                let future_name = match &val {
+                    IrValue::Var(n) => n.clone(),
+                    _ => "$await".into(),
+                };
+                instructions.push(IrInstruction::AsyncAwait {
+                    dest: Some(self.fresh_temp()),
+                    future: future_name,
+                });
+                val
+            }
+            TypedExprKind::None => IrValue::Const(IrConst::Null),
+            TypedExprKind::Some(inner) => self.gen_expr(inner, instructions),
+            TypedExprKind::Ok(inner) => self.gen_expr(inner, instructions),
+            TypedExprKind::Err(inner) => self.gen_expr(inner, instructions),
+            TypedExprKind::If {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                let _cond = self.gen_expr(condition, instructions);
+                let then_val = self.gen_expr(then_expr, instructions);
+                let _else_val = self.gen_expr(else_expr, instructions);
+                then_val
+            }
+            TypedExprKind::Match {
+                expr: match_expr,
+                arms,
+            } => {
+                let val = self.gen_expr(match_expr, instructions);
+                if let Some((_, body)) = arms.first() {
+                    let _ = self.gen_expr(body, instructions);
+                }
+                val
             }
         }
     }

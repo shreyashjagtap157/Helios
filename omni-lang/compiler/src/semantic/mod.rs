@@ -76,6 +76,9 @@ pub enum SemanticError {
 
     #[error("Generic error: {0}")]
     GenericError(String),
+    #[error("Unsupported construct: {0}")]
+    UnsupportedConstruct(String),
+
     #[error("Custom error: {message}")]
     NewError { message: String },
 }
@@ -399,6 +402,12 @@ pub enum TypedStatement {
     Break,
     Continue,
     Expr(TypedExpr),
+    Pass,
+    Yield(Option<TypedExpr>),
+    Spawn(Box<TypedExpr>),
+    Select {
+        arms: Vec<TypedSelectArm>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -407,15 +416,23 @@ pub struct TypedExpr {
     pub ty: Type,
 }
 
+/// Select arm for channel operations (typed)
+#[derive(Debug, Clone)]
+pub struct TypedSelectArm {
+    pub pattern: Pattern,
+    pub channel_op: TypedExpr,
+    pub body: Vec<TypedStatement>,
+}
+
 impl TypedExpr {
     /// Determines if the expression is a valid lvalue (can appear on the left-hand side of an assignment).
     pub fn is_lvalue(&self) -> bool {
-        match self.kind {
-            TypedExprKind::Identifier(_) => true, // Variables are valid lvalues
-            TypedExprKind::Field(_, _) => true,   // Struct fields are valid lvalues
-            TypedExprKind::Index(_, _) => true,   // Array indexing is a valid lvalue
-            TypedExprKind::Deref(_) => true,      // Dereferencing is a valid lvalue
-            _ => false,                           // Other expressions are not valid lvalues
+        match &self.kind {
+            TypedExprKind::Identifier(_) => true,
+            TypedExprKind::Field(_, _) => true,
+            TypedExprKind::Index(_, _) => true,
+            TypedExprKind::Deref(_) => true,
+            _ => false,
         }
     }
 }
@@ -444,6 +461,32 @@ pub enum TypedExprKind {
         fields: Vec<(String, TypedExpr)>,
     },
     Array(Vec<TypedExpr>),
+    // New variants for full language support
+    Range {
+        start: Option<Box<TypedExpr>>,
+        end: Option<Box<TypedExpr>>,
+        inclusive: bool,
+    },
+    Lambda {
+        params: Vec<(String, Type)>,
+        body: Box<TypedExpr>,
+        return_type: Type,
+    },
+    Tuple(Vec<TypedExpr>),
+    Await(Box<TypedExpr>),
+    None,
+    Some(Box<TypedExpr>),
+    Ok(Box<TypedExpr>),
+    Err(Box<TypedExpr>),
+    If {
+        condition: Box<TypedExpr>,
+        then_expr: Box<TypedExpr>,
+        else_expr: Box<TypedExpr>,
+    },
+    Match {
+        expr: Box<TypedExpr>,
+        arms: Vec<(Pattern, TypedExpr)>,
+    },
 }
 
 /// The main semantic analyzer
@@ -1934,10 +1977,33 @@ impl Analyzer {
                 let typed_expr = self.analyze_expression(expr)?;
                 Ok(TypedStatement::Expr(typed_expr))
             }
-            _ => Ok(TypedStatement::Expr(TypedExpr {
-                kind: TypedExprKind::Literal(Literal::Bool(false)),
-                ty: Type::Bool,
-            })),
+            Statement::Pass => Ok(TypedStatement::Pass),
+            Statement::Yield(expr) => {
+                let typed_expr = expr
+                    .as_ref()
+                    .map(|e| self.analyze_expression(e))
+                    .transpose()?;
+                Ok(TypedStatement::Yield(typed_expr))
+            }
+            Statement::Spawn(expr) => {
+                let typed_expr = self.analyze_expression(expr)?;
+                Ok(TypedStatement::Spawn(Box::new(typed_expr)))
+            }
+            Statement::Select { arms } => {
+                let mut typed_arms = Vec::new();
+                for arm in arms {
+                    let typed_channel = self.analyze_expression(&arm.channel_op)?;
+                    self.push_scope();
+                    let typed_body = self.analyze_block(&arm.body)?;
+                    self.pop_scope()?;
+                    typed_arms.push(TypedSelectArm {
+                        pattern: arm.pattern.clone(),
+                        channel_op: typed_channel,
+                        body: typed_body,
+                    });
+                }
+                Ok(TypedStatement::Select { arms: typed_arms })
+            }
         }
     }
 
@@ -2112,10 +2178,207 @@ impl Analyzer {
                     ty: Type::Array(Box::new(elem_ty), None),
                 })
             }
-            _ => Ok(TypedExpr {
-                kind: TypedExprKind::Literal(Literal::Bool(false)),
-                ty: Type::Bool,
+            Expression::Range { start, end, inclusive } => {
+                let typed_start = start
+                    .as_ref()
+                    .map(|e| self.analyze_expression(e).map(Box::new))
+                    .transpose()?;
+                let typed_end = end
+                    .as_ref()
+                    .map(|e| self.analyze_expression(e).map(Box::new))
+                    .transpose()?;
+                let elem_ty = typed_start
+                    .as_ref()
+                    .map(|e| e.ty.clone())
+                    .or_else(|| typed_end.as_ref().map(|e| e.ty.clone()))
+                    .unwrap_or(Type::I64);
+                Ok(TypedExpr {
+                    kind: TypedExprKind::Range {
+                        start: typed_start,
+                        end: typed_end,
+                        inclusive: *inclusive,
+                    },
+                    ty: Type::Array(Box::new(elem_ty), None),
+                })
+            }
+            Expression::Lambda { params, body } => {
+                self.push_scope();
+                let mut typed_params = Vec::new();
+                for p in params {
+                    let p_ty = match &p.ty {
+                        Type::Named(name) if name == "_" => Type::Named("_".into()),
+                        other => other.clone(),
+                    };
+                    self.define_symbol(p.name.clone(), p_ty.clone(), false)?;
+                    typed_params.push((p.name.clone(), p_ty));
+                }
+                let typed_body = self.analyze_expression(body)?;
+                let ret_ty = typed_body.ty.clone();
+                self.pop_scope()?;
+                let param_types: Vec<Type> = typed_params.iter().map(|(_, t)| t.clone()).collect();
+                Ok(TypedExpr {
+                    kind: TypedExprKind::Lambda {
+                        params: typed_params,
+                        body: Box::new(typed_body),
+                        return_type: ret_ty.clone(),
+                    },
+                    ty: Type::Function(param_types, Some(Box::new(ret_ty.clone()))),
+                })
+            }
+            Expression::Tuple(elements) => {
+                let typed_elems: Result<Vec<_>, _> = elements
+                    .iter()
+                    .map(|e| self.analyze_expression(e))
+                    .collect();
+                let typed_elems = typed_elems?;
+                let elem_types: Vec<Type> = typed_elems.iter().map(|e| e.ty.clone()).collect();
+                Ok(TypedExpr {
+                    kind: TypedExprKind::Tuple(typed_elems),
+                    ty: Type::Tuple(elem_types),
+                })
+            }
+            Expression::Await(inner) => {
+                let typed_inner = self.analyze_expression(inner)?;
+                let inner_ty = match &typed_inner.ty {
+                    Type::Generic(name, _) if name == "Future" => {
+                        Type::Named("awaited".into())
+                    }
+                    other => other.clone(),
+                };
+                Ok(TypedExpr {
+                    kind: TypedExprKind::Await(Box::new(typed_inner)),
+                    ty: inner_ty,
+                })
+            }
+            Expression::None => Ok(TypedExpr {
+                kind: TypedExprKind::None,
+                ty: Type::Nullable(Box::new(Type::Named("_".into()))),
             }),
+            Expression::Some(inner) => {
+                let typed_inner = self.analyze_expression(inner)?;
+                let inner_ty = typed_inner.ty.clone();
+                Ok(TypedExpr {
+                    kind: TypedExprKind::Some(Box::new(typed_inner)),
+                    ty: Type::Nullable(Box::new(inner_ty)),
+                })
+            }
+            Expression::Ok(inner) => {
+                let typed_inner = self.analyze_expression(inner)?;
+                let ok_ty = typed_inner.ty.clone();
+                Ok(TypedExpr {
+                    kind: TypedExprKind::Ok(Box::new(typed_inner)),
+                    ty: Type::Generic("Result".into(), vec![ok_ty, Type::Named("_".into())]),
+                })
+            }
+            Expression::Err(inner) => {
+                let typed_inner = self.analyze_expression(inner)?;
+                let err_ty = typed_inner.ty.clone();
+                Ok(TypedExpr {
+                    kind: TypedExprKind::Err(Box::new(typed_inner)),
+                    ty: Type::Generic("Result".into(), vec![Type::Named("_".into()), err_ty]),
+                })
+            }
+            Expression::Shared(inner) => {
+                let typed_inner = self.analyze_expression(inner)?;
+                let inner_ty = typed_inner.ty.clone();
+                Ok(TypedExpr {
+                    kind: typed_inner.kind,
+                    ty: Type::WithOwnership(Box::new(inner_ty), Ownership::Shared),
+                })
+            }
+            Expression::Own(inner) => {
+                let typed_inner = self.analyze_expression(inner)?;
+                let inner_ty = typed_inner.ty.clone();
+                Ok(TypedExpr {
+                    kind: typed_inner.kind,
+                    ty: Type::WithOwnership(Box::new(inner_ty), Ownership::Owned),
+                })
+            }
+            Expression::If {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                let typed_cond = self.analyze_expression(condition)?;
+                let typed_then = self.analyze_expression(then_expr)?;
+                let typed_else = match else_expr {
+                    Some(e) => self.analyze_expression(e)?,
+                    None => TypedExpr {
+                        kind: TypedExprKind::Literal(Literal::Null),
+                        ty: Type::Named("Null".into()),
+                    },
+                };
+                let result_ty = typed_then.ty.clone();
+                Ok(TypedExpr {
+                    kind: TypedExprKind::If {
+                        condition: Box::new(typed_cond),
+                        then_expr: Box::new(typed_then),
+                        else_expr: Box::new(typed_else),
+                    },
+                    ty: result_ty,
+                })
+            }
+            Expression::Match { expr: match_expr, arms } => {
+                let typed_expr = self.analyze_expression(match_expr)?;
+                let mut typed_arms = Vec::new();
+                for arm in arms {
+                    self.push_scope();
+                    self.bind_pattern(&arm.pattern, &typed_expr.ty)?;
+                    let typed_body = match &arm.body {
+                        MatchBody::Block(b) => {
+                            let stmts = self.analyze_block(b)?;
+                            if stmts.len() == 1 {
+                                if let TypedStatement::Expr(e) = &stmts[0] {
+                                    e.clone()
+                                } else {
+                                    TypedExpr {
+                                        kind: TypedExprKind::Literal(Literal::Null),
+                                        ty: Type::Named("Null".into()),
+                                    }
+                                }
+                            } else {
+                                TypedExpr {
+                                    kind: TypedExprKind::Literal(Literal::Null),
+                                    ty: Type::Named("Null".into()),
+                                }
+                            }
+                        }
+                        MatchBody::Expr(e) => self.analyze_expression(e)?,
+                    };
+                    self.pop_scope()?;
+                    typed_arms.push((arm.pattern.clone(), typed_body));
+                }
+                let arm_ty = typed_arms
+                    .first()
+                    .map(|(_, e)| e.ty.clone())
+                    .unwrap_or(Type::Named("_".into()));
+                Ok(TypedExpr {
+                    kind: TypedExprKind::Match {
+                        expr: Box::new(typed_expr),
+                        arms: typed_arms,
+                    },
+                    ty: arm_ty,
+                })
+            }
+            Expression::Path(module, item) => {
+                // Resolve as a qualified call: Module::item → treat as identifier
+                let name = format!("{}::{}", 
+                    match &**module {
+                        Expression::Identifier(n) => n.clone(),
+                        _ => "?".into(),
+                    },
+                    item
+                );
+                Ok(TypedExpr {
+                    kind: TypedExprKind::Identifier(name),
+                    ty: Type::Named("_".into()),
+                })
+            }
+            Expression::ListComprehension { .. } | Expression::Generator { .. } => {
+                Err(SemanticError::UnsupportedConstruct(
+                    "List comprehensions and generators are not yet supported in the typed pipeline".into()
+                ))
+            }
         }
     }
 

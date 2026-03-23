@@ -195,6 +195,8 @@ pub enum Type {
     HigherRanked {
         bound: String,
     }, // for<'a> syntax
+    Tuple(Vec<Type>),          // (T1, T2, ...)
+    Nullable(Box<Type>),       // T?
 }
 
 impl PartialEq for Type {
