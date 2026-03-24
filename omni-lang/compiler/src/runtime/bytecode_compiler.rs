@@ -236,8 +236,17 @@ impl BytecodeCompiler {
     pub fn compile_statement(&mut self, stmt: &Statement) -> Result<()> {
         match stmt {
             // -- let binding ---------------------------------------------------
-            Statement::Let { name, value, .. } => {
+            Statement::Let {
+                name,
+                value: Some(value),
+                ..
+            } => {
                 self.compile_expression(value)?;
+                let slot = self.declare_local(name);
+                self.emit(OpCode::StoreLocal(slot));
+            }
+            Statement::Let { name, .. } => {
+                self.emit(OpCode::Push(Value::Null));
                 let slot = self.declare_local(name);
                 self.emit(OpCode::StoreLocal(slot));
             }
@@ -425,7 +434,7 @@ impl BytecodeCompiler {
             }
 
             // -- break ---------------------------------------------------------
-            Statement::Break => {
+            Statement::Break(_) => {
                 let ph = self.emit_placeholder();
                 if let Some((_start, ref mut patches)) = self.loop_stack.last_mut() {
                     patches.push(ph);
@@ -474,6 +483,10 @@ impl BytecodeCompiler {
                             self.emit(OpCode::Push(Value::String(name.clone())));
                             self.emit(OpCode::Eq);
                             next_arm_ph = self.emit_jump_if_not_placeholder();
+                        }
+                        Pattern::Or(_) => {
+                            // OR patterns: always match for now
+                            next_arm_ph = usize::MAX;
                         }
                     }
 
@@ -767,6 +780,10 @@ impl BytecodeCompiler {
                             self.emit(OpCode::Eq);
                             next_arm_ph = self.emit_jump_if_not_placeholder();
                         }
+                        Pattern::Or(_) => {
+                            // OR patterns: always match for now
+                            next_arm_ph = usize::MAX;
+                        }
                     }
 
                     match &arm.body {
@@ -986,7 +1003,7 @@ mod tests {
             name: "x".into(),
             mutable: false,
             ty: None,
-            value: Expression::Literal(Literal::Int(42)),
+            value: Some(Expression::Literal(Literal::Int(42))),
         }]));
         let instrs = main_instrs(&m);
         assert!(instrs.contains(&OpCode::Push(Value::Int(42))));
@@ -1122,7 +1139,7 @@ mod tests {
                     Statement::If {
                         condition: Expression::Literal(Literal::Bool(true)),
                         then_block: Block {
-                            statements: vec![Statement::Break],
+                            statements: vec![Statement::Break(None)],
                         },
                         else_block: None,
                     },
@@ -1150,7 +1167,7 @@ mod tests {
                 name: "a".into(),
                 mutable: false,
                 ty: None,
-                value: Expression::Literal(Literal::Int(1)),
+                value: Some(Expression::Literal(Literal::Int(1))),
             },
             Statement::If {
                 condition: Expression::Literal(Literal::Bool(true)),
@@ -1159,7 +1176,7 @@ mod tests {
                         name: "b".into(),
                         mutable: false,
                         ty: None,
-                        value: Expression::Literal(Literal::Int(2)),
+                        value: Some(Expression::Literal(Literal::Int(2))),
                     }],
                 },
                 else_block: None,
@@ -1242,7 +1259,7 @@ mod tests {
                 name: "x".into(),
                 mutable: false,
                 ty: None,
-                value: Expression::Literal(Literal::Int(10)),
+                value: Some(Expression::Literal(Literal::Int(10))),
             },
             Statement::Return(Some(Expression::Binary(
                 Box::new(Expression::Identifier("x".into())),

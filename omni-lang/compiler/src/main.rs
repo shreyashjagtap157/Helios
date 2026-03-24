@@ -117,6 +117,14 @@ struct Args {
     #[arg(long)]
     resolver_log: Option<PathBuf>,
 
+    /// Dump parsed AST (before semantic analysis)
+    #[arg(long)]
+    emit_ast: bool,
+
+    /// Dump typed AST (after semantic analysis)
+    #[arg(long)]
+    emit_typed_ast: bool,
+
     /// Arguments to pass to the program when using --run
     #[arg(last = true)]
     program_args: Vec<String>,
@@ -312,8 +320,11 @@ fn main() -> Result<()> {
 }
 
 fn compile(source: &str, args: &Args) -> Result<()> {
-    // Parse module mode
-    let module_mode: modes::ModuleMode = args.mode.parse().map_err(|e| anyhow::anyhow!("{}", e))?;
+    // Validate --mode early with a clear error
+    let module_mode: modes::ModuleMode = args
+        .mode
+        .parse()
+        .map_err(|e: String| anyhow::anyhow!("{}", e))?;
 
     // Run module checker
     let mut checker = modes::ModuleChecker::new(module_mode);
@@ -366,6 +377,25 @@ fn compile(source: &str, args: &Args) -> Result<()> {
     monitor::update_heartbeat();
     let ast = parser::parse(tokens)?;
 
+    // Phase 2.0: Import resolution
+    log::debug!("Phase 2.0: Import resolution");
+    let ast = resolve_imports(ast, &args.input)?;
+
+    // --emit-ast: dump parsed AST and exit
+    if args.emit_ast {
+        let ast_path = args
+            .output
+            .clone()
+            .unwrap_or_else(|| args.input.with_extension("ast.txt"));
+        let dump = format!("{:#?}", ast);
+        if let Some(parent) = ast_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::write(&ast_path, &dump)?;
+        log::info!("Wrote parsed AST to {:?}", ast_path);
+        return Ok(());
+    }
+
     // Phase 2.1: Memory zone enforcement
     log::debug!("Phase 2.1: Memory zone enforcement (mode: {})", module_mode);
     let mut mz_checker = modes::MemoryZoneChecker::new(module_mode);
@@ -380,6 +410,7 @@ fn compile(source: &str, args: &Args) -> Result<()> {
             _ => {}
         }
     }
+
     if !mz_checker.is_valid() {
         for v in mz_checker.validate() {
             eprintln!("warning[E007]: memory zone: {}", v);
@@ -429,6 +460,21 @@ fn compile(source: &str, args: &Args) -> Result<()> {
     monitor::update_heartbeat();
     let typed_ast = semantic::analyze(ast)?;
 
+    // --emit-typed-ast: dump typed AST and exit
+    if args.emit_typed_ast {
+        let typed_path = args
+            .output
+            .clone()
+            .unwrap_or_else(|| args.input.with_extension("typed.ast.txt"));
+        let dump = format!("{:#?}", typed_ast);
+        if let Some(parent) = typed_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::write(&typed_path, &dump)?;
+        log::info!("Wrote typed AST to {:?}", typed_path);
+        return Ok(());
+    }
+
     // Determine output path early (needed by both OVM direct and IR paths)
     let output_path = args
         .output
@@ -468,55 +514,116 @@ fn compile(source: &str, args: &Args) -> Result<()> {
 
     // DWARF Emission
     if args.debug_info {
-        log::info!("Generating DWARF v5 debug info...");
+        eprintln!(
+            "warning: --debug-info / -g is accepted but DWARF generation is not yet implemented"
+        );
+        log::warn!("DWARF debug info generation not yet implemented; flag has no effect");
     }
 
     log::info!("Successfully compiled to {:?}", output_path);
     Ok(())
 }
 
+/// Resolve import declarations: look up each imported module's `.omni` file
+/// relative to the current source file, parse it, and inline its items.
+///
+/// Import path resolution rules (O-092):
+///   `import foo`       → `<dir_of_current_file>/foo.omni`
+///   `import std::io`   → `<dir_of_current_file>/std/io.omni`
+///   `import foo as f`  → same file lookup, alias is kept on the ImportDecl
+///
+/// If the file does not exist, a warning is emitted and the import is left
+/// as-is (unresolved) so downstream phases can surface the issue.
+fn resolve_imports(
+    module: parser::ast::Module,
+    current_file: &std::path::Path,
+) -> Result<parser::ast::Module> {
+    use parser::ast::{ImportDecl, Item, Module};
+
+    let base_dir = current_file
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+
+    let mut resolved_items: Vec<Item> = Vec::new();
+
+    for item in module.items {
+        match &item {
+            Item::Import(ImportDecl { path, alias }) => {
+                // Convert path segments to file path: ["std", "io"] → "std/io.omni"
+                let relative = path.join("/");
+                let file_path = base_dir.join(format!("{}.omni", relative));
+
+                if file_path.exists() {
+                    log::debug!("Resolving import {:?} → {:?}", path, file_path);
+                    match std::fs::read_to_string(&file_path) {
+                        Ok(src) => match lexer::tokenize(&src) {
+                            Ok(tokens) => match parser::parse(tokens) {
+                                Ok(mut imported) => {
+                                    // Recursively resolve imports in the imported module
+                                    imported = resolve_imports(imported, &file_path)?;
+                                    resolved_items.extend(imported.items);
+                                }
+                                Err(e) => {
+                                    eprintln!(
+                                        "warning: failed to parse imported module {:?}: {}",
+                                        file_path, e
+                                    );
+                                    // Keep the unresolved import so downstream knows
+                                    resolved_items.push(item);
+                                }
+                            },
+                            Err(e) => {
+                                eprintln!(
+                                    "warning: failed to tokenize imported module {:?}: {}",
+                                    file_path, e
+                                );
+                                resolved_items.push(item);
+                            }
+                        },
+                        Err(e) => {
+                            eprintln!(
+                                "warning: failed to read imported module {:?}: {}",
+                                file_path, e
+                            );
+                            resolved_items.push(item);
+                        }
+                    }
+                } else {
+                    // File not found — warn but don't fail compilation
+                    if let Some(alias) = alias {
+                        eprintln!(
+                            "warning: unresolved import '{}' (as '{}'): file not found {:?}",
+                            relative, alias, file_path
+                        );
+                    } else {
+                        eprintln!(
+                            "warning: unresolved import '{}': file not found {:?}",
+                            relative, file_path
+                        );
+                    }
+                    log::warn!(
+                        "Unresolved import: {:?} — file not found at {:?}",
+                        path,
+                        file_path
+                    );
+                    resolved_items.push(item);
+                }
+            }
+            _ => resolved_items.push(item),
+        }
+    }
+
+    Ok(Module {
+        items: resolved_items,
+    })
+}
+
 /// Determine whether a type error is a "hard" (fatal) error.
 ///
-/// Hard errors are **explicit type-annotation mismatches** where the user
-/// wrote `let x: Int = "hello"` and the initializer's type clearly
-/// disagrees with the annotation.  Everything else is demoted to a
-/// warning because the type-inference engine was never calibrated for
-/// Omni's dynamic-flavour features (string concat with `+`, implicit
-/// conversions, built-in functions not in the environment, etc.).
+/// Delegates to the canonical implementation in `semantic::type_inference`.
+/// See that module's documentation for the full classification rules (O-097).
 fn is_hard_type_error(err: &semantic::type_inference::TypeError) -> bool {
-    let msg = &err.message;
-
-    // Unresolved type variables — inference couldn't determine the type
-    if msg.contains("?T") {
-        return false;
-    }
-
-    // Undefined variable / function — likely a built-in not registered
-    if msg.contains("Undefined variable") || msg.contains("Undefined function") {
-        return false;
-    }
-
-    // "<error>" is the error-recovery placeholder type
-    if msg.contains("<error>") {
-        return false;
-    }
-
-    // "Expected numeric type" — Omni supports string concat with +,
-    // list concat, etc.  The inference engine doesn't model these.
-    if msg.contains("Expected numeric type") {
-        return false;
-    }
-
-    // Only flag explicit annotation mismatches as hard errors:
-    // "Type mismatch: X vs Y – let/var binding '…': declared type must match initializer"
-    if msg.contains("Type mismatch") && msg.contains("declared type must match initializer") {
-        return true;
-    }
-
-    // All other type-mismatch or constraint errors are soft
-    // (function call argument mismatches, return type mismatches, etc.
-    //  may be false positives due to missing built-in signatures).
-    false
+    semantic::type_inference::is_hard_type_error(err)
 }
 
 /// Walk a statement tree and check memory operations against the zone checker.
@@ -528,7 +635,9 @@ fn check_memory_ops_stmt(
     use parser::ast::Statement;
 
     match stmt {
-        Statement::Let { value, .. }
+        Statement::Let {
+            value: Some(value), ..
+        }
         | Statement::Var {
             value: Some(value), ..
         } => {

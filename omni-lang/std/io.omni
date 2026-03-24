@@ -1,5 +1,10 @@
 // Omni Standard Library: Input/Output
 // File access, streams, and buffers
+//
+// NOTE: This file uses #[cfg(unix)] and #[cfg(windows)] conditional
+// compilation attributes which are NOT yet implemented by the Omni compiler.
+// The platform-specific extern blocks and code paths will produce errors
+// until #[cfg] support is added. See ISSUES.md O-081.
 
 module std::io
 

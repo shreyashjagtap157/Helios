@@ -9,6 +9,13 @@
 //! - Trait bound verification and resolution
 //! - Generic monomorphization
 //! - Const evaluation for compile-time computation
+//!
+//! ## Error Handling Model (O-024)
+//!
+//! Semantic errors are classified as hard (fatal) or soft (warning) via
+//! `is_hard_type_error` in `type_inference.rs`. See that function's documentation
+//! for the full classification rules. Hard errors abort compilation; soft errors
+//! are demoted to warnings.
 
 pub mod autograd;
 pub mod borrow_check;
@@ -113,6 +120,9 @@ fn types_equal(a: &Type, b: &Type) -> bool {
         | (Type::Bool, Type::Bool)
         | (Type::Str, Type::Str)
         | (Type::SelfOwned, Type::SelfOwned) => true,
+
+        // Type::Any matches any type (O-010)
+        (Type::Any, _) | (_, Type::Any) => true,
 
         // Self references
         (Type::SelfRef { mutable: m1 }, Type::SelfRef { mutable: m2 }) => m1 == m2,
@@ -562,26 +572,52 @@ impl Analyzer {
     /// Register all builtin functions so they are available without imports
     fn register_builtins(&mut self) {
         let builtins: Vec<(&str, Type, bool)> = vec![
-            // I/O builtins
-            ("println", Type::Function(vec![Type::Str], None), false),
-            ("print", Type::Function(vec![Type::Str], None), false),
-            ("eprintln", Type::Function(vec![Type::Str], None), false),
-            ("eprint", Type::Function(vec![Type::Str], None), false),
+            // I/O builtins — accept Any type (O-014)
+            ("println", Type::Function(vec![Type::Any], None), false),
+            ("print", Type::Function(vec![Type::Any], None), false),
+            ("eprintln", Type::Function(vec![Type::Any], None), false),
+            ("eprint", Type::Function(vec![Type::Any], None), false),
             // String formatting
             (
                 "format",
-                Type::Function(vec![Type::Str], Some(Box::new(Type::Str))),
+                Type::Function(vec![Type::Any], Some(Box::new(Type::Str))),
                 false,
             ),
-            // Type introspection
+            // Type introspection — use type_of to match VM (O-016)
             (
-                "typeof",
-                Type::Function(vec![Type::Named("_".into())], Some(Box::new(Type::Str))),
+                "type_of",
+                Type::Function(vec![Type::Any], Some(Box::new(Type::Str))),
                 false,
             ),
             (
                 "sizeof",
-                Type::Function(vec![Type::Named("_".into())], Some(Box::new(Type::I64))),
+                Type::Function(vec![Type::Any], Some(Box::new(Type::I64))),
+                false,
+            ),
+            // Missing builtins (O-002)
+            (
+                "len",
+                Type::Function(vec![Type::Any], Some(Box::new(Type::I64))),
+                false,
+            ),
+            (
+                "int",
+                Type::Function(vec![Type::Any], Some(Box::new(Type::I64))),
+                false,
+            ),
+            (
+                "float",
+                Type::Function(vec![Type::Any], Some(Box::new(Type::F64))),
+                false,
+            ),
+            (
+                "sqrt",
+                Type::Function(vec![Type::Any], Some(Box::new(Type::F64))),
+                false,
+            ),
+            (
+                "abs",
+                Type::Function(vec![Type::Any], Some(Box::new(Type::I64))),
                 false,
             ),
             // Process/runtime
@@ -594,19 +630,19 @@ impl Analyzer {
                 false,
             ),
             ("exit", Type::Function(vec![Type::I32], None), false),
-            // Assertions
-            ("assert", Type::Function(vec![Type::Bool], None), false),
+            // Assertions — accept Any type, VM checks truthiness (O-033)
+            ("assert", Type::Function(vec![Type::Any], None), false),
             (
                 "assert_eq",
-                Type::Function(vec![Type::Named("_".into()), Type::Named("_".into())], None),
+                Type::Function(vec![Type::Any, Type::Any], None),
                 false,
             ),
             // Debug
             (
                 "dbg",
                 Type::Function(
-                    vec![Type::Named("_".into())],
-                    Some(Box::new(Type::Named("_".into()))),
+                    vec![Type::Any],
+                    Some(Box::new(Type::Any)),
                 ),
                 false,
             ),
@@ -1226,6 +1262,84 @@ impl Analyzer {
         None
     }
 
+    /// Resolve a method's return type from impl blocks
+    fn resolve_method_return_type(&self, receiver_ty: &Type, method: &str) -> Type {
+        let type_name = match receiver_ty {
+            Type::Named(n) => n.clone(),
+            Type::WithOwnership(inner, _) => {
+                if let Type::Named(n) = inner.as_ref() {
+                    n.clone()
+                } else {
+                    return Type::Named("_".into());
+                }
+            }
+            _ => return Type::Named("_".into()),
+        };
+        // Look up method in registered impl methods (via function_sigs or trait methods)
+        if let Some(impls) = self.type_impls.get(&type_name) {
+            for trait_name in impls {
+                if let Some(trait_info) = self.traits.get(trait_name) {
+                    for m in &trait_info.methods {
+                        if m.name == method {
+                            return m.return_type.clone();
+                        }
+                    }
+                }
+            }
+        }
+        // Check struct-defined methods via generic_functions
+        if let Some(func) = self
+            .generic_functions
+            .get(&format!("{}.{}", type_name, method))
+        {
+            return func.return_type.clone().unwrap_or(Type::Named("()".into()));
+        }
+        Type::Named("_".into())
+    }
+
+    /// Resolve a field's type on a struct, or error if field doesn't exist
+    fn resolve_field_type(&self, obj_ty: &Type, field: &str) -> Result<Type, SemanticError> {
+        let type_name = match obj_ty {
+            Type::Named(n) => n.clone(),
+            Type::WithOwnership(inner, _) => {
+                if let Type::Named(n) = inner.as_ref() {
+                    n.clone()
+                } else {
+                    return Ok(Type::Named("_".into()));
+                }
+            }
+            _ => return Ok(Type::Named("_".into())),
+        };
+        if let Some(fields) = self.struct_layouts.get(&type_name) {
+            for (fname, ftype) in fields {
+                if fname == field {
+                    return Ok(ftype.clone());
+                }
+            }
+            return Err(SemanticError::UndefinedSymbol {
+                name: format!("{}.{}", type_name, field),
+            });
+        }
+        Ok(Type::Named("_".into()))
+    }
+
+    /// Check if a type is an integer type
+    fn is_integer_type(&self, ty: &Type) -> bool {
+        matches!(
+            ty,
+            Type::I8
+                | Type::I16
+                | Type::I32
+                | Type::I64
+                | Type::U8
+                | Type::U16
+                | Type::U32
+                | Type::U64
+                | Type::Usize
+                | Type::Isize
+        )
+    }
+
     /// Evaluate a constant expression at compile time
     fn eval_const(&self, expr: &Expression) -> Result<ConstValue, SemanticError> {
         match expr {
@@ -1344,18 +1458,11 @@ impl Analyzer {
             // Transform statements from the original function body
             for stmt in &generic_func.body.statements {
                 let transformed = stmt_sub.transform_statement(stmt);
-                // Simplified: Just convert statement to typed statement with basic typing
-                // In a full implementation, we'd run type checking again
-                match &transformed {
-                    Statement::Expression(expr) => {
-                        typed_body.push(TypedStatement::Expr(TypedExpr {
-                            kind: TypedExprKind::Literal(Literal::Int(0)),
-                            ty: Type::I64,
-                        }));
-                    }
-                    _ => {
-                        // Other statement types would need more complex handling
-                        debug!("Skipping statement type in monomorphization");
+                // Convert to typed statement via the semantic analyzer
+                match self.statement_to_typed(&transformed) {
+                    Ok(typed_stmt) => typed_body.push(typed_stmt),
+                    Err(e) => {
+                        debug!("Monomorphization: statement_to_typed failed: {:?}", e);
                     }
                 }
             }
@@ -1581,7 +1688,12 @@ impl Analyzer {
                     info!("Evaluating comptime block");
                     // Execute comptime statements
                     for stmt in &block.statements {
-                        if let Statement::Let { name, value, .. } = stmt {
+                        if let Statement::Let {
+                            name,
+                            value: Some(value),
+                            ..
+                        } = stmt
+                        {
                             if let Ok(val) = self.eval_const(value) {
                                 self.const_values.insert(name.clone(), val);
                             }
@@ -1812,7 +1924,15 @@ impl Analyzer {
                 ty,
                 value,
             } => {
-                let typed_value = self.analyze_expression(value)?;
+                let typed_value = if let Some(v) = value {
+                    self.analyze_expression(v)?
+                } else {
+                    let var_ty = ty.clone().unwrap_or(Type::I64);
+                    TypedExpr {
+                        kind: TypedExprKind::Literal(Literal::Null),
+                        ty: var_ty.clone(),
+                    }
+                };
                 let var_ty = ty.clone().unwrap_or(typed_value.ty.clone());
                 self.define_symbol(name.clone(), var_ty.clone(), *mutable)?;
                 Ok(TypedStatement::Let {
@@ -1867,6 +1987,12 @@ impl Analyzer {
                 })
             }
             Statement::Return(expr) => {
+                if self.current_function.is_none() {
+                    return Err(SemanticError::InvalidSyntax {
+                        line: 0,
+                        message: "return statement outside of function".to_string(),
+                    });
+                }
                 let typed_expr = expr
                     .as_ref()
                     .map(|e| self.analyze_expression(e))
@@ -1899,9 +2025,11 @@ impl Analyzer {
             Statement::For { var, iter, body } => {
                 let typed_iter = self.analyze_expression(iter)?;
                 self.push_scope();
+                self.loop_depth += 1;
                 // Infer element type from iterator
                 self.define_symbol(var.clone(), Type::Named("_".into()), false)?;
                 let typed_body = self.analyze_block(body)?;
+                self.loop_depth -= 1;
                 self.pop_scope()?;
                 Ok(TypedStatement::For {
                     var: var.clone(),
@@ -1912,7 +2040,9 @@ impl Analyzer {
             Statement::While { condition, body } => {
                 let typed_cond = self.analyze_expression(condition)?;
                 self.push_scope();
+                self.loop_depth += 1;
                 let typed_body = self.analyze_block(body)?;
+                self.loop_depth -= 1;
                 self.pop_scope()?;
                 Ok(TypedStatement::While {
                     condition: typed_cond,
@@ -1921,7 +2051,9 @@ impl Analyzer {
             }
             Statement::Loop { body } => {
                 self.push_scope();
+                self.loop_depth += 1;
                 let typed_body = self.analyze_block(body)?;
+                self.loop_depth -= 1;
                 self.pop_scope()?;
                 Ok(TypedStatement::Loop { body: typed_body })
             }
@@ -1931,7 +2063,7 @@ impl Analyzer {
                 // Check for exhaustiveness
                 let has_wildcard = arms
                     .iter()
-                    .any(|arm| matches!(arm.pattern, Pattern::Binding(ref n) if n == "_"));
+                    .any(|arm| matches!(arm.pattern, Pattern::Wildcard | Pattern::Binding(_)));
 
                 if !has_wildcard {
                     // For bool type, check if both true and false are covered
@@ -1971,7 +2103,7 @@ impl Analyzer {
                 let typed_inner = self.analyze_statement(inner)?;
                 Ok(TypedStatement::Defer(Box::new(typed_inner)))
             }
-            Statement::Break => Ok(TypedStatement::Break),
+            Statement::Break(_) => Ok(TypedStatement::Break),
             Statement::Continue => Ok(TypedStatement::Continue),
             Statement::Expression(expr) => {
                 let typed_expr = self.analyze_expression(expr)?;
@@ -2038,14 +2170,35 @@ impl Analyzer {
                 })
             }
             Expression::Identifier(name) => {
-                let sym = self.lookup_symbol(name)?;
-                if sym.borrow_state == BorrowState::Moved {
-                    return Err(SemanticError::MoveError { name: name.clone() });
+                match self.lookup_symbol(name) {
+                    Ok(sym) => {
+                        if sym.borrow_state == BorrowState::Moved {
+                            return Err(SemanticError::MoveError { name: name.clone() });
+                        }
+                        Ok(TypedExpr {
+                            kind: TypedExprKind::Identifier(name.clone()),
+                            ty: sym.ty.clone(),
+                        })
+                    }
+                    Err(_) => {
+                        // O-013: Check if it's a known struct constructor before erroring
+                        if self.struct_layouts.contains_key(name) {
+                            Ok(TypedExpr {
+                                kind: TypedExprKind::Identifier(name.clone()),
+                                ty: Type::Named(name.clone()),
+                            })
+                        } else if self.enum_variants.contains_key(name) {
+                            Ok(TypedExpr {
+                                kind: TypedExprKind::Identifier(name.clone()),
+                                ty: Type::Named(name.clone()),
+                            })
+                        } else {
+                            Err(SemanticError::UndefinedSymbol {
+                                name: name.clone(),
+                            })
+                        }
+                    }
                 }
-                Ok(TypedExpr {
-                    kind: TypedExprKind::Identifier(name.clone()),
-                    ty: sym.ty.clone(),
-                })
             }
             Expression::Binary(left, op, right) => {
                 let typed_left = self.analyze_expression(left)?;
@@ -2087,25 +2240,37 @@ impl Analyzer {
                 let typed_receiver = self.analyze_expression(receiver)?;
                 let typed_args: Result<Vec<_>, _> =
                     args.iter().map(|a| self.analyze_expression(a)).collect();
+                let typed_args = typed_args?;
+                // Look up the method's return type from impl blocks
+                let method_return_ty = self.resolve_method_return_type(&typed_receiver.ty, method);
                 Ok(TypedExpr {
                     kind: TypedExprKind::MethodCall {
                         receiver: Box::new(typed_receiver),
                         method: method.clone(),
-                        args: typed_args?,
+                        args: typed_args,
                     },
-                    ty: Type::Named("_".into()),
+                    ty: method_return_ty,
                 })
             }
             Expression::Field(obj, field) => {
                 let typed_obj = self.analyze_expression(obj)?;
+                // Validate field exists on struct type
+                let field_ty = self.resolve_field_type(&typed_obj.ty, field)?;
                 Ok(TypedExpr {
                     kind: TypedExprKind::Field(Box::new(typed_obj), field.clone()),
-                    ty: Type::Named("_".into()),
+                    ty: field_ty,
                 })
             }
             Expression::Index(arr, idx) => {
                 let typed_arr = self.analyze_expression(arr)?;
                 let typed_idx = self.analyze_expression(idx)?;
+                // Validate index is an integer type
+                if !self.is_integer_type(&typed_idx.ty) {
+                    return Err(SemanticError::TypeMismatch {
+                        expected: "integer type".to_string(),
+                        got: self.type_to_string(&typed_idx.ty),
+                    });
+                }
                 let elem_ty = match &typed_arr.ty {
                     Type::Array(inner, _) | Type::Slice(inner) => *inner.clone(),
                     _ => Type::Named("_".into()),
@@ -2399,6 +2564,10 @@ impl Analyzer {
             | BinaryOp::Or => Ok(Type::Bool),
             BinaryOp::Range => Ok(Type::Named("Range".into())),
             _ => {
+                // O-001: String + anything → String (concatenation)
+                if *op == BinaryOp::Add && (matches!(left, Type::Str) || matches!(right, Type::Str)) {
+                    return Ok(Type::Str);
+                }
                 // For arithmetic ops, return the "wider" type
                 if matches!(left, Type::F64) || matches!(right, Type::F64) {
                     Ok(Type::F64)
@@ -2592,21 +2761,76 @@ impl Analyzer {
         Ok(mangled)
     }
 
-    /// Helper to convert Statement to TypedStatement
+    /// Helper to convert Statement to TypedStatement for monomorphization
     fn statement_to_typed(&mut self, stmt: &Statement) -> Result<TypedStatement, SemanticError> {
         match stmt {
-            Statement::Let { name, value, .. } => {
+            Statement::Let {
+                name, ty, value, ..
+            } => {
+                let typed_value = if let Some(v) = value {
+                    self.analyze_expression(v)?
+                } else {
+                    let var_ty = ty.clone().unwrap_or(Type::I64);
+                    TypedExpr {
+                        kind: TypedExprKind::Literal(Literal::Null),
+                        ty: var_ty.clone(),
+                    }
+                };
+                let var_ty = ty.clone().unwrap_or(typed_value.ty.clone());
+                Ok(TypedStatement::Let {
+                    name: name.clone(),
+                    ty: var_ty,
+                    value: typed_value,
+                })
+            }
+            Statement::Var { name, ty, value } => {
+                let typed_value = value
+                    .as_ref()
+                    .map(|v| self.analyze_expression(v))
+                    .transpose()
+                    .ok()
+                    .flatten();
+                let var_ty = ty.clone().unwrap_or_else(|| {
+                    typed_value
+                        .as_ref()
+                        .map(|v| v.ty.clone())
+                        .unwrap_or(Type::I64)
+                });
+                let default_value = typed_value.unwrap_or_else(|| TypedExpr {
+                    kind: TypedExprKind::Literal(Literal::Int(0)),
+                    ty: var_ty.clone(),
+                });
+                Ok(TypedStatement::Let {
+                    name: "".to_string(),
+                    ty: var_ty,
+                    value: default_value,
+                })
+            }
+            Statement::Assignment { target, op, value } => {
+                let typed_target = self
+                    .analyze_expression(target)
+                    .unwrap_or_else(|_| TypedExpr {
+                        kind: TypedExprKind::Identifier("_".to_string()),
+                        ty: Type::Named("_".to_string()),
+                    });
                 let typed_value = self
                     .analyze_expression(value)
                     .unwrap_or_else(|_| TypedExpr {
                         kind: TypedExprKind::Identifier("_".to_string()),
                         ty: Type::Named("_".to_string()),
                     });
-                Ok(TypedStatement::Let {
-                    name: name.clone(),
-                    ty: typed_value.ty.clone(),
+                Ok(TypedStatement::Assignment {
+                    target: typed_target,
+                    op: *op,
                     value: typed_value,
                 })
+            }
+            Statement::Expression(expr) => {
+                let typed_expr = self.analyze_expression(expr).unwrap_or_else(|_| TypedExpr {
+                    kind: TypedExprKind::Identifier("_".to_string()),
+                    ty: Type::Named("_".to_string()),
+                });
+                Ok(TypedStatement::Expr(typed_expr))
             }
             Statement::Return(expr) => {
                 let typed_expr = expr
@@ -2614,19 +2838,110 @@ impl Analyzer {
                     .map(|e| self.analyze_expression(e))
                     .transpose()
                     .ok()
-                    .flatten()
-                    .or_else(|| {
-                        Some(TypedExpr {
-                            kind: TypedExprKind::Identifier("_".to_string()),
-                            ty: Type::Named("()".to_string()),
-                        })
-                    });
+                    .flatten();
                 Ok(TypedStatement::Return(typed_expr))
             }
-            _ => Ok(TypedStatement::Expr(TypedExpr {
-                kind: TypedExprKind::Identifier("_".to_string()),
-                ty: Type::Named("()".to_string()),
-            })),
+            Statement::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
+                let typed_cond = self
+                    .analyze_expression(condition)
+                    .unwrap_or_else(|_| TypedExpr {
+                        kind: TypedExprKind::Literal(Literal::Bool(true)),
+                        ty: Type::Bool,
+                    });
+                let typed_then = self.analyze_block(then_block).unwrap_or_default();
+                let typed_else = else_block
+                    .as_ref()
+                    .map(|eb| self.analyze_block(eb).unwrap_or_default());
+                Ok(TypedStatement::If {
+                    condition: typed_cond,
+                    then_block: typed_then,
+                    else_block: typed_else,
+                })
+            }
+            Statement::While { condition, body } => {
+                let typed_cond = self
+                    .analyze_expression(condition)
+                    .unwrap_or_else(|_| TypedExpr {
+                        kind: TypedExprKind::Literal(Literal::Bool(true)),
+                        ty: Type::Bool,
+                    });
+                let typed_body = self.analyze_block(body).unwrap_or_default();
+                Ok(TypedStatement::While {
+                    condition: typed_cond,
+                    body: typed_body,
+                })
+            }
+            Statement::For { var, iter, body } => {
+                let typed_iter = self.analyze_expression(iter).unwrap_or_else(|_| TypedExpr {
+                    kind: TypedExprKind::Identifier("_".to_string()),
+                    ty: Type::Named("_".to_string()),
+                });
+                let typed_body = self.analyze_block(body).unwrap_or_default();
+                Ok(TypedStatement::For {
+                    var: var.clone(),
+                    iter: typed_iter,
+                    body: typed_body,
+                })
+            }
+            Statement::Loop { body } => {
+                let typed_body = self.analyze_block(body).unwrap_or_default();
+                Ok(TypedStatement::Loop { body: typed_body })
+            }
+            Statement::Match { expr, arms } => {
+                let typed_expr = self.analyze_expression(expr).unwrap_or_else(|_| TypedExpr {
+                    kind: TypedExprKind::Identifier("_".to_string()),
+                    ty: Type::Named("_".to_string()),
+                });
+                let typed_arms: Vec<(Pattern, Vec<TypedStatement>)> = arms
+                    .iter()
+                    .map(|arm| {
+                        let body = match &arm.body {
+                            MatchBody::Expr(e) => {
+                                vec![TypedStatement::Expr(
+                                    self.analyze_expression(e).unwrap_or_else(|_| TypedExpr {
+                                        kind: TypedExprKind::Identifier("_".to_string()),
+                                        ty: Type::Named("_".to_string()),
+                                    }),
+                                )]
+                            }
+                            MatchBody::Block(b) => self.analyze_block(b).unwrap_or_default(),
+                        };
+                        (arm.pattern.clone(), body)
+                    })
+                    .collect();
+                Ok(TypedStatement::Match {
+                    expr: typed_expr,
+                    arms: typed_arms,
+                })
+            }
+            Statement::Break(_) => Ok(TypedStatement::Break),
+            Statement::Continue => Ok(TypedStatement::Continue),
+            Statement::Pass => Ok(TypedStatement::Pass),
+            Statement::Defer(inner) => {
+                let typed_inner = self.statement_to_typed(inner)?;
+                Ok(TypedStatement::Defer(Box::new(typed_inner)))
+            }
+            Statement::Yield(expr) => {
+                let typed_expr = expr
+                    .as_ref()
+                    .map(|e| self.analyze_expression(e))
+                    .transpose()
+                    .ok()
+                    .flatten();
+                Ok(TypedStatement::Yield(typed_expr))
+            }
+            Statement::Spawn(expr) => {
+                let typed_expr = self.analyze_expression(expr).unwrap_or_else(|_| TypedExpr {
+                    kind: TypedExprKind::Identifier("_".to_string()),
+                    ty: Type::Named("_".to_string()),
+                });
+                Ok(TypedStatement::Spawn(Box::new(typed_expr)))
+            }
+            _ => Ok(TypedStatement::Pass),
         }
     }
 

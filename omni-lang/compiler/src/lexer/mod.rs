@@ -171,10 +171,16 @@ pub enum TokenKind {
     #[regex(r"[a-zA-Z_][a-zA-Z0-9_]*")]
     Identifier,
 
-    // Literals
-    #[regex(r"[0-9]+")]
+    // Literals — hex/binary/octal BEFORE generic int so logos matches them first
+    #[regex(r"0[xX][0-9a-fA-F][0-9a-fA-F_]*")]
+    HexLiteral,
+    #[regex(r"0[bB][01][01_]*")]
+    BinaryLiteral,
+    #[regex(r"0[oO][0-7][0-7_]*")]
+    OctalLiteral,
+    #[regex(r"[0-9][0-9_]*")]
     IntLiteral,
-    #[regex(r"[0-9]+\.[0-9]+")]
+    #[regex(r"[0-9][0-9_]*\.[0-9][0-9_]*([eE][+-]?[0-9][0-9_]*)?")]
     FloatLiteral,
     #[regex(r#""([^"\\]|\\.)*""#)]
     StringLiteral,
@@ -196,6 +202,10 @@ pub enum TokenKind {
     EqEq,
     #[token("!=")]
     NotEq,
+    #[token("<<")]
+    Shl,
+    #[token(">>")]
+    Shr,
     #[token("<")]
     Lt,
     #[token(">")]
@@ -269,10 +279,10 @@ pub enum TokenKind {
     // Special
     #[regex(r"\n")]
     Newline,
-    // Comments: // single-line, /* multi-line */
+    // Single-line comments
     #[regex(r"//[^\n]*")]
     Comment,
-    // Block comments are handled specially in tokenize()
+    // Block comments are stripped by strip_block_comments() before tokenization
     BlockComment,
 
     // Indentation (handled specially)
@@ -317,9 +327,9 @@ pub struct Lexer {
 
 impl Lexer {
     /// Create a new Lexer from source code
-    pub fn new(source: &str) -> Self {
-        let tokens = tokenize(source).unwrap_or_default();
-        Lexer { tokens, index: 0 }
+    pub fn new(source: &str) -> Result<Self, LexerError> {
+        let tokens = tokenize(source)?;
+        Ok(Lexer { tokens, index: 0 })
     }
 }
 
@@ -337,12 +347,42 @@ impl Iterator for Lexer {
     }
 }
 
+/// Strip nested block comments (`/* ... */`) from source, preserving newlines for line counting.
+fn strip_block_comments(source: &str) -> String {
+    let mut result = String::with_capacity(source.len());
+    let mut chars = source.chars().peekable();
+    let mut depth = 0;
+
+    while let Some(c) = chars.next() {
+        if depth > 0 {
+            // Inside a block comment — skip content but keep newlines for line tracking
+            if c == '/' && chars.peek() == Some(&'*') {
+                chars.next();
+                depth += 1;
+            } else if c == '*' && chars.peek() == Some(&'/') {
+                chars.next();
+                depth -= 1;
+            } else if c == '\n' {
+                result.push('\n');
+            }
+        } else {
+            if c == '/' && chars.peek() == Some(&'*') {
+                chars.next();
+                depth = 1;
+            } else {
+                result.push(c);
+            }
+        }
+    }
+    result
+}
+
 /// Compute the indentation of the next non-blank line in `remaining`.
 /// Blank lines (lines with only spaces/tabs followed by a newline or at EOF) are skipped.
 fn next_nonblank_indent(remaining: &str) -> usize {
     let mut s = remaining;
     loop {
-        let spaces = s.chars().take_while(|c| *c == ' ').count();
+        let spaces = s.chars().take_while(|c| *c == ' ' || *c == '\t').count();
         let after = &s[spaces..];
         if after.starts_with('\n') {
             // Blank line (spaces + newline) — skip past the newline
@@ -360,8 +400,10 @@ fn next_nonblank_indent(remaining: &str) -> usize {
 
 /// Tokenize source code into a vector of tokens
 pub fn tokenize(source: &str) -> Result<Vec<Token>, LexerError> {
+    // Strip block comments before tokenization (preserves newlines for line tracking)
+    let stripped = strip_block_comments(source);
     let mut tokens = Vec::new();
-    let mut lexer = TokenKind::lexer(source);
+    let mut lexer = TokenKind::lexer(&stripped);
     let mut line = 1;
     let mut column = 1;
     let mut indent_stack = vec![0usize];
@@ -379,7 +421,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexerError> {
                     column = 1;
 
                     // Check indentation of next non-blank line
-                    let remaining = &source[lexer.span().end..];
+                    let remaining = &stripped[lexer.span().end..];
                     let indent = next_nonblank_indent(remaining);
                     let current_indent = *indent_stack.last().unwrap();
 
@@ -404,17 +446,21 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexerError> {
                             ));
                         }
                     }
-                } else if kind == TokenKind::Comment || kind == TokenKind::BlockComment {
-                    // Skip comments — they are discarded
-                    // But count lines in block comments
-                    let newlines = lexeme.chars().filter(|c| *c == '\n').count();
-                    line += newlines;
-                    if newlines > 0 {
-                        column = 1;
-                    }
+                } else if kind == TokenKind::Comment {
+                    // Skip single-line comments — they are discarded
+                } else if kind == TokenKind::IntLiteral
+                    || kind == TokenKind::HexLiteral
+                    || kind == TokenKind::BinaryLiteral
+                    || kind == TokenKind::OctalLiteral
+                    || kind == TokenKind::FloatLiteral
+                {
+                    // Strip underscores from number literals for the lexeme
+                    let clean_lexeme: String = lexeme.chars().filter(|c| *c != '_').collect();
+                    tokens.push(Token::new(kind, clean_lexeme, line, column, span.clone()));
+                    column += lexeme.len();
                 } else if kind == TokenKind::Hash {
                     // # can be: attribute start (#[name]) or legacy comment (#...)
-                    let remaining = &source[span.end..];
+                    let remaining = &stripped[span.end..];
                     let next_char = remaining.chars().next();
                     if next_char == Some('[') {
                         // Attribute syntax: #[name] — emit the Hash token
@@ -438,7 +484,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexerError> {
                                     line += 1;
                                     column = 1;
                                     // Handle indentation after the newline
-                                    let remaining2 = &source[lexer.span().end..];
+                                    let remaining2 = &stripped[lexer.span().end..];
                                     let indent = next_nonblank_indent(remaining2);
                                     let current_indent = *indent_stack.last().unwrap();
                                     if indent > current_indent {
@@ -509,7 +555,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexerError> {
                 }
             }
             Err(_) => {
-                let char = source[span.start..].chars().next().unwrap_or('?');
+                let char = stripped[span.start..].chars().next().unwrap_or('?');
                 return Err(LexerError::UnexpectedChar {
                     position: span.start,
                     char,
@@ -526,7 +572,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexerError> {
             String::new(),
             line,
             column,
-            source.len()..source.len(),
+            stripped.len()..stripped.len(),
         ));
     }
 
@@ -573,6 +619,24 @@ mod tests {
         assert!(!tokens.iter().any(|t| t.lexeme.contains("comment")));
         // But the code tokens should exist
         assert!(tokens.iter().any(|t| t.kind == TokenKind::Let));
+    }
+
+    #[test]
+    fn test_block_comments() {
+        let source = "let x = /* this is a\nblock comment */ 42";
+        let tokens = tokenize(source).unwrap();
+        assert!(!tokens.iter().any(|t| t.lexeme.contains("comment")));
+        assert!(tokens.iter().any(|t| t.kind == TokenKind::Let));
+        assert!(tokens.iter().any(|t| t.kind == TokenKind::IntLiteral));
+    }
+
+    #[test]
+    fn test_nested_block_comments() {
+        let source = "let x = /* outer /* inner */ outer */ 42";
+        let tokens = tokenize(source).unwrap();
+        assert!(!tokens.iter().any(|t| t.lexeme.contains("outer")));
+        assert!(!tokens.iter().any(|t| t.lexeme.contains("inner")));
+        assert!(tokens.iter().any(|t| t.kind == TokenKind::IntLiteral));
     }
 
     #[test]
@@ -657,6 +721,14 @@ mod tests {
     }
 
     #[test]
+    fn test_shift_operators() {
+        let source = "x << 3 >> 1";
+        let tokens = tokenize(source).unwrap();
+        assert_eq!(tokens[1].kind, TokenKind::Shl);
+        assert_eq!(tokens[3].kind, TokenKind::Shr);
+    }
+
+    #[test]
     fn test_string_literal() {
         let source = r#""hello world""#;
         let tokens = tokenize(source).unwrap();
@@ -669,5 +741,82 @@ mod tests {
         let tokens = tokenize(source).unwrap();
         assert_eq!(tokens[0].kind, TokenKind::IntLiteral);
         assert_eq!(tokens[1].kind, TokenKind::FloatLiteral);
+    }
+
+    #[test]
+    fn test_hex_literal() {
+        let source = "0xFF 0x1A2B";
+        let tokens = tokenize(source).unwrap();
+        assert_eq!(tokens[0].kind, TokenKind::HexLiteral);
+        assert_eq!(tokens[0].lexeme, "0xFF");
+        assert_eq!(tokens[1].kind, TokenKind::HexLiteral);
+    }
+
+    #[test]
+    fn test_binary_literal() {
+        let source = "0b1010 0B11110000";
+        let tokens = tokenize(source).unwrap();
+        assert_eq!(tokens[0].kind, TokenKind::BinaryLiteral);
+        assert_eq!(tokens[0].lexeme, "0b1010");
+        assert_eq!(tokens[1].kind, TokenKind::BinaryLiteral);
+    }
+
+    #[test]
+    fn test_octal_literal() {
+        let source = "0o777 0O123";
+        let tokens = tokenize(source).unwrap();
+        assert_eq!(tokens[0].kind, TokenKind::OctalLiteral);
+        assert_eq!(tokens[0].lexeme, "0o777");
+        assert_eq!(tokens[1].kind, TokenKind::OctalLiteral);
+    }
+
+    #[test]
+    fn test_float_exponent() {
+        let source = "1.5e10 2.0E-3 3.14e+2";
+        let tokens = tokenize(source).unwrap();
+        assert_eq!(tokens[0].kind, TokenKind::FloatLiteral);
+        assert_eq!(tokens[0].lexeme, "1.5e10");
+        assert_eq!(tokens[1].kind, TokenKind::FloatLiteral);
+        assert_eq!(tokens[1].lexeme, "2.0E-3");
+        assert_eq!(tokens[2].kind, TokenKind::FloatLiteral);
+    }
+
+    #[test]
+    fn test_underscores_in_numbers() {
+        let source = "1_000_000 3.141_592 0xFF_FF 0b1010_0101 0o7_7_7";
+        let tokens = tokenize(source).unwrap();
+        // IntLiteral: underscores stripped
+        assert_eq!(tokens[0].kind, TokenKind::IntLiteral);
+        assert_eq!(tokens[0].lexeme, "1000000");
+        // FloatLiteral: underscores stripped
+        assert_eq!(tokens[1].kind, TokenKind::FloatLiteral);
+        assert_eq!(tokens[1].lexeme, "3.141592");
+        // HexLiteral: underscores stripped
+        assert_eq!(tokens[2].kind, TokenKind::HexLiteral);
+        assert_eq!(tokens[2].lexeme, "0xFFFF");
+        // BinaryLiteral: underscores stripped
+        assert_eq!(tokens[3].kind, TokenKind::BinaryLiteral);
+        assert_eq!(tokens[3].lexeme, "0b10100101");
+        // OctalLiteral: underscores stripped
+        assert_eq!(tokens[4].kind, TokenKind::OctalLiteral);
+        assert_eq!(tokens[4].lexeme, "0o777");
+    }
+
+    #[test]
+    fn test_tabs_counted_in_indentation() {
+        let source = "fn main():\n\treturn 42";
+        let tokens = tokenize(source).unwrap();
+        // Should produce Indent after newline
+        let indent_token = tokens.iter().find(|t| t.kind == TokenKind::Indent);
+        assert!(
+            indent_token.is_some(),
+            "tab indentation should be recognized"
+        );
+    }
+
+    #[test]
+    fn test_lexer_new_returns_result() {
+        let result = Lexer::new("fn main():\n    pass");
+        assert!(result.is_ok());
     }
 }

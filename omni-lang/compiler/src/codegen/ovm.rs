@@ -926,9 +926,56 @@ fn type_size(ty: &IrType) -> usize {
 }
 
 fn estimate_max_stack(func: &IrFunction) -> u16 {
-    // Simple estimation based on instruction count
-    let total_instructions: usize = func.blocks.iter().map(|b| b.instructions.len()).sum();
-    (total_instructions.min(256) as u16).max(16)
+    // Proper stack depth analysis: simulate each instruction's stack effect
+    let mut max_depth: usize = 0;
+    let mut current_depth: usize = 0;
+
+    for block in &func.blocks {
+        for instr in &block.instructions {
+            let (pops, pushes) = stack_effect(instr);
+            // Underflow protection: if we'd go negative, reset to 0
+            current_depth = current_depth.saturating_sub(pops);
+            current_depth += pushes;
+            max_depth = max_depth.max(current_depth);
+        }
+    }
+
+    // Add headroom for call frames and temporaries
+    let result = max_depth + 8;
+    // Clamp to reasonable bounds
+    (result.min(65535) as u16).max(16)
+}
+
+/// Returns (pops, pushes) for each instruction
+fn stack_effect(instr: &IrInstruction) -> (usize, usize) {
+    match instr {
+        IrInstruction::Alloca { .. } => (0, 1),
+        IrInstruction::Load { .. } => (0, 1),
+        IrInstruction::Store { value, .. } => (1, 0),
+        IrInstruction::BinOp { .. } => (2, 1),
+        IrInstruction::Call { args, dest, .. } => (args.len(), if dest.is_some() { 1 } else { 0 }),
+        IrInstruction::GetField { .. } => (1, 1),
+        IrInstruction::Phi { .. } => (0, 1),
+        IrInstruction::Select { .. } => (3, 1), // cond + then_val + else_val
+        IrInstruction::Switch { .. } => (1, 0),
+        IrInstruction::CreateClosure { captures, .. } => (captures.len(), 1),
+        IrInstruction::CallClosure { args, dest, .. } => {
+            (args.len() + 1, if dest.is_some() { 1 } else { 0 })
+        }
+        IrInstruction::AsyncSpawn { args, .. } => (args.len(), 1),
+        IrInstruction::AsyncAwait { dest, .. } => (1, if dest.is_some() { 1 } else { 0 }),
+        IrInstruction::TraitDispatch { args, dest, .. } => {
+            (args.len() + 1, if dest.is_some() { 1 } else { 0 })
+        }
+        IrInstruction::VTableLookup { .. } => (1, 1),
+        IrInstruction::Cast { .. } => (1, 1),
+        IrInstruction::ExtractValue { .. } => (1, 1),
+        IrInstruction::InsertValue { .. } => (2, 1),
+        IrInstruction::NativeCall { args, dest, .. } => {
+            (args.len(), if dest.is_some() { 1 } else { 0 })
+        }
+        IrInstruction::BoundsCheck { .. } => (2, 0),
+    }
 }
 
 /// Serialize OVM module to bytes

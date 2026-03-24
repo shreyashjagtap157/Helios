@@ -41,7 +41,9 @@ fn simplify_block(block: &mut Block) {
 fn simplify_stmt(stmt: &mut Statement) {
     match stmt {
         Statement::Let { value, .. } => {
-            *value = simplify_expr(value);
+            if let Some(ref v) = *value {
+                *value = Some(simplify_expr(v));
+            }
         }
         Statement::Return(Some(expr)) => {
             *expr = simplify_expr(expr);

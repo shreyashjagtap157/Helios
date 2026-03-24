@@ -65,6 +65,10 @@ impl<'ctx> LlvmCodegen<'ctx> {
     /// Generate LLVM IR from Omni IR
     pub fn generate(&mut self, ir: &IrModule) -> Result<(), String> {
         info!("Generating LLVM IR for module: {}", ir.name);
+        log::warn!(
+            "LLVM backend: FFI bindings have not been integration-tested against LLVM 17 C API. \
+             Generated code may have subtle ABI mismatches. Verify output before production use."
+        );
 
         // Set target triple
         self.module.set_triple(&TargetMachine::get_default_triple());
@@ -545,7 +549,9 @@ impl<'ctx> LlvmCodegen<'ctx> {
     fn resolve_value(&self, value: &str) -> Result<BasicValueEnum<'ctx>, String> {
         // Check if it's a local
         if let Some(&ptr) = self.locals.get(value) {
-            // We need the type to load - assume i64 for now
+            // Load with inferred type — assumes i64 when type is unknown.
+            // This is a known limitation: the LLVM backend does not track per-variable types.
+            // See O-103 in ISSUES.md for details.
             let loaded = self
                 .builder
                 .build_load(self.context.i64_type(), ptr, "load")
@@ -613,6 +619,22 @@ impl<'ctx> LlvmCodegen<'ctx> {
             }
             IrType::FnPtr { params, ret } => {
                 // Function pointers are represented as ptr
+                Ok(self
+                    .context
+                    .i8_type()
+                    .ptr_type(AddressSpace::default())
+                    .into())
+            }
+            IrType::Closure { .. }
+            | IrType::Future(_)
+            | IrType::Generic(_)
+            | IrType::Enum { .. }
+            | IrType::Tuple(_) => {
+                log::warn!(
+                    "LLVM backend: unsupported IR type {:?} — falling back to i8*. \
+                     These types require custom LLVM lowering. See O-103 in ISSUES.md.",
+                    ty
+                );
                 Ok(self
                     .context
                     .i8_type()

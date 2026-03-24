@@ -1,5 +1,10 @@
 // Omni Standard Library: System
 // Operating System interaction and Process control
+//
+// WARNING: This file uses brace-delimited syntax (Rust-style { }) and
+// unsupported #[cfg] attributes throughout. Omni uses indentation-based
+// (colon-delimited) syntax. This file is an aspirational spec and cannot be
+// parsed by the current compiler until rewritten. See ISSUES.md O-078, O-081.
 
 module std::sys
 

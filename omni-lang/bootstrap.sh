@@ -93,8 +93,19 @@ stage1_compile() {
         log_info "  $(basename "$f") ($(wc -l < "$f") lines)"
     done
 
-    log_warn "Stage 1 compilation requires the self-hosted Omni compiler to reach"
-    log_warn "feature parity with the Rust compiler. Current status:"
+    log_warn "========================================================================="
+    log_warn "STAGE 1 IS A PLACEHOLDER — NOT YET FUNCTIONAL"
+    log_warn "========================================================================="
+    log_warn ""
+    log_warn "The self-hosted Omni compiler (omni-lang/omni/) cannot yet produce"
+    log_warn "standalone executables. Stage 1 requires the following to work:"
+    log_warn ""
+    log_warn "  1. Monomorphization must specialize generic functions (O-100)"
+    log_warn "  2. IR builder must preserve actual types, not hardcode I64 (O-101)"
+    log_warn "  3. Codegen must emit a native binary or OVM bytecode"
+    log_warn "  4. The linker must produce a standalone executable"
+    log_warn ""
+    log_warn "Current self-hosted compiler status:"
     log_warn "  - Lexer: Implemented in Omni"
     log_warn "  - Parser: Implemented in Omni"
     log_warn "  - Semantic: Type checker, borrow checker, traits, monomorphization"
@@ -103,8 +114,9 @@ stage1_compile() {
     log_warn "  - Linker: Implemented in Omni"
     log_warn "  - Missing: Binary output (code needs to emit a standalone executable)"
     log_warn ""
-    log_warn "To complete Stage 1, the Omni compiler needs to emit a native binary"
-    log_warn "or OVM bytecode that can execute standalone."
+    log_warn "Until these issues are resolved, Stage 1 uses the Stage 0 binary."
+    log_warn "See omni-lang/ISSUES.md issues O-100 through O-106 for details."
+    log_warn "========================================================================="
     log_info "Creating placeholder stage1 binary..."
     cp "$BUILD_DIR/omnc-stage0" "$BUILD_DIR/omnc-stage1"
     log_ok "Stage 1 binary: $BUILD_DIR/omnc-stage1 (placeholder — uses stage0 binary)"
@@ -122,7 +134,18 @@ stage2_compile() {
         exit 1
     fi
 
-    log_warn "Stage 2 is a placeholder until Stage 1 produces a real self-hosted binary."
+    log_warn "========================================================================="
+    log_warn "STAGE 2 IS A PLACEHOLDER — NOT YET FUNCTIONAL"
+    log_warn "========================================================================="
+    log_warn ""
+    log_warn "Stage 2 requires Stage 1 to produce a real self-hosted binary first."
+    log_warn "Once Stage 1 can compile the Omni compiler to a standalone executable,"
+    log_warn "Stage 2 will recompile using that Stage 1 output, and the verify step"
+    log_warn "will confirm Stage 1 and Stage 2 produce bit-identical binaries."
+    log_warn ""
+    log_warn "This bit-identical check proves the compiler correctly compiles itself."
+    log_warn "Until then, Stage 2 is a copy of Stage 1 (which is itself a copy of Stage 0)."
+    log_warn "========================================================================="
     cp "$BUILD_DIR/omnc-stage1" "$BUILD_DIR/omnc-stage2"
     log_ok "Stage 2 binary: $BUILD_DIR/omnc-stage2 (placeholder)"
 }
@@ -145,6 +168,8 @@ verify_bootstrap() {
     if [ "$HASH1" = "$HASH2" ]; then
         log_ok "Bootstrap verified: Stage 1 and Stage 2 are bit-identical"
         log_ok "SHA-256: $HASH1"
+        log_warn "NOTE: Both stages are currently placeholders (copies of stage0)."
+        log_warn "This check will be meaningful once stages 1-2 are implemented."
     else
         log_error "Bootstrap FAILED: Stage 1 and Stage 2 differ"
         log_error "Stage 1: $HASH1"

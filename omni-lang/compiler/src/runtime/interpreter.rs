@@ -1992,48 +1992,10 @@ impl Interpreter {
         }
     }
 
-    /// Determine whether a type error is a "hard" (fatal) error.
-    ///
-    /// Hard errors are **explicit type-annotation mismatches** where the user
-    /// wrote `let x: Int = "hello"` and the initializer's type clearly
-    /// disagrees with the annotation.  Everything else is demoted to a
-    /// warning because the type-inference engine was never calibrated for
-    /// Omni's dynamic-flavour features (string concat with `+`, implicit
-    /// conversions, built-in functions not in the environment, etc.).
+    /// Delegates to the canonical `is_hard_type_error` in `semantic::type_inference`.
+    /// The duplicate definition was removed (O-097).
     fn is_hard_type_error(err: &crate::semantic::type_inference::TypeError) -> bool {
-        let msg = &err.message;
-
-        // Unresolved type variables — inference couldn't determine the type
-        if msg.contains("?T") {
-            return false;
-        }
-
-        // Undefined variable / function — likely a built-in not registered
-        if msg.contains("Undefined variable") || msg.contains("Undefined function") {
-            return false;
-        }
-
-        // "<error>" is the error-recovery placeholder type
-        if msg.contains("<error>") {
-            return false;
-        }
-
-        // "Expected numeric type" — Omni supports string concat with +,
-        // list concat, etc.  The inference engine doesn't model these.
-        if msg.contains("Expected numeric type") {
-            return false;
-        }
-
-        // Only flag explicit annotation mismatches as hard errors:
-        // "Type mismatch: X vs Y – let/var binding '…': declared type must match initializer"
-        if msg.contains("Type mismatch") && msg.contains("declared type must match initializer") {
-            return true;
-        }
-
-        // All other type-mismatch or constraint errors are soft
-        // (function call argument mismatches, return type mismatches, etc.
-        //  may be false positives due to missing built-in signatures).
-        false
+        crate::semantic::type_inference::is_hard_type_error(err)
     }
 
     pub fn eval_file(&mut self, path: &std::path::Path) -> Result<RuntimeValue> {
@@ -2327,7 +2289,11 @@ impl Interpreter {
                 ty: _,
                 value,
             } => {
-                let val = self.eval_expr(value)?;
+                let val = if let Some(v) = value {
+                    self.eval_expr(v)?
+                } else {
+                    RuntimeValue::Null
+                };
                 if *mutable {
                     self.mut_variables.insert(name.clone());
                 }
@@ -2496,7 +2462,7 @@ impl Interpreter {
                 Ok(RuntimeValue::Null)
             }
             Statement::Pass => Ok(RuntimeValue::Null),
-            Statement::Break => Err(anyhow!("__break__")),
+            Statement::Break(_) => Err(anyhow!("__break__")),
             Statement::Continue => Err(anyhow!("__continue__")),
             Statement::Match { expr, arms } => {
                 let subject = self.eval_expr(expr)?;
@@ -2603,6 +2569,16 @@ impl Interpreter {
                     }
                     _ => None,
                 }
+            }
+
+            Pattern::Or(patterns) => {
+                // OR patterns: try each sub-pattern, return first match
+                for sub_pat in patterns {
+                    if let Some(bindings) = self.match_pattern(sub_pat, value) {
+                        return Some(bindings);
+                    }
+                }
+                None
             }
         }
     }

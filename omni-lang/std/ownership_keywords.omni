@@ -1,0 +1,17 @@
+// Omni Language Specification: Ownership Keywords
+//
+// The keywords `own` and `shared` are recognized by the parser but currently
+// have NO runtime effect. They are syntactic placeholders for future ownership
+// semantics (similar to Rust's ownership model).
+//
+// Current status (v1):
+//   - `own` in return position (e.g., `fn foo() -> own Self`) is parsed and
+//     silently ignored by codegen. The OVM treats it as a no-op.
+//   - `shared` is not used in the stdlib currently.
+//
+// Future (post-v1, when trait system is stable):
+//   - `own T` will mean exclusive ownership (like Rust's owned values)
+//   - `shared T` will mean shared/immutable reference (like Arc<T>)
+//   - Move semantics and borrow checking will be enforced
+//
+// Until then, these keywords serve as documentation only.

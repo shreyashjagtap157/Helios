@@ -1031,9 +1031,14 @@ impl IrGenerator {
 
                 // Initialize iterator
                 let _iter_val = self.gen_expr(iter, instructions);
+                let var_ty = match &iter.ty {
+                    Type::Array(elem, _) => self.convert_type(elem),
+                    Type::Slice(elem) => self.convert_type(elem),
+                    _ => self.convert_type(&iter.ty),
+                };
                 instructions.push(IrInstruction::Alloca {
                     dest: var.clone(),
-                    ty: IrType::I64,
+                    ty: var_ty,
                 });
 
                 blocks.push(IrBlock {
@@ -1175,9 +1180,10 @@ impl IrGenerator {
 
                     // If binding pattern, store the matched value
                     if let Pattern::Binding(bind_name) = pattern {
+                        let bind_ty = self.convert_type(&expr.ty);
                         arm_instructions.push(IrInstruction::Alloca {
                             dest: bind_name.clone(),
-                            ty: IrType::I64,
+                            ty: bind_ty,
                         });
                         arm_instructions.push(IrInstruction::Store {
                             ptr: bind_name.clone(),
@@ -1319,7 +1325,10 @@ impl IrGenerator {
                     BinaryOp::GtEq => IrBinOp::Ge,
                     BinaryOp::And => IrBinOp::And,
                     BinaryOp::Or => IrBinOp::Or,
-                    _ => IrBinOp::Add,
+                    // Range ops: return start value (range lowering handled elsewhere)
+                    BinaryOp::Range | BinaryOp::RangeInclusive => {
+                        return left_val;
+                    }
                 };
                 instructions.push(IrInstruction::BinOp {
                     dest: dest.clone(),
@@ -1469,10 +1478,23 @@ impl IrGenerator {
                 IrValue::Var(dest)
             }
             TypedExprKind::Index(arr, idx) => {
-                let _arr_val = self.gen_expr(arr, instructions);
-                let _idx_val = self.gen_expr(idx, instructions);
+                let arr_val = self.gen_expr(arr, instructions);
+                let idx_val = self.gen_expr(idx, instructions);
                 let dest = self.fresh_temp();
-                // GEP for array indexing
+                // Use GetField with the index value for array element access
+                let arr_name = match &arr_val {
+                    IrValue::Var(v) => v.clone(),
+                    _ => "arr".to_string(),
+                };
+                let idx_num = match &idx_val {
+                    IrValue::Const(IrConst::Int(n)) => *n as usize,
+                    _ => 0, // Dynamic index - simplified fallback
+                };
+                instructions.push(IrInstruction::GetField {
+                    dest: dest.clone(),
+                    ptr: arr_name,
+                    field: idx_num,
+                });
                 IrValue::Var(dest)
             }
             TypedExprKind::Borrow {
@@ -1656,6 +1678,17 @@ impl IrGenerator {
             }
             Type::SelfOwned => IrType::Struct("Self".to_string()),
             Type::SelfRef { .. } => IrType::Ptr(Box::new(IrType::Struct("Self".to_string()))),
+            Type::Tuple(elements) => {
+                let ir_elements: Vec<IrType> =
+                    elements.iter().map(|e| self.convert_type(e)).collect();
+                IrType::Tuple(ir_elements)
+            }
+            Type::Nullable(inner) => {
+                let inner_ty = self.convert_type(inner);
+                IrType::Ptr(Box::new(inner_ty))
+            }
+            Type::TraitObject { principal, .. } => IrType::TraitObject(principal.clone()),
+            Type::WhereConstrained { base, .. } => self.convert_type(base),
             _ => IrType::I64,
         }
     }

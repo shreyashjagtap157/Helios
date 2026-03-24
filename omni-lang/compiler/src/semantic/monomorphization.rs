@@ -173,7 +173,7 @@ impl StatementSubstitutor {
             } => {
                 let substituted_type = ty.as_ref().map(|t| self.substitution.apply_to_type(t));
                 let expr_sub = ExpressionSubstitutor::new(self.substitution.clone());
-                let transformed_value = expr_sub.transform_expression(value);
+                let transformed_value = value.as_ref().map(|v| expr_sub.transform_expression(v));
                 Statement::Let {
                     name: name.clone(),
                     mutable: *mutable,
@@ -276,7 +276,7 @@ impl StatementSubstitutor {
             }
 
             // Break and Continue - pass through unchanged
-            Statement::Break | Statement::Continue => stmt.clone(),
+            Statement::Break(_) | Statement::Continue => stmt.clone(),
 
             // Return without value - pass through
             Statement::Return(None) => stmt.clone(),

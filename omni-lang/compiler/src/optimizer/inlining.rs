@@ -116,7 +116,9 @@ fn collect_callees_in_block(block: &Block, callees: &mut HashSet<String>) {
 
 fn collect_callees_in_stmt(stmt: &Statement, callees: &mut HashSet<String>) {
     match stmt {
-        Statement::Let { value, .. } => collect_callees_in_expr(value, callees),
+        Statement::Let {
+            value: Some(value), ..
+        } => collect_callees_in_expr(value, callees),
         Statement::Expression(expr) => collect_callees_in_expr(expr, callees),
         Statement::Return(Some(expr)) => collect_callees_in_expr(expr, callees),
         Statement::Assignment { value, .. } => collect_callees_in_expr(value, callees),
@@ -239,7 +241,9 @@ fn count_calls_in_block(block: &Block, counts: &mut HashMap<String, usize>) {
 
 fn count_calls_in_stmt(stmt: &Statement, counts: &mut HashMap<String, usize>) {
     match stmt {
-        Statement::Let { value, .. } => count_calls_in_expr(value, counts),
+        Statement::Let {
+            value: Some(value), ..
+        } => count_calls_in_expr(value, counts),
         Statement::Expression(expr) => count_calls_in_expr(expr, counts),
         Statement::Return(Some(expr)) => count_calls_in_expr(expr, counts),
         Statement::Assignment { value, .. } => count_calls_in_expr(value, counts),
@@ -300,7 +304,9 @@ fn has_closures_or_complex_cf(block: &Block) -> bool {
 
 fn stmt_has_closure_or_complex(stmt: &Statement) -> bool {
     match stmt {
-        Statement::Let { value, .. } => expr_has_closure(value),
+        Statement::Let {
+            value: Some(value), ..
+        } => expr_has_closure(value),
         Statement::Expression(expr) => expr_has_closure(expr),
         Statement::Return(Some(expr)) => expr_has_closure(expr),
         Statement::Spawn(_) => true,      // complex control flow
@@ -343,7 +349,7 @@ fn inline_in_block(block: &mut Block, candidates: &HashMap<String, InlineCandida
                 ref name,
                 mutable,
                 ref ty,
-                value: Expression::Call(ref func, ref args),
+                value: Some(Expression::Call(ref func, ref args)),
             } if matches!(func.as_ref(), Expression::Identifier(_)) => {
                 if let Expression::Identifier(fname) = func.as_ref() {
                     if let Some(candidate) = candidates.get(fname) {
@@ -358,7 +364,7 @@ fn inline_in_block(block: &mut Block, candidates: &HashMap<String, InlineCandida
                     name: name.clone(),
                     mutable,
                     ty: ty.clone(),
-                    value: Expression::Call(func.clone(), args.clone()),
+                    value: Some(Expression::Call(func.clone(), args.clone())),
                 });
             }
             other => new_stmts.push(other),
@@ -377,7 +383,7 @@ fn build_inline_body(candidate: &InlineCandidate, args: &[Expression]) -> Vec<St
             name: param.clone(),
             mutable: false,
             ty: None,
-            value: arg.clone(),
+            value: Some(arg.clone()),
         });
     }
 
@@ -396,7 +402,7 @@ fn rewrite_return_as_let(stmts: &mut Vec<Statement>, name: &str, mutable: bool, 
                 name: name.to_string(),
                 mutable,
                 ty,
-                value: val,
+                value: Some(val),
             };
         }
     }
@@ -609,7 +615,7 @@ mod tests {
                         name: "result".into(),
                         mutable: false,
                         ty: None,
-                        value: Expression::Call(Box::new(ident("double")), vec![int(21)]),
+                        value: Some(Expression::Call(Box::new(ident("double")), vec![int(21)])),
                     }],
                 ),
             ],
@@ -618,7 +624,12 @@ mod tests {
         if let Item::Function(main_fn) = &module.items[1] {
             // First stmt should be: let x = 21
             assert!(main_fn.body.statements.len() >= 2);
-            if let Statement::Let { name, value, .. } = &main_fn.body.statements[0] {
+            if let Statement::Let {
+                name,
+                value: Some(value),
+                ..
+            } = &main_fn.body.statements[0]
+            {
                 assert_eq!(name, "x");
                 assert!(matches!(value, Expression::Literal(Literal::Int(21))));
             }

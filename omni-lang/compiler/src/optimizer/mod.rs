@@ -83,11 +83,11 @@ mod tests {
                         name: "x".into(),
                         mutable: false,
                         ty: None,
-                        value: Expression::Binary(
+                        value: Some(Expression::Binary(
                             Box::new(Expression::Literal(Literal::Int(2))),
                             BinaryOp::Add,
                             Box::new(Expression::Literal(Literal::Int(3))),
-                        ),
+                        )),
                     }],
                 },
             })],

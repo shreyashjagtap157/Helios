@@ -1,5 +1,10 @@
 // Omni Standard Library: Memory Management
 // Core memory primitives including ARC, manual management, and allocators
+//
+// WARNING: This file uses brace-delimited syntax (Rust-style { }) in extern
+// declarations. Omni uses indentation-based (colon-delimited) syntax. This
+// file is an aspirational spec and cannot be parsed by the current compiler
+// until rewritten. See ISSUES.md O-078.
 
 module std::core::mem
 

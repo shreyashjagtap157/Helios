@@ -719,7 +719,7 @@ impl BorrowChecker {
                 name,
                 mutable,
                 ty,
-                value,
+                value: Some(value),
             } => {
                 // Evaluate the RHS first (may move values).
                 self.check_expression(value);
@@ -734,6 +734,9 @@ impl BorrowChecker {
                         s.ownership = OwnershipKind::Shared;
                     }
                 }
+            }
+            ast::Statement::Let { name, mutable, .. } => {
+                self.declare_variable(name, *mutable);
             }
             ast::Statement::Var { name, ty: _, value } => {
                 if let Some(val) = value {
@@ -1174,7 +1177,7 @@ mod tests {
             name: name.to_string(),
             mutable,
             ty: None,
-            value,
+            value: Some(value),
         }
     }
 

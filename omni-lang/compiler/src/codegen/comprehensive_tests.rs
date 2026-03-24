@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     fn test_lexer_iterator_api() {
-        let lexer = Lexer::new("let x = 42");
+        let lexer = Lexer::new("let x = 42").unwrap();
         let tokens: Vec<_> = lexer.collect();
         assert!(!tokens.is_empty());
         assert_eq!(tokens[0].kind, TokenKind::Let);

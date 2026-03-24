@@ -197,6 +197,7 @@ pub enum Type {
     }, // for<'a> syntax
     Tuple(Vec<Type>),          // (T1, T2, ...)
     Nullable(Box<Type>),       // T?
+    Any,                       // Accepts any type (for builtins like println)
 }
 
 impl PartialEq for Type {
@@ -216,7 +217,10 @@ impl PartialEq for Type {
             | (Type::F64, Type::F64)
             | (Type::Bool, Type::Bool)
             | (Type::Str, Type::Str)
-            | (Type::SelfOwned, Type::SelfOwned) => true,
+            | (Type::SelfOwned, Type::SelfOwned)
+            | (Type::Any, Type::Any) => true,
+            // Type::Any matches anything (O-010)
+            (Type::Any, _) | (_, Type::Any) => true,
             (Type::Named(n1), Type::Named(n2)) => n1 == n2,
             (Type::Generic(n1, a1), Type::Generic(n2, a2)) => n1 == n2 && a1 == a2,
             (Type::Function(p1, r1), Type::Function(p2, r2)) => p1 == p2 && r1 == r2,
@@ -279,7 +283,7 @@ pub enum Statement {
         name: String,
         mutable: bool,
         ty: Option<Type>,
-        value: Expression,
+        value: Option<Expression>,
     },
     Var {
         name: String,
@@ -314,7 +318,7 @@ pub enum Statement {
         arms: Vec<MatchArm>,
     },
     Defer(Box<Statement>),
-    Break,
+    Break(Option<Expression>),
     Continue,
     Pass,
     Yield(Option<Expression>),
@@ -353,6 +357,7 @@ pub enum Pattern {
     Literal(Literal),
     Binding(String),
     Constructor(String, Vec<Pattern>),
+    Or(Vec<Pattern>),
     Wildcard,
 }
 

@@ -68,7 +68,7 @@ enum IpAddr:
     fn to_string(&self) -> String:
         match self:
             IpAddr::V4(a, b, c, d) => 
-                format!("{}.{}.{}.{}", a, b, c, d)
+                format("{}.{}.{}.{}", a, b, c, d)
             IpAddr::V6(bytes) =>
                 // Format as IPv6
                 format_ipv6(bytes)
@@ -101,7 +101,7 @@ fn format_ipv6(bytes: &[u8; 16]) -> String:
     let mut parts = Vec::new()
     for i in 0..8:
         let val = (bytes[i*2] as u16) << 8 | bytes[i*2 + 1] as u16
-        parts.push(format!("{:x}", val))
+        parts.push(format("{:x}", val))
     parts.join(":")
 
 struct SocketAddr:
@@ -358,23 +358,25 @@ impl HttpClient:
         let addr = resolve_host(parsed.host, parsed.port)?
         
         let mut stream = if parsed.scheme == "https":
-            let tls_stream = crypto::TlsStream::connect(parsed.host, parsed.port, crypto::TlsConfig::new()).await?
+            // Connect TCP first, then wrap with TLS
+            let tcp_stream = TcpStream::connect(addr).await?
+            let tls_stream = crypto::TlsStream::connect_fd(tcp_stream.fd, parsed.host, crypto::TlsConfig::new()).await?
             Stream::Tls(tls_stream)
         else:
             let tcp_stream = TcpStream::connect(addr).await?
             Stream::Tcp(tcp_stream)
         
         // Build request
-        let mut request = format!("{} {} HTTP/1.1\r\n", method.to_string(), parsed.path)
-        request += format!("Host: {}\r\n", parsed.host)
-        request += format!("User-Agent: {}\r\n", self.user_agent)
+        let mut request = format("{} {} HTTP/1.1\r\n", method.to_string(), parsed.path)
+        request += format("Host: {}\r\n", parsed.host)
+        request += format("User-Agent: {}\r\n", self.user_agent)
         request += "Connection: close\r\n"
         
         for (key, value) in self.default_headers.iter():
-            request += format!("{}: {}\r\n", key, value)
+            request += format("{}: {}\r\n", key, value)
         
         if let Some(data) = body:
-            request += format!("Content-Length: {}\r\n", data.len())
+            request += format("Content-Length: {}\r\n", data.len())
         
         request += "\r\n"
         
@@ -514,7 +516,7 @@ impl WebSocket:
         
         // Perform WebSocket handshake
         let key = generate_ws_key()
-        let handshake = format!(
+        let handshake = format(
             "GET {} HTTP/1.1\r\n\
              Host: {}\r\n\
              Upgrade: websocket\r\n\
@@ -654,17 +656,17 @@ async fn parse_http_request(stream: &mut TcpStream) -> Result<HttpRequest, HttpE
 
 async fn send_http_response(stream: &mut TcpStream, response: HttpResponse):
     // Serialize and write HTTP response to stream
-    let mut header = format!("HTTP/1.1 {} {}\r\n", response.status, response.status_text)
+    let mut header = format("HTTP/1.1 {} {}\r\n", response.status, response.status_text)
     
     // Write content-length if not already present
     let mut has_content_length = false
     for (key, value) in &response.headers:
-        header.push_str(&format!("{}: {}\r\n", key, value))
+        header.push_str(&format("{}: {}\r\n", key, value))
         if key.to_lowercase() == "content-length":
             has_content_length = true
     
     if !has_content_length:
-        header.push_str(&format!("Content-Length: {}\r\n", response.body.len()))
+        header.push_str(&format("Content-Length: {}\r\n", response.body.len()))
     
     header.push_str("\r\n")
     

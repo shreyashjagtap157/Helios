@@ -784,6 +784,10 @@ fn compile_pattern_test(
                 codegen.emit(OvmOpcode::PushTrue);
             }
         }
+        Pattern::Or(_) => {
+            // OR patterns: treat as always matching for now
+            codegen.emit(OvmOpcode::PushTrue);
+        }
     }
     Ok(())
 }

@@ -23,7 +23,14 @@ fn main() {
             process::exit(1);
         }
     };
-    let mut vm = VM::new(&bytes);
+    if bytes.len() < 4 || &bytes[0..4] != b"OVM\0" {
+        eprintln!(
+            "Error: '{}' is not a valid OVM file (bad magic number)",
+            args[1]
+        );
+        process::exit(1);
+    }
+    let mut vm = VM::new(&bytes, &args[2..]);
     match vm.run() {
         Ok(()) => {}
         Err(e) => {
@@ -59,10 +66,13 @@ struct VM {
     frames: Vec<Frame>,
     pc: usize,
     global_locals: [V; 256],
+    heap: Vec<Option<Vec<u8>>>,
+    heap_free: Vec<usize>,
+    args: Vec<String>,
 }
 
 impl VM {
-    fn new(data: &[u8]) -> Self {
+    fn new(data: &[u8], args: &[String]) -> Self {
         let mut vm = VM {
             code: Vec::new(),
             consts: Vec::new(),
@@ -72,6 +82,9 @@ impl VM {
             frames: Vec::with_capacity(256),
             pc: 0,
             global_locals: std::array::from_fn(|_| V::Null),
+            heap: Vec::new(),
+            heap_free: Vec::new(),
+            args: args.to_vec(),
         };
         if data.len() >= 84 && &data[0..4] == b"OVM\0" {
             vm.load(data);
@@ -95,14 +108,40 @@ impl VM {
     }
 
     fn load(&mut self, data: &[u8]) {
+        const MAX_CONSTANTS: usize = 1_000_000;
+        const MAX_STRING_LEN: usize = 16 * 1024 * 1024; // 16MB max string
+        const MAX_FUNCTIONS: usize = 1_000_000;
+        const MAX_CODE_SIZE: usize = 64 * 1024 * 1024; // 64MB max code
+
+        if data.len() > MAX_CODE_SIZE {
+            eprintln!(
+                "[ovm] Error: file too large ({} bytes, max {})",
+                data.len(),
+                MAX_CODE_SIZE
+            );
+            return;
+        }
+
         self.entry = Self::u64(data, 12) as usize;
         let co = Self::u64(data, 20) as usize;
         let codelen = Self::u64(data, 44) as usize;
         let codeoff = Self::u64(data, 36) as usize;
 
+        if codelen > MAX_CODE_SIZE || codeoff.saturating_add(codelen) > data.len() {
+            eprintln!("[ovm] Error: invalid code section size or offset");
+            return;
+        }
+
         // Constants
         if co > 0 && co < data.len() {
             let n = Self::u32(data, co) as usize;
+            if n > MAX_CONSTANTS {
+                eprintln!(
+                    "[ovm] Error: too many constants ({}, max {})",
+                    n, MAX_CONSTANTS
+                );
+                return;
+            }
             let mut p = co + 4;
             for _ in 0..n {
                 if p >= data.len() {
@@ -126,6 +165,17 @@ impl VM {
                     0x03 => {
                         let l = Self::u32(data, p) as usize;
                         p += 4;
+                        if l > MAX_STRING_LEN {
+                            eprintln!(
+                                "[ovm] Error: string constant too large ({}, max {})",
+                                l, MAX_STRING_LEN
+                            );
+                            return;
+                        }
+                        if p + l > data.len() {
+                            eprintln!("[ovm] Error: string constant extends past file end");
+                            return;
+                        }
                         self.consts
                             .push(V::Str(String::from_utf8_lossy(&data[p..p + l]).to_string()));
                         p += l;
@@ -143,6 +193,13 @@ impl VM {
         if codeoff > 0 && codelen > 0 {
             let cd = &data[codeoff..codeoff + codelen];
             let n = Self::u32(cd, 0) as usize;
+            if n > MAX_FUNCTIONS {
+                eprintln!(
+                    "[ovm] Error: too many functions ({}, max {})",
+                    n, MAX_FUNCTIONS
+                );
+                return;
+            }
             let mut p = 4;
             let mut all = Vec::new();
             for _ in 0..n {
@@ -158,6 +215,13 @@ impl VM {
                 p += 2; // param, local, stack counts
                 let bl = Self::u32(cd, p) as usize;
                 p += 4;
+                if bl > MAX_CODE_SIZE {
+                    eprintln!(
+                        "[ovm] Error: function bytecode too large ({}, max {})",
+                        bl, MAX_CODE_SIZE
+                    );
+                    return;
+                }
                 let name = match self.consts.get(ni) {
                     Some(V::Str(s)) => s.clone(),
                     _ => format!("f{}", ni),
@@ -169,15 +233,6 @@ impl VM {
                 self.funcs.push((name, start, param_count));
             }
             self.code = all;
-        }
-        eprintln!(
-            "[ovm] Loaded {} constants, {} functions, entry={}",
-            self.consts.len(),
-            self.funcs.len(),
-            self.entry
-        );
-        for (i, (n, o, p)) in self.funcs.iter().enumerate() {
-            eprintln!("[ovm]   func[{}] '{}' at offset {} params={}", i, n, o, p);
         }
     }
 
@@ -191,16 +246,6 @@ impl VM {
             return Err("No entry point".into());
         }
         self.pc = self.funcs[main_idx].1;
-        eprintln!(
-            "[ovm] Entering '{}' at offset {}",
-            self.funcs[main_idx].0, self.pc
-        );
-        let end = (self.pc + 40).min(self.code.len());
-        eprint!("[ovm] main bytecode: ");
-        for i in self.pc..end {
-            eprint!("{:02X} ", self.code[i]);
-        }
-        eprintln!();
         self.exec()
     }
 
@@ -220,16 +265,6 @@ impl VM {
             }
             let op = self.code[self.pc];
             self.pc += 1;
-            if steps <= 30 {
-                eprintln!(
-                    "[vm] step {} pc={} op=0x{:02X} sp={} frames={}",
-                    steps,
-                    self.pc - 1,
-                    op,
-                    self.stack.len(),
-                    self.frames.len()
-                );
-            }
             match op {
                 // Stack (0x00-0x0F)
                 0x00 => {} // Nop
@@ -306,36 +341,164 @@ impl VM {
                         (_, V::Str(b)) => {
                             self.push(V::Str(format!("{}{}", self.vs(&left), b)));
                         }
+                        (V::I64(_), V::I64(_)) => {
+                            let a = self.vi(&left);
+                            let b = self.vi(&right);
+                            match a.checked_add(b) {
+                                Some(v) => self.push(V::I64(v)),
+                                None => {
+                                    return Err(format!(
+                                        "integer overflow: {} + {} at pc={}",
+                                        a,
+                                        b,
+                                        self.pc - 1
+                                    ))
+                                }
+                            }
+                        }
+                        (V::F64(_), V::F64(_))
+                        | (V::I64(_), V::F64(_))
+                        | (V::F64(_), V::I64(_)) => {
+                            self.push(V::F64(self.vf(&left) + self.vf(&right)));
+                        }
                         _ => {
-                            self.push(V::I64(self.vi(&left) + self.vi(&right)));
+                            return Err(format!(
+                                "type error: cannot add {} and {} at pc={}",
+                                self.vt(&left),
+                                self.vt(&right),
+                                self.pc - 1
+                            ));
                         }
                     }
                 }
                 0x11 => {
-                    let l = self.pi();
-                    let r = self.pi();
-                    self.push(V::I64(l - r));
+                    let l = self.pop();
+                    let r = self.pop();
+                    match (&l, &r) {
+                        (V::I64(_), V::I64(_)) => {
+                            let a = self.vi(&l);
+                            let b = self.vi(&r);
+                            match a.checked_sub(b) {
+                                Some(v) => self.push(V::I64(v)),
+                                None => {
+                                    return Err(format!(
+                                        "integer overflow: {} - {} at pc={}",
+                                        a,
+                                        b,
+                                        self.pc - 1
+                                    ))
+                                }
+                            }
+                        }
+                        (V::F64(_), V::F64(_))
+                        | (V::I64(_), V::F64(_))
+                        | (V::F64(_), V::I64(_)) => {
+                            self.push(V::F64(self.vf(&l) - self.vf(&r)));
+                        }
+                        _ => {
+                            return Err(format!(
+                                "type error: cannot subtract {} and {} at pc={}",
+                                self.vt(&l),
+                                self.vt(&r),
+                                self.pc - 1
+                            ))
+                        }
+                    }
                 }
                 0x12 => {
-                    let l = self.pi();
-                    let r = self.pi();
-                    self.push(V::I64(l * r));
+                    let l = self.pop();
+                    let r = self.pop();
+                    match (&l, &r) {
+                        (V::I64(_), V::I64(_)) => {
+                            let a = self.vi(&l);
+                            let b = self.vi(&r);
+                            match a.checked_mul(b) {
+                                Some(v) => self.push(V::I64(v)),
+                                None => {
+                                    return Err(format!(
+                                        "integer overflow: {} * {} at pc={}",
+                                        a,
+                                        b,
+                                        self.pc - 1
+                                    ))
+                                }
+                            }
+                        }
+                        (V::F64(_), V::F64(_))
+                        | (V::I64(_), V::F64(_))
+                        | (V::F64(_), V::I64(_)) => {
+                            self.push(V::F64(self.vf(&l) * self.vf(&r)));
+                        }
+                        _ => {
+                            return Err(format!(
+                                "type error: cannot multiply {} and {} at pc={}",
+                                self.vt(&l),
+                                self.vt(&r),
+                                self.pc - 1
+                            ))
+                        }
+                    }
                 }
                 0x13 => {
-                    let l = self.pi();
-                    let r = self.pi();
-                    if r == 0 {
-                        return Err("div0".into());
+                    let l = self.pop();
+                    let r = self.pop();
+                    match (&l, &r) {
+                        (V::I64(_), V::I64(_)) => {
+                            let a = self.vi(&l);
+                            let b = self.vi(&r);
+                            if b == 0 {
+                                return Err("division by zero".into());
+                            }
+                            if a == i64::MIN && b == -1 {
+                                return Err(format!(
+                                    "integer overflow: i64::MIN / -1 at pc={}",
+                                    self.pc - 1
+                                ));
+                            }
+                            self.push(V::I64(a / b));
+                        }
+                        (V::F64(_), V::F64(_))
+                        | (V::I64(_), V::F64(_))
+                        | (V::F64(_), V::I64(_)) => {
+                            let a = self.vf(&l);
+                            let b = self.vf(&r);
+                            self.push(V::F64(a / b));
+                        }
+                        _ => {
+                            return Err(format!(
+                                "type error: cannot divide {} and {} at pc={}",
+                                self.vt(&l),
+                                self.vt(&r),
+                                self.pc - 1
+                            ))
+                        }
                     }
-                    self.push(V::I64(l / r));
                 }
                 0x14 => {
-                    let l = self.pi();
-                    let r = self.pi();
-                    if r == 0 {
-                        return Err("mod0".into());
+                    let l = self.pop();
+                    let r = self.pop();
+                    match (&l, &r) {
+                        (V::I64(_), V::I64(_)) => {
+                            let a = self.vi(&l);
+                            let b = self.vi(&r);
+                            if b == 0 {
+                                return Err("modulo by zero".into());
+                            }
+                            if a == i64::MIN && b == -1 {
+                                self.push(V::I64(0));
+                            } else {
+                                self.push(V::I64(a % b));
+                            }
+                        }
+                        _ => {
+                            return Err(format!(
+                                "type error: cannot mod {} and {} at pc={}",
+                                self.vt(&l),
+                                self.vt(&r),
+                                self.pc - 1
+                            ))
+                        }
                     }
-                    self.push(V::I64(l % r));
                 }
                 0x15 => {
                     let v = self.pi();
@@ -395,8 +558,9 @@ impl VM {
                     self.push(V::I64(l ^ r));
                 }
                 0x33 => {
-                    let v = self.pi();
-                    self.push(V::I64(!v));
+                    // O-069: Boolean NOT (not bitwise complement)
+                    let v = self.pop();
+                    self.push(V::Bool(!self.truthy(&v)));
                 }
                 0x34 => {
                     let l = self.pi();
@@ -440,6 +604,43 @@ impl VM {
                     let r = self.pop();
                     self.push(V::Bool(self.vcmp_ge(&l, &r)));
                 }
+                0x46 => {
+                    // Cmp: three-way comparison, returns -1, 0, or 1
+                    let l = self.pop();
+                    let r = self.pop();
+                    let result = match (&l, &r) {
+                        (V::I64(a), V::I64(b)) => {
+                            if a < b {
+                                -1
+                            } else if a > b {
+                                1
+                            } else {
+                                0
+                            }
+                        }
+                        (V::F64(a), V::F64(b)) => {
+                            if a < b {
+                                -1
+                            } else if a > b {
+                                1
+                            } else {
+                                0
+                            }
+                        }
+                        _ => {
+                            let a = self.vf(&l);
+                            let b = self.vf(&r);
+                            if a < b {
+                                -1
+                            } else if a > b {
+                                1
+                            } else {
+                                0
+                            }
+                        }
+                    };
+                    self.push(V::I64(result));
+                }
                 0x47 => {
                     let v = self.pop();
                     self.push(V::Bool(matches!(v, V::Null)));
@@ -464,6 +665,10 @@ impl VM {
                 }
                 0x58 => {
                     let idx = self.ru32() as usize;
+                    // O-012: Stack overflow protection
+                    if self.frames.len() >= 10000 {
+                        return Err("stack overflow: max call depth (10000) exceeded".into());
+                    }
                     if idx < self.funcs.len() {
                         let fname = self.funcs[idx].0.clone();
                         match fname.as_str() {
@@ -516,6 +721,43 @@ impl VM {
                                 let i = self.vi(&v);
                                 self.push(V::I64(i.abs()));
                             }
+                            // File I/O stubs (O-105) — not yet implemented
+                            "open" => {
+                                let _path = self.pop();
+                                return Err("syscall 'open' is not implemented (O-105: file I/O not yet available)".into());
+                            }
+                            "read_file" => {
+                                let _path = self.pop();
+                                return Err("syscall 'read_file' is not implemented (O-105: file I/O not yet available)".into());
+                            }
+                            "write_file" => {
+                                let _content = self.pop();
+                                let _path = self.pop();
+                                return Err("syscall 'write_file' is not implemented (O-105: file I/O not yet available)".into());
+                            }
+                            "close" => {
+                                let _fd = self.pop();
+                                return Err("syscall 'close' is not implemented (O-105: file I/O not yet available)".into());
+                            }
+                            // Command-line args (O-106)
+                            "args" | "argv" => {
+                                let arr: Vec<V> =
+                                    self.args.iter().map(|a| V::Str(a.clone())).collect();
+                                self.push(V::Array(std::rc::Rc::new(std::cell::RefCell::new(arr))));
+                            }
+                            "arg_count" | "argc" => {
+                                self.push(V::I64(self.args.len() as i64));
+                            }
+                            "arg_at" => {
+                                let idx = self.pop();
+                                let i = self.vi(&idx) as usize;
+                                let val = if i < self.args.len() {
+                                    V::Str(self.args[i].clone())
+                                } else {
+                                    V::Null
+                                };
+                                self.push(val);
+                            }
                             _ => {
                                 let faddr = self.funcs[idx].1;
                                 let param_count = self.funcs[idx].2 as usize;
@@ -543,6 +785,9 @@ impl VM {
                                 continue;
                             }
                         }
+                    } else {
+                        // O-072: Invalid function index error
+                        return Err(format!("invalid function index {} (have {} functions)", idx, self.funcs.len()));
                     }
                 }
                 0x5A => {
@@ -677,7 +922,21 @@ impl VM {
                             let val = o.borrow().get(&field_name).cloned().unwrap_or(V::Null);
                             self.push(val);
                         }
-                        _ => self.push(V::Null),
+                        V::Null => {
+                            return Err(format!(
+                                "null dereference: cannot access field '{}' on null at pc={}",
+                                field_name,
+                                self.pc - 1
+                            ));
+                        }
+                        _ => {
+                            return Err(format!(
+                                "type error: cannot access field '{}' on {} at pc={}",
+                                field_name,
+                                self.vt(&obj),
+                                self.pc - 1
+                            ));
+                        }
                     }
                 }
                 0x92 => {
@@ -788,6 +1047,96 @@ impl VM {
                     self.push(V::I64(if self.truthy(&v) { 1 } else { 0 }));
                 }
 
+                // Heap (0x80-0x8C)
+                0x88 => {
+                    // Alloc: size from operand (u32), push heap pointer
+                    let size = self.ru32() as usize;
+                    const MAX_HEAP_ALLOC: usize = 64 * 1024 * 1024; // 64MB max per alloc
+                    if size > MAX_HEAP_ALLOC {
+                        return Err(format!(
+                            "heap allocation too large: {} bytes (max {})",
+                            size, MAX_HEAP_ALLOC
+                        ));
+                    }
+                    let ptr = if let Some(idx) = self.heap_free.pop() {
+                        self.heap[idx] = Some(vec![0u8; size]);
+                        idx
+                    } else {
+                        let idx = self.heap.len();
+                        self.heap.push(Some(vec![0u8; size]));
+                        idx
+                    };
+                    self.push(V::I64(ptr as i64));
+                }
+                0x89 => {
+                    // Realloc: ptr on stack, new size from operand (u32)
+                    let new_size = self.ru32() as usize;
+                    let v = self.pop();
+                    if let V::I64(ptr) = v {
+                        let idx = ptr as usize;
+                        if idx < self.heap.len() {
+                            if let Some(ref mut data) = self.heap[idx] {
+                                const MAX_HEAP_ALLOC: usize = 64 * 1024 * 1024;
+                                if new_size > MAX_HEAP_ALLOC {
+                                    return Err(format!(
+                                        "heap realloc too large: {} bytes",
+                                        new_size
+                                    ));
+                                }
+                                data.resize(new_size, 0);
+                            }
+                        }
+                    }
+                    self.push(v);
+                }
+                0x8A => {
+                    // Free: ptr on stack
+                    let v = self.pop();
+                    if let V::I64(ptr) = v {
+                        let idx = ptr as usize;
+                        if idx < self.heap.len() {
+                            self.heap[idx] = None;
+                            self.heap_free.push(idx);
+                        }
+                    }
+                }
+                0x8B => {
+                    // Memcpy: dst_ptr, src_ptr, size on stack
+                    let size_val = self.pop();
+                    let src_val = self.pop();
+                    let dst_val = self.pop();
+                    if let (V::I64(dst), V::I64(src), V::I64(sz)) = (&dst_val, &src_val, &size_val)
+                    {
+                        let (di, si, n) = (*dst as usize, *src as usize, *sz as usize);
+                        if si < self.heap.len() && di < self.heap.len() {
+                            let src_data =
+                                self.heap[si].as_ref().map(|d| d[..n.min(d.len())].to_vec());
+                            if let (Some(ref s), Some(ref mut d)) =
+                                (src_data, self.heap[di].as_mut())
+                            {
+                                let copy_len = n.min(s.len()).min(d.len());
+                                d[..copy_len].copy_from_slice(&s[..copy_len]);
+                            }
+                        }
+                    }
+                }
+                0x8C => {
+                    // Memset: ptr, value, size on stack
+                    let size_val = self.pop();
+                    let fill_val = self.pop();
+                    let ptr_val = self.pop();
+                    if let (V::I64(ptr), V::I64(val), V::I64(sz)) = (&ptr_val, &fill_val, &size_val)
+                    {
+                        let idx = *ptr as usize;
+                        if idx < self.heap.len() {
+                            if let Some(ref mut data) = self.heap[idx] {
+                                let n = (*sz as usize).min(data.len());
+                                data[..n].fill(*val as u8);
+                            }
+                        }
+                    }
+                }
+
                 // Control (0xF0-0xFF)
                 0xF0 => {
                     // Syscall: u16 constant index = native function name (e.g., "core::println")
@@ -848,6 +1197,42 @@ impl VM {
                         "abs" => {
                             let v = self.pop();
                             self.push(V::I64(self.vi(&v).abs()));
+                        }
+                        // File I/O stubs (O-105) — not yet implemented
+                        "open" => {
+                            let _path = self.pop(); // pop path argument
+                            return Err("syscall 'open' is not implemented (O-105: file I/O not yet available)".into());
+                        }
+                        "read_file" => {
+                            let _path = self.pop();
+                            return Err("syscall 'read_file' is not implemented (O-105: file I/O not yet available)".into());
+                        }
+                        "write_file" => {
+                            let _content = self.pop();
+                            let _path = self.pop();
+                            return Err("syscall 'write_file' is not implemented (O-105: file I/O not yet available)".into());
+                        }
+                        "close" => {
+                            let _fd = self.pop();
+                            return Err("syscall 'close' is not implemented (O-105: file I/O not yet available)".into());
+                        }
+                        // Command-line args (O-106)
+                        "args" | "argv" => {
+                            let arr: Vec<V> = self.args.iter().map(|a| V::Str(a.clone())).collect();
+                            self.push(V::Array(std::rc::Rc::new(std::cell::RefCell::new(arr))));
+                        }
+                        "arg_count" | "argc" => {
+                            self.push(V::I64(self.args.len() as i64));
+                        }
+                        "arg_at" => {
+                            let idx = self.pop();
+                            let i = self.vi(&idx) as usize;
+                            let val = if i < self.args.len() {
+                                V::Str(self.args[i].clone())
+                            } else {
+                                V::Null
+                            };
+                            self.push(val);
                         }
                         _ => {
                             // Unknown native — just leave args on stack and push null

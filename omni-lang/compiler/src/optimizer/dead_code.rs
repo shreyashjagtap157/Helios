@@ -68,7 +68,9 @@ fn collect_calls_in_block(block: &Block, called: &mut HashSet<String>) {
 
 fn collect_calls_in_stmt(stmt: &Statement, called: &mut HashSet<String>) {
     match stmt {
-        Statement::Let { value, .. } => collect_calls_in_expr(value, called),
+        Statement::Let {
+            value: Some(value), ..
+        } => collect_calls_in_expr(value, called),
         Statement::Expression(expr) => collect_calls_in_expr(expr, called),
         Statement::Return(Some(expr)) => collect_calls_in_expr(expr, called),
         Statement::If {
@@ -172,7 +174,9 @@ fn collect_idents_in_block(block: &Block, used: &mut HashSet<String>) {
 
 fn collect_idents_in_stmt(stmt: &Statement, used: &mut HashSet<String>) {
     match stmt {
-        Statement::Let { value, .. } => collect_idents_in_expr(value, used),
+        Statement::Let {
+            value: Some(value), ..
+        } => collect_idents_in_expr(value, used),
         Statement::Expression(expr) => collect_idents_in_expr(expr, used),
         Statement::Return(Some(expr)) => collect_idents_in_expr(expr, used),
         Statement::If {
@@ -251,7 +255,7 @@ fn eliminate_in_block(block: &mut Block) {
     let mut truncate_at = None;
     for (i, stmt) in block.statements.iter().enumerate() {
         match stmt {
-            Statement::Return(_) | Statement::Break | Statement::Continue => {
+            Statement::Return(_) | Statement::Break(_) | Statement::Continue => {
                 if i + 1 < block.statements.len() {
                     truncate_at = Some(i + 1);
                 }
@@ -362,7 +366,7 @@ mod tests {
     #[test]
     fn test_remove_after_break() {
         let mut block = Block {
-            statements: vec![Statement::Break, Statement::Expression(int(99))],
+            statements: vec![Statement::Break(None), Statement::Expression(int(99))],
         };
         eliminate_in_block(&mut block);
         assert_eq!(block.statements.len(), 1);

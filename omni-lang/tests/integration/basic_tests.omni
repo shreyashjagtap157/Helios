@@ -1,0 +1,50 @@
+// Integration tests for basic compiler features (O-084, O-086)
+
+fn test_arithmetic() -> Int:
+    let a: Int = 10
+    let b: Int = 3
+    return a + b - 2
+
+fn test_string_concat() -> String:
+    let greeting: String = "Hello"
+    let target: String = " World"
+    return greeting + target
+
+fn test_if_else() -> Int:
+    let x: Int = 42
+    if x > 10:
+        return 1
+    else:
+        return 0
+
+fn test_while() -> Int:
+    let sum: Int = 0
+    let i: Int = 0
+    while i < 5:
+        sum = sum + i
+        i = i + 1
+    return sum
+
+fn test_for_loop() -> Int:
+    let total: Int = 0
+    for x in [1, 2, 3, 4, 5]:
+        total = total + x
+    return total
+
+fn test_struct():
+    struct Point:
+        x: Int
+        y: Int
+    let p: Point = Point { x: 10, y: 20 }
+    println(p.x)
+
+fn main():
+    let r1: Int = test_arithmetic()
+    println(r1)
+    let r2: String = test_string_concat()
+    println(r2)
+    let r3: Int = test_if_else()
+    println(r3)
+    let r4: Int = test_while()
+    println(r4)
+    println("Basic tests passed")

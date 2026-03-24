@@ -5,6 +5,10 @@ module std::collections
 
 import std::core
 
+// Type aliases for convenience (O-019, O-020)
+type Vec<T> = Vector<T>
+type Map<K, V> = HashMap<K, V>
+
 // ============================================
 // Sequential Collections
 // ============================================

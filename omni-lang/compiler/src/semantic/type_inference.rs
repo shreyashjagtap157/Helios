@@ -11,6 +11,24 @@
 //!
 //! The inference handles arithmetic, comparisons, if/else, function calls,
 //! variable bindings, struct field access, array literals, and method calls.
+//!
+//! ## Error Handling Model (O-024)
+//!
+//! Omni v1 uses a two-tier error model:
+//!
+//! - **Hard errors** (fatal): Explicit type-annotation mismatches where the user
+//!   wrote `let x: Int = "hello"` and the initializer's type clearly disagrees.
+//!   These cause compilation to abort.
+//!
+//! - **Soft errors** (warnings): Everything else — unresolved type variables,
+//!   undefined builtins, numeric type expectations for `+` with strings, etc.
+//!   These are emitted as warnings because the inference engine may have
+//!   false positives from missing built-in signatures or dynamic features.
+//!
+//! At runtime, the OVM uses `Result<(), String>` for all error paths.
+//! Hard errors (panic opcode, assertion failure, division by zero, stack overflow)
+//! terminate the VM with a descriptive message. There is no try/catch in v1;
+//! programs use the Result type for recoverable errors.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -158,6 +176,53 @@ impl fmt::Display for TypeError {
         }
         Ok(())
     }
+}
+
+/// Determine whether a type error is a "hard" (fatal) error.
+///
+/// Hard errors are **explicit type-annotation mismatches** where the user
+/// wrote `let x: Int = "hello"` and the initializer's type clearly
+/// disagrees with the annotation.  Everything else is demoted to a
+/// warning because the type-inference engine was never calibrated for
+/// Omni's dynamic-flavour features (string concat with `+`, implicit
+/// conversions, built-in functions not in the environment, etc.).
+///
+/// Canonical location (O-097): previously duplicated in `main.rs` and
+/// `interpreter.rs`. Both now delegate to this function.
+pub fn is_hard_type_error(err: &TypeError) -> bool {
+    let msg = &err.message;
+
+    // Unresolved type variables — inference couldn't determine the type
+    if msg.contains("?T") {
+        return false;
+    }
+
+    // Undefined variable / function — likely a built-in not registered
+    if msg.contains("Undefined variable") || msg.contains("Undefined function") {
+        return false;
+    }
+
+    // "<error>" is the error-recovery placeholder type
+    if msg.contains("<error>") {
+        return false;
+    }
+
+    // "Expected numeric type" — Omni supports string concat with +,
+    // list concat, etc.  The inference engine doesn't model these.
+    if msg.contains("Expected numeric type") {
+        return false;
+    }
+
+    // Only flag explicit annotation mismatches as hard errors:
+    // "Type mismatch: X vs Y – let/var binding '…': declared type must match initializer"
+    if msg.contains("Type mismatch") && msg.contains("declared type must match initializer") {
+        return true;
+    }
+
+    // All other type-mismatch or constraint errors are soft
+    // (function call argument mismatches, return type mismatches, etc.
+    //  may be false positives due to missing built-in signatures).
+    false
 }
 
 // ---------------------------------------------------------------------------
@@ -551,6 +616,7 @@ impl InferenceEngine {
                 Type::Tuple(elem_tys)
             }
             ast::Type::Nullable(inner) => Type::Nullable(Box::new(self.from_ast_type(inner))),
+            ast::Type::Any => Type::Var(99999), // Any = unconstrained sentinel type variable
         }
     }
 
@@ -697,7 +763,10 @@ impl InferenceEngine {
             ast::Statement::Let {
                 name, ty, value, ..
             } => {
-                let val_ty = self.infer_expr(value, env);
+                let val_ty = match value {
+                    Some(v) => self.infer_expr(v, env),
+                    None => Type::Void,
+                };
                 let declared_ty = match ty {
                     Some(t) => {
                         let dt = self.from_ast_type(t);
@@ -905,7 +974,7 @@ impl InferenceEngine {
             }
 
             // -- break, continue, pass – no types involved --
-            ast::Statement::Break | ast::Statement::Continue | ast::Statement::Pass => {}
+            ast::Statement::Break(_) | ast::Statement::Continue | ast::Statement::Pass => {}
         }
     }
 
@@ -1265,16 +1334,30 @@ impl InferenceEngine {
             | ast::BinaryOp::Mod => {
                 self.constrain_numeric(lhs_ty, &format!("left operand of {:?}", op));
                 self.constrain_numeric(rhs_ty, &format!("right operand of {:?}", op));
-                // Both sides must agree
-                self.add_constraint(Constraint::Equal(
-                    lhs_ty.clone(),
-                    rhs_ty.clone(),
-                    ConstraintOrigin::new(format!(
-                        "arithmetic {:?}: both operands must have the same numeric type",
-                        op
-                    )),
-                ));
-                lhs_ty.clone()
+                // Allow implicit widening: Int + Float → Float, Float + Int → Float
+                // (O-025: numeric coercion rules)
+                let resolved_lhs = self.substitution.apply(lhs_ty);
+                let resolved_rhs = self.substitution.apply(rhs_ty);
+                match (&resolved_lhs, &resolved_rhs) {
+                    (Type::Int, Type::Float)
+                    | (Type::Float, Type::Int)
+                    | (Type::Float, Type::Float) => {
+                        // Mixed int/float → widen to Float
+                        Type::Float
+                    }
+                    _ => {
+                        // Both Int (or unknown) — require exact match
+                        self.add_constraint(Constraint::Equal(
+                            lhs_ty.clone(),
+                            rhs_ty.clone(),
+                            ConstraintOrigin::new(format!(
+                                "arithmetic {:?}: operands must be numeric (Int or Float)",
+                                op
+                            )),
+                        ));
+                        lhs_ty.clone()
+                    }
+                }
             }
 
             // Comparison → both operands same type, result Bool
@@ -1431,6 +1514,12 @@ impl InferenceEngine {
                 }
             }
             ast::Pattern::Wildcard => { /* matches anything */ }
+            ast::Pattern::Or(patterns) => {
+                // OR patterns: bind each sub-pattern with the same expected type
+                for sub_pat in patterns {
+                    self.bind_pattern(sub_pat, expected_ty, env);
+                }
+            }
         }
     }
 
@@ -2034,7 +2123,7 @@ mod tests {
                 name: "x".into(),
                 mutable: false,
                 ty: None,
-                value: a::Expression::Literal(a::Literal::Int(42)),
+                value: Some(a::Expression::Literal(a::Literal::Int(42))),
             }],
         ));
         let result = check_types(&module).expect("should succeed");
@@ -2049,7 +2138,7 @@ mod tests {
                 name: "x".into(),
                 mutable: false,
                 ty: Some(a::Type::I32),
-                value: a::Expression::Literal(a::Literal::Int(10)),
+                value: Some(a::Expression::Literal(a::Literal::Int(10))),
             }],
         ));
         let result = check_types(&module).expect("should succeed");

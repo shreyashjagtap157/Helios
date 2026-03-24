@@ -620,8 +620,13 @@ struct LocalKey<T: 'static>:
         __intrinsic_tls_get_or_init(self, self.init)
 
 // ============================================
-// Intrinsics
+// Intrinsics (TODO: O-082)
 // ============================================
+// All intrinsics below are declared but NOT implemented in the OVM.
+// The runtime has no thread support yet. These are aspirational signatures
+// for future OVM implementation. Any code using std::thread will fail at
+// runtime until these intrinsics are implemented.
+// See ISSUES.md O-082.
 
 extern "intrinsic":
     fn __intrinsic_thread_id() -> usize

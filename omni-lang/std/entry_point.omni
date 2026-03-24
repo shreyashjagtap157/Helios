@@ -1,0 +1,23 @@
+// Omni Language Specification: Entry Point Contract
+//
+// Every Omni program MUST define a `fn main()` entry point.
+//
+// The entry point signature is:
+//   fn main():
+//       // program body
+//
+// Rules:
+//   - The function must be named `main`
+//   - It takes no arguments (in v1)
+//   - It returns void (no return type annotation needed)
+//   - The compiler looks for `fn main()` as the program entry point
+//   - If no `fn main()` is found, compilation should produce an error
+//   - Execution begins at the first statement inside `main()`
+//
+// Example:
+//   fn main():
+//       println("Hello, World!")
+//
+// Future (post-v1):
+//   - fn main(args: Vec<String>) -> i32   (with exit code)
+//   - async fn main()                      (for async runtimes)

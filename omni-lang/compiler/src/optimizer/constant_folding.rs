@@ -75,11 +75,13 @@ fn fold_statement(stmt: Statement, env: &mut ConstEnv) -> Statement {
             ty,
             value,
         } => {
-            let folded = fold_expr_with_env(&value, env);
+            let folded = value.map(|v| fold_expr_with_env(&v, env));
             // If the binding is immutable and the value is a literal, propagate it
             if !mutable {
-                if is_literal(&folded) {
-                    env.insert(name.clone(), folded.clone());
+                if let Some(ref f) = folded {
+                    if is_literal(f) {
+                        env.insert(name.clone(), f.clone());
+                    }
                 }
             }
             Statement::Let {
@@ -531,13 +533,13 @@ mod tests {
                             name: "x".into(),
                             mutable: false,
                             ty: None,
-                            value: int(5),
+                            value: Some(int(5)),
                         },
                         Statement::Let {
                             name: "y".into(),
                             mutable: false,
                             ty: None,
-                            value: bin(ident("x"), BinaryOp::Add, int(3)),
+                            value: Some(bin(ident("x"), BinaryOp::Add, int(3))),
                         },
                     ],
                 },
@@ -545,7 +547,10 @@ mod tests {
         };
         fold_constants(&mut module);
         if let Item::Function(f) = &module.items[0] {
-            if let Statement::Let { value, .. } = &f.body.statements[1] {
+            if let Statement::Let {
+                value: Some(value), ..
+            } = &f.body.statements[1]
+            {
                 assert!(
                     matches!(value, Expression::Literal(Literal::Int(8))),
                     "Expected 8, got {:?}",
@@ -573,13 +578,13 @@ mod tests {
                             name: "x".into(),
                             mutable: true,
                             ty: None,
-                            value: int(5),
+                            value: Some(int(5)),
                         },
                         Statement::Let {
                             name: "y".into(),
                             mutable: false,
                             ty: None,
-                            value: bin(ident("x"), BinaryOp::Add, int(3)),
+                            value: Some(bin(ident("x"), BinaryOp::Add, int(3))),
                         },
                     ],
                 },
@@ -587,7 +592,10 @@ mod tests {
         };
         fold_constants(&mut module);
         if let Item::Function(f) = &module.items[0] {
-            if let Statement::Let { value, .. } = &f.body.statements[1] {
+            if let Statement::Let {
+                value: Some(value), ..
+            } = &f.body.statements[1]
+            {
                 // x is mutable, so y should still reference x
                 assert!(
                     matches!(value, Expression::Binary(..)),
@@ -614,23 +622,23 @@ mod tests {
                             name: "a".into(),
                             mutable: false,
                             ty: None,
-                            value: int(2),
+                            value: Some(int(2)),
                         },
                         Statement::Let {
                             name: "b".into(),
                             mutable: false,
                             ty: None,
-                            value: int(3),
+                            value: Some(int(3)),
                         },
                         Statement::Let {
                             name: "c".into(),
                             mutable: false,
                             ty: None,
-                            value: bin(
+                            value: Some(bin(
                                 bin(ident("a"), BinaryOp::Mul, ident("b")),
                                 BinaryOp::Add,
                                 int(1),
-                            ),
+                            )),
                         },
                     ],
                 },
@@ -638,7 +646,10 @@ mod tests {
         };
         fold_constants(&mut module);
         if let Item::Function(f) = &module.items[0] {
-            if let Statement::Let { value, .. } = &f.body.statements[2] {
+            if let Statement::Let {
+                value: Some(value), ..
+            } = &f.body.statements[2]
+            {
                 assert!(
                     matches!(value, Expression::Literal(Literal::Int(7))),
                     "Expected 7, got {:?}",

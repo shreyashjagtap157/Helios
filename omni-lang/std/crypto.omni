@@ -1,7 +1,6 @@
 module std::crypto
 
 import std::core
-import std::net
 import std::io
 
 // ============================================
@@ -422,13 +421,17 @@ struct TlsStream:
     #[cfg(unix)]
     ssl: *mut Ssl
     ctx: *mut SslCtx
-    inner: net::TcpStream
-    
+    fd: i32  // Underlying socket file descriptor (net module provides the TcpStream)
+
 impl TlsStream:
     async fn connect(host: &str, port: u16, config: TlsConfig) -> Result<TlsStream, TlsError>:
-        // Connect TCP first
-        let addr = net::resolve_host(host, port).await?
-        let tcp = net::TcpStream::connect(addr).await?
+        // NOTE: The caller (std::net) must establish the TCP connection first
+        // and pass the fd. This function only handles the TLS handshake.
+        // Direct use from user code should go through net::HttpClient instead.
+        return Result::Err(TlsError::NotImplemented)
+
+    // Internal: create from an already-connected socket fd (called by std::net)
+    async fn connect_fd(fd: i32, host: &str, config: TlsConfig) -> Result<TlsStream, TlsError>:
         
         #[cfg(unix)]:
             // Initialize OpenSSL context
@@ -456,7 +459,7 @@ impl TlsStream:
             SSL_set_tlsext_host_name(ssl, host_c.as_ptr())
             
             // Attach to socket
-            SSL_set_fd(ssl, tcp.fd)
+            SSL_set_fd(ssl, fd)
             
             // Perform handshake
             let ret = SSL_connect(ssl)
@@ -466,29 +469,12 @@ impl TlsStream:
                 SSL_CTX_free(ctx)
                 return Result::Err(TlsError::HandshakeFailed(err))
                 
-            Result::Ok(TlsStream { ssl, ctx, inner: tcp })
+            Result::Ok(TlsStream { ssl, ctx, fd })
             
         #[cfg(windows)]:
-            // Use Windows SChannel via SSPI
-            // Import Windows security functions
-            extern "C":
-                fn InitSecurityInterfaceW() -> *mut u8
-                fn AcquireCredentialsHandleW(principal: *const u8, package: *const u16, 
-                    fCredentialUse: u32, logonId: *const u8, authData: *mut u8,
-                    getKeyFn: *const u8, getKeyArg: *const u8, 
-                    credential: *mut u8, expiry: *mut u8) -> i32
-            
-            // For Windows TLS, delegate to native WinHTTP or SSPI
-            // Use PowerShell .NET interop as reliable fallback
-            let ps_script = format!(
-                "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; " +
-                "$tcp = New-Object Net.Sockets.TcpClient('{}', {}); " +
-                "$ssl = New-Object Net.Security.SslStream($tcp.GetStream()); " +
-                "$ssl.AuthenticateAsClient('{}')",
-                host, port, host
-            )
-            // Since direct SChannel FFI is complex, use std::net with TLS handled at Omni runtime level
-            Result::Err(TlsError::PlatformNotYetSupported("Use Omni's built-in TLS on Windows"))
+            // Windows TLS is not yet implemented in crypto.omni
+            // std::net handles TLS via its own mechanisms
+            Result::Err(TlsError::NotImplemented)
 
 impl io::Read for TlsStream:
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, io::IOError>:

@@ -743,6 +743,18 @@ impl Parser {
             None
         };
 
+        // Skip where clauses if present
+        if matches!(self.peek_kind(), Some(TokenKind::Where)) {
+            self.advance(); // consume `where`
+                            // Consume tokens until we hit a colon (block start)
+            while !matches!(self.peek_kind(), Some(TokenKind::Colon))
+                && !matches!(self.peek_kind(), Some(TokenKind::Newline))
+                && self.peek().is_some()
+            {
+                self.advance();
+            }
+        }
+
         self.expect(&TokenKind::Colon)?;
         self.expect(&TokenKind::Newline)?;
 
@@ -836,10 +848,18 @@ impl Parser {
 
         let base_type = self.parse_base_type()?;
 
-        Ok(if let Some(own) = ownership {
-            Type::WithOwnership(Box::new(base_type), own)
+        // Check for nullable postfix: T?
+        let result_type = if matches!(self.peek_kind(), Some(TokenKind::Question)) {
+            self.advance();
+            Type::Nullable(Box::new(base_type))
         } else {
             base_type
+        };
+
+        Ok(if let Some(own) = ownership {
+            Type::WithOwnership(Box::new(result_type), own)
+        } else {
+            result_type
         })
     }
 
@@ -956,6 +976,26 @@ impl Parser {
                     Ok(Type::Named(name))
                 }
             }
+            Some(TokenKind::LParen) => {
+                // Tuple type: (T1, T2, ...)
+                self.advance();
+                let mut elem_types = Vec::new();
+                while !matches!(self.peek_kind(), Some(TokenKind::RParen)) {
+                    elem_types.push(self.parse_type()?);
+                    if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                self.expect(&TokenKind::RParen)?;
+                if elem_types.len() == 1 {
+                    // Single type in parens is just grouping, not a tuple
+                    Ok(elem_types.into_iter().next().unwrap())
+                } else {
+                    Ok(Type::Tuple(elem_types))
+                }
+            }
             _ => {
                 let token = self.peek().unwrap();
                 Err(ParseError::InvalidSyntax {
@@ -977,6 +1017,7 @@ impl Parser {
         let mut statements = Vec::new();
 
         while !matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+            let before_idx = self.current;
             self.skip_newlines();
             if matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
                 break;
@@ -1002,6 +1043,13 @@ impl Parser {
                     self.synchronize();
                 }
             }
+            // Progress guard: if no tokens were consumed, force advance to avoid infinite loops
+            if self.current == before_idx {
+                if self.peek().is_none() || matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+                    break;
+                }
+                self.advance();
+            }
         }
 
         self.expect(&TokenKind::Dedent)?;
@@ -1024,8 +1072,16 @@ impl Parser {
             Some(TokenKind::Defer) => self.parse_defer(),
             Some(TokenKind::Break) => {
                 self.advance();
+                let value = if matches!(self.peek_kind(), Some(TokenKind::Newline))
+                    || matches!(self.peek_kind(), Some(TokenKind::Dedent))
+                    || self.peek().is_none()
+                {
+                    None
+                } else {
+                    Some(self.parse_expression()?)
+                };
                 self.skip_newlines();
-                Ok(Statement::Break)
+                Ok(Statement::Break(value))
             }
             Some(TokenKind::Continue) => {
                 self.advance();
@@ -1175,18 +1231,18 @@ impl Parser {
             self.skip_newlines();
             let pattern = self.parse_pattern()?;
 
-            // Support `pat1 | pat2 | pat3` alternative patterns in match arms.
-            // If the pattern is followed by `|` then consume additional
-            // alternatives so the parser doesn't treat `|` as the unexpected
-            // token when expecting ':' or '=>'. We don't currently construct
-            // a composite OR-pattern node; for recovery purposes we simply
-            // consume the extra alternatives.
-            while matches!(self.peek_kind(), Some(TokenKind::Pipe)) {
-                self.advance();
-                // parse and discard the next alternative
-                let _ = self.parse_pattern();
-                self.skip_newlines();
-            }
+            // Support `pat1 | pat2 | pat3` alternative patterns.
+            let pattern = if matches!(self.peek_kind(), Some(TokenKind::Pipe)) {
+                let mut alternatives = vec![pattern];
+                while matches!(self.peek_kind(), Some(TokenKind::Pipe)) {
+                    self.advance();
+                    alternatives.push(self.parse_pattern()?);
+                    self.skip_newlines();
+                }
+                Pattern::Or(alternatives)
+            } else {
+                pattern
+            };
             self.expect(&TokenKind::FatArrow)?;
             let channel_op = self.parse_expression()?;
             self.expect(&TokenKind::Colon)?;
@@ -1220,8 +1276,12 @@ impl Parser {
             None
         };
 
-        self.expect(&TokenKind::Eq)?;
-        let value = self.parse_expression()?;
+        let value = if matches!(self.peek_kind(), Some(TokenKind::Eq)) {
+            self.advance();
+            Some(self.parse_expression()?)
+        } else {
+            None
+        };
         self.skip_newlines();
 
         Ok(Statement::Let {
@@ -1244,7 +1304,7 @@ impl Parser {
         Ok(Statement::Return(value))
     }
 
-    /// Parse if statement
+    /// Parse if statement (with elif support — O-004)
     fn parse_if(&mut self) -> Result<Statement, ParseError> {
         self.expect(&TokenKind::If)?;
         let condition = self.parse_expression()?;
@@ -1252,7 +1312,65 @@ impl Parser {
         self.expect(&TokenKind::Newline)?;
         let then_block = self.parse_block()?;
 
-        let else_block = if matches!(self.peek_kind(), Some(TokenKind::Else)) {
+        // O-004: Handle elif chains by desugaring to nested else { if ... }
+        let else_block = if matches!(self.peek_kind(), Some(TokenKind::Elif)) {
+            self.advance(); // consume 'elif'
+            let elif_condition = self.parse_expression()?;
+            self.expect(&TokenKind::Colon)?;
+            self.expect(&TokenKind::Newline)?;
+            let elif_then = self.parse_block()?;
+
+            // Recursively handle further elif/else chains
+            let elif_else = if matches!(self.peek_kind(), Some(TokenKind::Elif)) {
+                // Re-enter elif handling: synthesize an if-statement for the next elif
+                // We need to "put back" the elif and call ourselves, but since we can't
+                // unadvance, we build the chain manually
+                let mut inner = self.parse_elif_chain()?;
+                Some(Block { statements: vec![inner] })
+            } else if matches!(self.peek_kind(), Some(TokenKind::Else)) {
+                self.advance();
+                self.expect(&TokenKind::Colon)?;
+                self.expect(&TokenKind::Newline)?;
+                Some(self.parse_block()?)
+            } else {
+                None
+            };
+
+            Some(Block {
+                statements: vec![Statement::If {
+                    condition: elif_condition,
+                    then_block: elif_then,
+                    else_block: elif_else,
+                }],
+            })
+        } else if matches!(self.peek_kind(), Some(TokenKind::Else)) {
+            self.advance();
+            self.expect(&TokenKind::Colon)?;
+            self.expect(&TokenKind::Newline)?;
+            Some(self.parse_block()?)
+        } else {
+            None
+        };
+
+        Ok(Statement::If {
+            condition,
+            then_block,
+            else_block,
+        })
+    }
+
+    /// Parse elif chain (helper for elif desugaring — O-004)
+    fn parse_elif_chain(&mut self) -> Result<Statement, ParseError> {
+        self.expect(&TokenKind::Elif)?;
+        let condition = self.parse_expression()?;
+        self.expect(&TokenKind::Colon)?;
+        self.expect(&TokenKind::Newline)?;
+        let then_block = self.parse_block()?;
+
+        let else_block = if matches!(self.peek_kind(), Some(TokenKind::Elif)) {
+            let inner = self.parse_elif_chain()?;
+            Some(Block { statements: vec![inner] })
+        } else if matches!(self.peek_kind(), Some(TokenKind::Else)) {
             self.advance();
             self.expect(&TokenKind::Colon)?;
             self.expect(&TokenKind::Newline)?;
@@ -1271,7 +1389,24 @@ impl Parser {
     /// Parse for loop
     fn parse_for(&mut self) -> Result<Statement, ParseError> {
         self.expect(&TokenKind::For)?;
-        let var = self.parse_identifier()?;
+        // Support destructuring patterns: for (k, v) in iter:
+        let var = if matches!(self.peek_kind(), Some(TokenKind::LParen)) {
+            // Parse parenthesized pattern and collect identifier names
+            self.advance(); // consume (
+            let mut names = Vec::new();
+            while !matches!(self.peek_kind(), Some(TokenKind::RParen)) {
+                names.push(self.parse_identifier()?);
+                if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            self.expect(&TokenKind::RParen)?;
+            format!("({})", names.join(", "))
+        } else {
+            self.parse_identifier()?
+        };
         self.expect(&TokenKind::In)?;
         let iter = self.parse_expression()?;
         self.expect(&TokenKind::Colon)?;
@@ -1311,6 +1446,18 @@ impl Parser {
             }
 
             let pattern = self.parse_pattern()?;
+
+            // Support `pat1 | pat2 | pat3` alternative patterns in match arms
+            let pattern = if matches!(self.peek_kind(), Some(TokenKind::Pipe)) {
+                let mut alternatives = vec![pattern];
+                while matches!(self.peek_kind(), Some(TokenKind::Pipe)) {
+                    self.advance();
+                    alternatives.push(self.parse_pattern()?);
+                }
+                Pattern::Or(alternatives)
+            } else {
+                pattern
+            };
 
             // Accept either `:` (block arms) or `=>` / `FatArrow` (expr arms)
             match self.peek_kind() {
@@ -1421,6 +1568,25 @@ impl Parser {
                 let unquoted = val[1..val.len() - 1].to_string();
                 Ok(Pattern::Literal(Literal::String(unquoted)))
             }
+            Some(TokenKind::CharLiteral) => {
+                let val = self.advance().unwrap().lexeme.clone();
+                let unquoted = &val[1..val.len() - 1];
+                let ch = if unquoted.starts_with('\\') {
+                    match &unquoted[1..] {
+                        "n" => '\n',
+                        "r" => '\r',
+                        "t" => '\t',
+                        "0" => '\0',
+                        "\\" => '\\',
+                        "'" => '\'',
+                        "\"" => '"',
+                        _ => unquoted.chars().next().unwrap_or('\0'),
+                    }
+                } else {
+                    unquoted.chars().next().unwrap_or('\0')
+                };
+                Ok(Pattern::Literal(Literal::Int(ch as i64)))
+            }
             Some(TokenKind::True) => {
                 self.advance();
                 Ok(Pattern::Literal(Literal::Bool(true)))
@@ -1443,12 +1609,12 @@ impl Parser {
                     self.expect(&TokenKind::RParen)?;
                     Ok(Pattern::Constructor("Some".to_string(), fields))
                 } else {
-                    Ok(Pattern::Binding("Some".to_string()))
+                    Ok(Pattern::Constructor("Some".to_string(), vec![]))
                 }
             }
             Some(TokenKind::None_) => {
                 self.advance();
-                Ok(Pattern::Binding("None".to_string()))
+                Ok(Pattern::Constructor("None".to_string(), vec![]))
             }
             _ => {
                 let token = self.peek().unwrap();
@@ -1617,6 +1783,26 @@ impl Parser {
                 // Remove quotes
                 let unquoted = val[1..val.len() - 1].to_string();
                 Ok(Expression::Literal(Literal::String(unquoted)))
+            }
+            Some(TokenKind::CharLiteral) => {
+                let val = self.advance().unwrap().lexeme.clone();
+                // Remove quotes and get character value
+                let unquoted = &val[1..val.len() - 1];
+                let ch = if unquoted.starts_with('\\') {
+                    match &unquoted[1..] {
+                        "n" => '\n',
+                        "r" => '\r',
+                        "t" => '\t',
+                        "0" => '\0',
+                        "\\" => '\\',
+                        "'" => '\'',
+                        "\"" => '"',
+                        _ => unquoted.chars().next().unwrap_or('\0'),
+                    }
+                } else {
+                    unquoted.chars().next().unwrap_or('\0')
+                };
+                Ok(Expression::Literal(Literal::Int(ch as i64)))
             }
             Some(TokenKind::True) => {
                 self.advance();
@@ -1891,9 +2077,17 @@ impl Parser {
 
     fn parse_impl(&mut self, attributes: Vec<String>) -> Result<Item, ParseError> {
         self.expect(&TokenKind::Impl)?;
-        let trait_name = self.parse_identifier()?;
-        self.expect(&TokenKind::For)?;
-        let type_name = self.parse_identifier()?;
+        let first_name = self.parse_identifier()?;
+
+        let (trait_name, type_name) = if matches!(self.peek_kind(), Some(TokenKind::For)) {
+            self.advance(); // consume `for`
+            let type_name = self.parse_identifier()?;
+            (first_name, type_name)
+        } else {
+            // Inherent impl: `impl TypeName { }`
+            (String::new(), first_name)
+        };
+
         self.expect(&TokenKind::Colon)?;
         self.expect(&TokenKind::Newline)?;
         self.expect(&TokenKind::Indent)?;
