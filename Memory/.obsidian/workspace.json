@@ -4,11 +4,11 @@
     "type": "split",
     "children": [
       {
-        "id": "b8ddd62f4c5435da",
+        "id": "f11a21d11019eb73",
         "type": "tabs",
         "children": [
           {
-            "id": "c8498aa7c1f656aa",
+            "id": "7b378f47bc82dc5f",
             "type": "leaf",
             "state": {
               "type": "markdown",
@@ -19,22 +19,6 @@
               },
               "icon": "lucide-file",
               "title": "Welcome"
-            }
-          }
-        ]
-      },
-      {
-        "id": "ae13c87b8518461e",
-        "type": "tabs",
-        "children": [
-          {
-            "id": "80cf6be8e0becb68",
-            "type": "leaf",
-            "state": {
-              "type": "graph",
-              "state": {},
-              "icon": "lucide-git-fork",
-              "title": "Graph view"
             }
           }
         ]
@@ -56,8 +40,8 @@
             "state": {
               "type": "file-explorer",
               "state": {
-                "sortOrder": "alphabetical",
-                "autoReveal": false
+                "sortOrder": "byCreatedTime",
+                "autoReveal": true
               },
               "icon": "lucide-folder-closed",
               "title": "Files"
@@ -110,6 +94,7 @@
             "state": {
               "type": "backlink",
               "state": {
+                "file": "Welcome.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -119,7 +104,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "Backlinks"
+              "title": "Backlinks for Welcome"
             }
           },
           {
@@ -128,11 +113,12 @@
             "state": {
               "type": "outgoing-link",
               "state": {
+                "file": "Welcome.md",
                 "linksCollapsed": false,
                 "unlinkedCollapsed": true
               },
               "icon": "links-going-out",
-              "title": "Outgoing links"
+              "title": "Outgoing links from Welcome"
             }
           },
           {
@@ -170,20 +156,33 @@
             "state": {
               "type": "outline",
               "state": {
+                "file": "Welcome.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "Outline"
+              "title": "Outline of Welcome"
+            }
+          },
+          {
+            "id": "ef4ce0c3c7218267",
+            "type": "leaf",
+            "state": {
+              "type": "footnotes",
+              "state": {
+                "file": "Welcome.md"
+              },
+              "icon": "lucide-file-signature",
+              "title": "Footnotes"
             }
           }
-        ]
+        ],
+        "currentTab": 4
       }
     ],
     "direction": "horizontal",
-    "width": 300,
-    "collapsed": true
+    "width": 441.5
   },
   "left-ribbon": {
     "hiddenItems": {
@@ -193,12 +192,54 @@
       "daily-notes:Open today's daily note": false,
       "templates:Insert template": false,
       "command-palette:Open command palette": false,
-      "bases:Create new base": false
+      "bases:Create new base": false,
+      "audio-recorder:Start/stop recording": false,
+      "markdown-importer:Open format converter": false,
+      "publish:Publish changes...": false,
+      "random-note:Open random note": false,
+      "zk-prefixer:Create new unique note": false,
+      "workspaces:Manage workspace layouts": false,
+      "copilot:Open Copilot Chat": false
     }
   },
-  "active": "80cf6be8e0becb68",
+  "active": "2ea5f72a8702d1c2",
   "lastOpenFiles": [
+    "Untitled.base",
+    "Omni.md",
     "Welcome.md",
-    "Untitled.base"
+    "Projects/Workspace/omni-lang/tools/target/debug/incremental/omni_lsp-26671basdeplj/s-hgvwfnmaeo-0itcpsa-1dm23nwcwi1h8o4syfakrd210/alpqhw9vgs5zxrs4n66szdxeg.o.md",
+    "Helios.md",
+    "Projects/Vault-Structure-Policy.md",
+    "Projects/Workspace/Index.md",
+    "Helios-Inventory.md",
+    "Projects/Workspace/config/config.md",
+    "Omni-Inventory.md",
+    "Projects/Workspace/config/default.toml.md",
+    "Projects/Workspace/build/w2.ovm.hints.md",
+    "Projects/Omni/Index.md",
+    "Projects/Workspace/Helios.md",
+    "Projects/Workspace/omni-lang/tools/target/debug/omni-fmt.d.md",
+    "Projects/Workspace/omni-lang/tools/target/debug/omni-dap.exe.md",
+    "Projects/Workspace/omni-lang/tools/target/debug/omni-dap.d.md",
+    "Projects/Workspace/omni-lang/tools/target/debug/incremental/opm-26strm6hhm0aj/s-hgvwfids5y-0dqa0tt.lock.md",
+    "Projects/Workspace/omni-lang/tools/target/debug/incremental/opm-26strm6hhm0aj/s-hgvwfids5y-0dqa0tt-4gq4ngbc81c1j22q4005i4bg6/work-products.bin.md",
+    "Projects/Workspace/omni-lang/tools/target/debug/incremental/opm-26strm6hhm0aj/s-hgvwfids5y-0dqa0tt-4gq4ngbc81c1j22q4005i4bg6/query-cache.bin.md",
+    "Projects/Workspace/omni-lang/tools/target/debug/incremental/opm-26strm6hhm0aj/s-hgvwfids5y-0dqa0tt-4gq4ngbc81c1j22q4005i4bg6/c8tu6sd5mj1kigj499qdou23r.o.md",
+    "Projects/Workspace/omni-lang/tools/target/debug/incremental/opm-26strm6hhm0aj/s-hgvwfids5y-0dqa0tt-4gq4ngbc81c1j22q4005i4bg6/c1w63fdsgbjh87j45b23tnj73.o.md",
+    "Projects/Workspace/omni-lang/tools/target/debug/incremental/opm-26strm6hhm0aj/s-hgvwfids5y-0dqa0tt-4gq4ngbc81c1j22q4005i4bg6/bvamqan9audrlpyx31xes2098.o.md",
+    "Projects/Workspace/omni-lang/tools/target/debug/incremental/opm-26strm6hhm0aj/s-hgvwfids5y-0dqa0tt-4gq4ngbc81c1j22q4005i4bg6/buvqqwwcseoghga4ipjua31dd.o.md",
+    "Projects/Workspace/omni-lang/tools/target/debug/incremental/opm-26strm6hhm0aj/s-hgvwfids5y-0dqa0tt-4gq4ngbc81c1j22q4005i4bg6/bo5sihwxbsay1wl0zmx3wz1dt.o.md",
+    "Projects/Workspace/omni-lang/tools/target/debug/incremental/opm-26strm6hhm0aj/s-hgvwfids5y-0dqa0tt-4gq4ngbc81c1j22q4005i4bg6/a5x9gru5hmnsrs3fd9h990tjt.o.md",
+    "Projects/Workspace/omni-lang/compiler/target/debug/build/zerocopy-5620f249be8c9bbf",
+    "Projects/Workspace/omni-lang/compiler/target/debug/build/parking_lot_core-07bed3c3d0306f1f",
+    "Projects/Workspace/omni-lang/compiler/target/debug/build/thiserror-91d453179777af8e",
+    "Projects/Workspace/omni-lang/compiler/target/debug/build/sys-info-3336a33664c36c21",
+    "Projects/Workspace/omni-lang/compiler/target/debug/build/serde_core-e017d6204d6f9c3e",
+    "Projects/Workspace/omni-lang/compiler/target/debug/build/rayon-core-f4a488a35e941cb4",
+    "Projects/Workspace/omni-lang/compiler/target/debug/build/proc-macro2-0cd761d9cc0be7e8",
+    "Projects/Workspace/omni-lang/compiler/target/debug/build/parking_lot_core-add7a63f41026ba0/out",
+    "Projects/Workspace/omni-lang/compiler/target/debug/build/parking_lot_core-add7a63f41026ba0",
+    "Projects/Workspace/omni-lang/compiler/target/debug/build/serde-ec5d43ba83c91941/out",
+    "Untitled.canvas"
   ]
 }

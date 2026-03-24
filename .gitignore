@@ -80,3 +80,12 @@ desktop.ini
 # Legacy archives (too large for git)
 legacy/*.zip
 .gitnexus
+
+# Claude local overrides (must stay personal)
+CLAUDE.local.md
+.claude/settings.local.json
+
+# Keep Claude control-center committed
+!CLAUDE.md
+!.claude/
+!.claude/**

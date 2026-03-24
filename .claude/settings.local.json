@@ -1,0 +1,14 @@
+{
+  "local": {
+    "note": "Personal machine-specific Claude settings. Keep uncommitted.",
+    "overrideDefaults": {
+      "responseVerbosity": "medium",
+      "preferTerminal": false,
+      "autoOpenDiff": true
+    }
+  },
+  "personalShortcuts": {
+    "workspaceRoot": "D:/Project/Helios",
+    "vaultRoot": "D:/Project/Helios/Memory"
+  }
+}
