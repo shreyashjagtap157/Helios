@@ -1,7 +1,17 @@
-# Build and Compilation
+# =============================================================================
+# Helios / Omni Project .gitignore
+# =============================================================================
+
+# --- Rust Build Artifacts ---
 target/
+*.rlib
+*.rmeta
+Cargo.lock
+
+# --- Compiled Binaries & Build Outputs ---
 build/
 dist/
+out/
 *.o
 *.a
 *.so
@@ -10,22 +20,54 @@ dist/
 *.exe
 *.out
 
-# Rust
-Cargo.lock
-*.rlib
-*.rmeta
+# --- OVM Bytecode (generated, not source) ---
+*.ovm
+*.ovm.hints
 
-# IDE and Editor
+# --- Obsidian Vault (Memory vault - personal notes, not project code) ---
+Memory/
+
+# --- Legacy Archives ---
+legacy/
+legacy-deprecated/
+
+# --- GitNexus Index ---
+.gitnexus/
+
+# --- Temporary Build Directories ---
+.tmp-*/
+tmp/
+.tmp/
+*.tmp
+*.bak
+*.log
+
+# --- IDE / Editor ---
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-.DS_Store
 *.sublime-project
 *.sublime-workspace
 
-# Test Outputs and Reports
+# --- OS-specific ---
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+venv/
+
+# --- Node/npm (for vscode-omni tool) ---
+node_modules/
+package-lock.json
+
+# --- Test Outputs & Reports ---
 test_output/
 test_results/
 coverage/
@@ -34,58 +76,39 @@ coverage/
 check_output*.txt
 test_report.html
 
-# Generated Files
-*.log
-*.tmp
-*.bak
-*.o.d
-*.dSYM/
-
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-dist/
-build/
-.env
-venv/
-
-# Node/npm (for tools like vscode-omni)
-node_modules/
-package-lock.json
-dist/
-out/
-
-# Temporary Files
-*.temp
-*.swp
-tmp/
-.tmp/
-
-# OS-specific
-Thumbs.db
-.DS_Store
-desktop.ini
-
-# Exclude markdown files except README, Claude, docs, and status reports
-*.md
-!README.md
-!Claude.md
-!docs/*.md
-!IMPLEMENTATION_STATUS_REPORT.md
-
-# Exclude deployment scripts
+# --- Deployment Scripts ---
 *.ps1
 
-# Legacy archives (too large for git)
-legacy/*.zip
-.gitnexus
+# --- Old wrapper binary ---
+helios-wrapper/
 
-# Claude local overrides (must stay personal)
+# --- Claude Local Overrides ---
 CLAUDE.local.md
-.claude/settings.local.json
 
-# Keep Claude control-center committed
+# --- Old docs removed in cleanup ---
+AGENTS.md
+CHANGELOG.md
+CONTRIBUTING.md
+ISSUES.md
+nul
+
+# =============================================================================
+# Un-ignore specific tracked files
+# =============================================================================
+!omni-lang/**/*.rs
+!omni-lang/**/*.toml
+!omni-lang/**/*.omni
+!omni-lang/**/*.bnf
+!helios-framework/**/*
+!examples/**/*
+!config/**/*
+
+!docs/**/*.md
+!docs/**/*.bnf
+!README.md
 !CLAUDE.md
+!AUDIT.md
+
 !.claude/
 !.claude/**
+.claude/settings.local.json
