@@ -1,0 +1,48 @@
+; Omni IR Module: main
+fn @add(%a: %int, %b: %int) -> %int {
+  entry:
+    %t0 = load %int, %a
+    %t1 = load %int, %b
+    %t2 = add %t0, %t1
+    ret %t2
+
+  bb0:
+    ret void
+
+}
+
+fn @greet(%name: %string) -> void {
+  entry:
+    %t3 = load %string, %name
+    %t4 = add "Hello, ", %t3
+    %t5 = add %t4, "!"
+    %t6 = native.call io::println(%t5)
+    ret void
+
+}
+
+fn @main() -> void {
+  entry:
+    %t7 = native.call io::println("Omni Interpreter Test")
+    %t8 = native.call io::println("=====================")
+    %t9 = native.call io::println("1. Basic print works!")
+    %x = alloca i64
+    store 42, %x
+    %y = alloca i64
+    store 8, %y
+    %sum = alloca i64
+    %t13 = load i64, %x
+    %t14 = load i64, %y
+    %t15 = add %t13, %t14
+    store %t15, %sum
+    %result = alloca %int
+    %t17 = call @add(10, 20)
+    store %t17, %result
+    %t18 = call @greet("World")
+    %flag = alloca i1
+    store true, %flag
+    %t20 = native.call io::println("All tests passed!")
+    ret void
+
+}
+

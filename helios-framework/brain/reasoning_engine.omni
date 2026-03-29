@@ -1,0 +1,279 @@
+// HELIOS Framework - Reasoning Engine
+// Deterministic logic-driven inference with forward and backward chaining
+
+module brain::reasoning_engine
+
+import core::collections::{HashMap, Vec, HashSet}
+import core::logging as log
+
+// ============================================================================
+// Core Data Types
+// ============================================================================
+
+/// A query submitted to the reasoning engine
+struct Query:
+    subject: String
+    predicate: String
+    context: HashMap<String, String>
+
+    fn new(subject: String, predicate: String) -> Query:
+        return Query {
+            subject: subject,
+            predicate: predicate,
+            context: HashMap::new()
+        }
+
+    fn with_context(mut self, key: String, value: String) -> Query:
+        self.context.insert(key, value)
+        return self
+
+/// A conclusion produced by reasoning
+struct Conclusion:
+    answer: String
+    confidence: f64
+    explanation_chain: Vec<String>
+
+    fn new(answer: String, confidence: f64) -> Conclusion:
+        return Conclusion {
+            answer: answer,
+            confidence: confidence,
+            explanation_chain: Vec::new()
+        }
+
+    fn with_explanation(mut self, step: String) -> Conclusion:
+        self.explanation_chain.push(step)
+        return self
+
+/// A fact in the knowledge base
+struct Fact:
+    id: u64
+    subject: String
+    predicate: String
+    object: String
+    confidence: f64
+
+    fn to_string(&self) -> String:
+        return format("{} {} {}", self.subject, self.predicate, self.object)
+
+/// An inference rule with premises and a conclusion template
+struct InferenceRule:
+    name: String
+    premises: Vec<String>
+    conclusion: String
+    confidence: f64
+    description: String
+
+    fn new(name: String, premises: Vec<String>, conclusion: String, confidence: f64) -> InferenceRule:
+        return InferenceRule {
+            name: name,
+            premises: premises,
+            conclusion: conclusion,
+            confidence: confidence,
+            description: String::new()
+        }
+
+/// A hypothesis to be evaluated against evidence
+struct Hypothesis:
+    statement: String
+    supporting_facts: Vec<Fact>
+    contradicting_facts: Vec<Fact>
+
+/// Confidence score with reasoning explanation
+struct Confidence:
+    score: f64
+    reasoning: String
+
+/// A node in a proof tree for backward chaining
+struct ProofTree:
+    goal: String
+    rule_used: Option<String>
+    children: Vec<ProofTree>
+    proved: bool
+
+// ============================================================================
+// Reasoning Engine
+// ============================================================================
+
+/// The core reasoning engine for HELIOS.
+/// Implements forward chaining, backward chaining, and hypothesis evaluation.
+struct ReasoningEngine:
+    knowledge_base: Vec<Fact>
+    inference_rules: Vec<InferenceRule>
+    working_memory: Vec<Fact>
+    max_depth: u32
+    inference_log: Vec<String>
+
+    fn new() -> ReasoningEngine:
+        log::info("Initializing ReasoningEngine")
+        return ReasoningEngine {
+            knowledge_base: Vec::new(),
+            inference_rules: Self::default_rules(),
+            working_memory: Vec::new(),
+            max_depth: 10,
+            inference_log: Vec::new()
+        }
+
+    /// Add an inference rule to the engine
+    fn add_rule(&mut self, rule: InferenceRule):
+        log::debug("Adding rule: {}", rule.name)
+        self.inference_rules.push(rule)
+
+    /// Add a fact to the knowledge base
+    fn add_fact(&mut self, fact: Fact):
+        self.knowledge_base.push(fact)
+
+    /// Main reasoning entry point — resolve a query into a conclusion
+    fn reason(&mut self, query: Query) -> Conclusion:
+        log::info("Reasoning about: {} {}", query.subject, query.predicate)
+        self.inference_log.clear()
+
+        // Try direct knowledge lookup first
+        for fact in &self.knowledge_base:
+            if fact.subject == query.subject && fact.predicate == query.predicate:
+                return Conclusion::new(fact.object.clone(), fact.confidence)
+                    .with_explanation(format("Direct fact: {}", fact.to_string()))
+
+        // Attempt forward chaining
+        let forward_results = self.chain_forward(self.knowledge_base.clone())
+        for conclusion in &forward_results:
+            if conclusion.answer.contains(&query.subject):
+                return conclusion.clone()
+
+        // Attempt backward chaining
+        let goal = format("{} {} ?", query.subject, query.predicate)
+        if let Some(proof) = self.chain_backward(Fact {
+            id: 0, subject: query.subject.clone(),
+            predicate: query.predicate.clone(),
+            object: String::new(), confidence: 0.0
+        }):
+            if proof.proved:
+                return Conclusion::new(proof.goal.clone(), 0.8)
+                    .with_explanation("Proved via backward chaining".to_string())
+
+        return Conclusion::new("Unknown".to_string(), 0.0)
+
+    /// Evaluate how well a hypothesis is supported by evidence
+    fn evaluate_hypothesis(&self, hypothesis: Hypothesis) -> Confidence:
+        let support = hypothesis.supporting_facts.len() as f64
+        let contradict = hypothesis.contradicting_facts.len() as f64
+        let total = support + contradict
+
+        if total == 0.0:
+            return Confidence { score: 0.0, reasoning: "No evidence available".to_string() }
+
+        let score = support / total
+        let reasoning = format("{} supporting vs {} contradicting facts",
+            support as u32, contradict as u32)
+        return Confidence { score: score, reasoning: reasoning }
+
+    /// Forward chaining — derive new conclusions from known facts
+    fn chain_forward(&mut self, facts: Vec<Fact>) -> Vec<Conclusion>:
+        log::debug("Forward chaining with {} facts", facts.len())
+        let mut conclusions: Vec<Conclusion> = Vec::new()
+        let mut known: HashSet<String> = HashSet::new()
+
+        for fact in &facts:
+            known.insert(fact.to_string())
+
+        for depth in 0..self.max_depth:
+            let mut new_found = false
+
+            for rule in &self.inference_rules:
+                if self.premises_satisfied(&rule.premises, &known):
+                    if !known.contains(&rule.conclusion):
+                        known.insert(rule.conclusion.clone())
+                        let c = Conclusion::new(rule.conclusion.clone(), rule.confidence)
+                            .with_explanation(format("Rule '{}' at depth {}", rule.name, depth))
+                        conclusions.push(c)
+                        new_found = true
+                        self.inference_log.push(
+                            format("Forward: {} => {}", rule.name, rule.conclusion))
+
+            if !new_found:
+                log::debug("Forward chaining converged at depth {}", depth)
+                break
+
+        return conclusions
+
+    /// Backward chaining — prove a goal by recursively satisfying premises
+    fn chain_backward(&mut self, goal: Fact) -> Option<ProofTree>:
+        log::debug("Backward chaining for: {}", goal.to_string())
+        let mut visited: HashSet<String> = HashSet::new()
+        return self.prove(goal.to_string(), 0, &mut visited)
+
+    /// Recursive proof search for backward chaining
+    fn prove(&mut self, goal: String, depth: u32, visited: &mut HashSet<String>) -> Option<ProofTree>:
+        if depth > self.max_depth:
+            return None
+        if visited.contains(&goal):
+            return None
+        visited.insert(goal.clone())
+
+        // Check if the goal is a known fact
+        for fact in &self.knowledge_base:
+            if fact.to_string() == goal:
+                return Some(ProofTree {
+                    goal: goal,
+                    rule_used: None,
+                    children: Vec::new(),
+                    proved: true
+                })
+
+        // Try each rule whose conclusion matches the goal
+        for rule in &self.inference_rules:
+            if rule.conclusion == goal:
+                let mut children: Vec<ProofTree> = Vec::new()
+                let mut all_proved = true
+
+                for premise in &rule.premises:
+                    match self.prove(premise.clone(), depth + 1, visited):
+                        Some(subtree):
+                            children.push(subtree)
+                        None:
+                            all_proved = false
+                            break
+
+                if all_proved:
+                    self.inference_log.push(
+                        format("Backward: {} proves {}", rule.name, goal))
+                    return Some(ProofTree {
+                        goal: goal,
+                        rule_used: Some(rule.name.clone()),
+                        children: children,
+                        proved: true
+                    })
+
+        return None
+
+    /// Check whether all premises of a rule are in the known-fact set
+    fn premises_satisfied(&self, premises: &Vec<String>, known: &HashSet<String>) -> bool:
+        for premise in premises:
+            if !known.contains(premise):
+                return false
+        return true
+
+    /// Built-in default inference rules
+    fn default_rules() -> Vec<InferenceRule>:
+        return vec![
+            InferenceRule::new(
+                "transitivity".to_string(),
+                vec!["?X is_a ?Y".to_string(), "?Y is_a ?Z".to_string()],
+                "?X is_a ?Z".to_string(),
+                0.9
+            ),
+            InferenceRule::new(
+                "modus_ponens".to_string(),
+                vec!["?P".to_string(), "?P implies ?Q".to_string()],
+                "?Q".to_string(),
+                0.95
+            ),
+        ]
+
+    /// Clear working memory and inference log
+    fn reset(&mut self):
+        self.working_memory.clear()
+        self.inference_log.clear()
+
+    /// Get the inference log for inspection
+    fn get_log(&self) -> &Vec<String>:
+        return &self.inference_log

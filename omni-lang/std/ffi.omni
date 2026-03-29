@@ -1,0 +1,30 @@
+// Omni Standard Library: FFI (Foreign Function Interface)
+// Type aliases for C interop and common extern declarations
+
+module std::ffi
+
+import std::core
+
+// C type aliases
+type c_int = i32
+type c_uint = u32
+type c_long = i64
+type c_ulong = u64
+type c_short = i16
+type c_ushort = u16
+type c_char = u8
+type c_uchar = u8
+type c_float = f32
+type c_double = f64
+type c_void = ()
+
+// Common C memory functions
+extern "C":
+    fn malloc(size: usize) -> *mut c_void
+    fn free(ptr: *mut c_void)
+    fn realloc(ptr: *mut c_void, size: usize) -> *mut c_void
+    fn calloc(count: usize, size: usize) -> *mut c_void
+    fn memcpy(dst: *mut c_void, src: *c_void, size: usize) -> *mut c_void
+    fn memmove(dst: *mut c_void, src: *c_void, size: usize) -> *mut c_void
+    fn memset(dst: *mut c_void, val: c_int, size: usize) -> *mut c_void
+    fn memcmp(a: *c_void, b: *c_void, size: usize) -> c_int

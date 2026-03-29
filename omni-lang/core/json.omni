@@ -1,0 +1,317 @@
+// HELIOS JSON Module
+// JSON serialization and deserialization
+
+module core::json
+
+import core::logging as log
+
+enum JsonValue:
+    Null
+    Bool(value: bool)
+    Number(value: f64)
+    String(value: String)
+    Array(values: Vec<JsonValue>)
+    Object(fields: HashMap<String, JsonValue>)
+    
+    fn is_null(&self) -> bool:
+        match self:
+            JsonValue::Null: true
+            _: false
+    
+    fn as_bool(&self) -> Option<bool>:
+        match self:
+            JsonValue::Bool(b): Some(*b)
+            _: None
+    
+    fn as_number(&self) -> Option<f64>:
+        match self:
+            JsonValue::Number(n): Some(*n)
+            _: None
+    
+    fn as_str(&self) -> Option<&str>:
+        match self:
+            JsonValue::String(s): Some(s)
+            _: None
+    
+    fn as_array(&self) -> Option<&Vec<JsonValue>>:
+        match self:
+            JsonValue::Array(a): Some(a)
+            _: None
+    
+    fn as_object(&self) -> Option<&HashMap<String, JsonValue>>:
+        match self:
+            JsonValue::Object(o): Some(o)
+            _: None
+    
+    fn get(&self, key: &str) -> Option<&JsonValue>:
+        match self:
+            JsonValue::Object(o): o.get(key)
+            _: None
+
+
+struct JsonParser:
+    input: Vec<char>
+    pos: usize
+    
+    fn new(input: &str) -> own JsonParser:
+        return JsonParser {
+            input: input.chars().collect(),
+            pos: 0
+        }
+    
+    fn parse(&mut self) -> Result<JsonValue, JsonError>:
+        self.skip_whitespace()
+        let value = self.parse_value()?
+        self.skip_whitespace()
+        if self.pos < self.input.len():
+            return Err(JsonError::UnexpectedChar(self.input[self.pos]))
+        return Ok(value)
+    
+    fn parse_value(&mut self) -> Result<JsonValue, JsonError>:
+        self.skip_whitespace()
+        
+        if self.pos >= self.input.len():
+            return Err(JsonError::UnexpectedEof)
+        
+        match self.input[self.pos]:
+            'n': self.parse_null()
+            't' | 'f': self.parse_bool()
+            '"': self.parse_string()
+            '[': self.parse_array()
+            '{': self.parse_object()
+            '-' | '0'..='9': self.parse_number()
+            c: Err(JsonError::UnexpectedChar(c))
+    
+    fn parse_null(&mut self) -> Result<JsonValue, JsonError>:
+        if self.consume_exact("null"):
+            return Ok(JsonValue::Null)
+        return Err(JsonError::InvalidLiteral)
+    
+    fn parse_bool(&mut self) -> Result<JsonValue, JsonError>:
+        if self.consume_exact("true"):
+            return Ok(JsonValue::Bool(true))
+        if self.consume_exact("false"):
+            return Ok(JsonValue::Bool(false))
+        return Err(JsonError::InvalidLiteral)
+    
+    fn parse_number(&mut self) -> Result<JsonValue, JsonError>:
+        let start = self.pos
+        
+        // Optional minus
+        if self.peek() == Some('-'):
+            self.pos += 1
+        
+        // Integer part
+        if self.peek() == Some('0'):
+            self.pos += 1
+        else:
+            self.consume_digits()?
+        
+        // Fractional part
+        if self.peek() == Some('.'):
+            self.pos += 1
+            self.consume_digits()?
+        
+        // Exponent
+        if self.peek() == Some('e') || self.peek() == Some('E'):
+            self.pos += 1
+            if self.peek() == Some('+') || self.peek() == Some('-'):
+                self.pos += 1
+            self.consume_digits()?
+        
+        let num_str: String = self.input[start..self.pos].iter().collect()
+        match num_str.parse::<f64>():
+            Ok(n): Ok(JsonValue::Number(n))
+            Err(_): Err(JsonError::InvalidNumber)
+    
+    fn parse_string(&mut self) -> Result<JsonValue, JsonError>:
+        self.expect('"')?
+        
+        let mut result = String::new()
+        
+        while self.pos < self.input.len():
+            let c = self.input[self.pos]
+            self.pos += 1
+            
+            match c:
+                '"': return Ok(JsonValue::String(result))
+                '\\':
+                    if self.pos >= self.input.len():
+                        return Err(JsonError::UnexpectedEof)
+                    let escaped = self.input[self.pos]
+                    self.pos += 1
+                    match escaped:
+                        '"': result.push('"')
+                        '\\': result.push('\\')
+                        '/': result.push('/')
+                        'b': result.push('\x08')
+                        'f': result.push('\x0C')
+                        'n': result.push('\n')
+                        'r': result.push('\r')
+                        't': result.push('\t')
+                        'u': 
+                            // Unicode escape
+                            let hex: String = self.input[self.pos..self.pos+4].iter().collect()
+                            self.pos += 4
+                            let code = u32::from_str_radix(&hex, 16)
+                                .map_err(|_| JsonError::InvalidEscape)?
+                            result.push(char::from_u32(code).unwrap_or('?'))
+                        _: return Err(JsonError::InvalidEscape)
+                _:
+                    result.push(c)
+        
+        return Err(JsonError::UnterminatedString)
+    
+    fn parse_array(&mut self) -> Result<JsonValue, JsonError>:
+        self.expect('[')?
+        self.skip_whitespace()
+        
+        let mut values = Vec::new()
+        
+        if self.peek() == Some(']'):
+            self.pos += 1
+            return Ok(JsonValue::Array(values))
+        
+        loop:
+            values.push(self.parse_value()?)
+            self.skip_whitespace()
+            
+            match self.peek():
+                Some(','):
+                    self.pos += 1
+                    self.skip_whitespace()
+                Some(']'):
+                    self.pos += 1
+                    return Ok(JsonValue::Array(values))
+                _: return Err(JsonError::ExpectedCommaOrBracket)
+    
+    fn parse_object(&mut self) -> Result<JsonValue, JsonError>:
+        self.expect('{')?
+        self.skip_whitespace()
+        
+        let mut fields = HashMap::new()
+        
+        if self.peek() == Some('}'):
+            self.pos += 1
+            return Ok(JsonValue::Object(fields))
+        
+        loop:
+            // Parse key
+            let key = match self.parse_value()?:
+                JsonValue::String(s): s
+                _: return Err(JsonError::ExpectedString)
+            
+            self.skip_whitespace()
+            self.expect(':')?
+            self.skip_whitespace()
+            
+            // Parse value
+            let value = self.parse_value()?
+            fields.insert(key, value)
+            
+            self.skip_whitespace()
+            
+            match self.peek():
+                Some(','):
+                    self.pos += 1
+                    self.skip_whitespace()
+                Some('}'):
+                    self.pos += 1
+                    return Ok(JsonValue::Object(fields))
+                _: return Err(JsonError::ExpectedCommaOrBrace)
+    
+    fn skip_whitespace(&mut self):
+        while self.pos < self.input.len():
+            match self.input[self.pos]:
+                ' ' | '\t' | '\n' | '\r': self.pos += 1
+                _: break
+    
+    fn peek(&self) -> Option<char>:
+        if self.pos < self.input.len():
+            Some(self.input[self.pos])
+        else:
+            None
+    
+    fn expect(&mut self, c: char) -> Result<(), JsonError>:
+        if self.peek() == Some(c):
+            self.pos += 1
+            Ok(())
+        else:
+            Err(JsonError::ExpectedChar(c))
+    
+    fn consume_exact(&mut self, s: &str) -> bool:
+        let chars: Vec<char> = s.chars().collect()
+        if self.pos + chars.len() > self.input.len():
+            return false
+        for (i, c) in chars.iter().enumerate():
+            if self.input[self.pos + i] != *c:
+                return false
+        self.pos += chars.len()
+        return true
+    
+    fn consume_digits(&mut self) -> Result<(), JsonError>:
+        if self.pos >= self.input.len() || !self.input[self.pos].is_ascii_digit():
+            return Err(JsonError::ExpectedDigit)
+        while self.pos < self.input.len() && self.input[self.pos].is_ascii_digit():
+            self.pos += 1
+        return Ok(())
+
+
+// Serialization
+fn serialize<T: Serialize>(value: &T) -> String:
+    return value.to_json().to_string()
+
+fn deserialize<T: Deserialize>(json: &str) -> Result<T, JsonError>:
+    let mut parser = JsonParser::new(json)
+    let value = parser.parse()?
+    return T::from_json(&value)
+
+impl ToString for JsonValue:
+    fn to_string(&self) -> String:
+        match self:
+            JsonValue::Null: "null".to_string()
+            JsonValue::Bool(b): if *b: "true".to_string() else: "false".to_string()
+            JsonValue::Number(n): n.to_string()
+            JsonValue::String(s): format!("\"{}\"", escape_string(s))
+            JsonValue::Array(a):
+                let items: Vec<String> = a.iter().map(|v| v.to_string()).collect()
+                format!("[{}]", items.join(","))
+            JsonValue::Object(o):
+                let items: Vec<String> = o.iter()
+                    .map(|(k, v)| format!("\"{}\":{}", escape_string(k), v.to_string()))
+                    .collect()
+                format!("{{{}}}", items.join(","))
+
+fn escape_string(s: &str) -> String:
+    let mut result = String::new()
+    for c in s.chars():
+        match c:
+            '"': result.push_str("\\\"")
+            '\\': result.push_str("\\\\")
+            '\n': result.push_str("\\n")
+            '\r': result.push_str("\\r")
+            '\t': result.push_str("\\t")
+            _: result.push(c)
+    return result
+
+
+trait Serialize:
+    fn to_json(&self) -> JsonValue
+
+trait Deserialize:
+    fn from_json(value: &JsonValue) -> Result<Self, JsonError>
+
+
+enum JsonError:
+    UnexpectedEof
+    UnexpectedChar(c: char)
+    ExpectedChar(c: char)
+    ExpectedDigit
+    ExpectedString
+    ExpectedCommaOrBracket
+    ExpectedCommaOrBrace
+    InvalidLiteral
+    InvalidNumber
+    InvalidEscape
+    UnterminatedString
+    TypeMismatch

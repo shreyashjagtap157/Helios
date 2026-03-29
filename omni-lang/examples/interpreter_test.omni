@@ -1,0 +1,94 @@
+// Comprehensive interpreter test
+// Tests all currently supported features
+
+module interpreter_test
+
+fn fibonacci(n: int) -> int:
+    if n <= 1:
+        return n
+    let a = 0
+    let b = 1
+    for i in range(2, n + 1):
+        let temp = b
+        b = a + b
+        a = temp
+    return b
+
+fn factorial(n: int) -> int:
+    if n <= 1:
+        return 1
+    return n * factorial(n - 1)
+
+fn is_even(n: int) -> bool:
+    return n % 2 == 0
+
+fn max(a: int, b: int) -> int:
+    if a > b:
+        return a
+    return b
+
+fn main():
+    // Test 1: Basic printing
+    println("=== Omni Language Interpreter Tests ===")
+    
+    // Test 2: Arithmetic
+    let x = 10
+    let y = 3
+    println("10 + 3 = " + format(x + y))
+    println("10 - 3 = " + format(x - y))
+    println("10 * 3 = " + format(x * y))
+    println("10 / 3 = " + format(x / y))
+    println("10 % 3 = " + format(x % y))
+    
+    // Test 3: String operations
+    let greeting = "Hello"
+    let name = "Omni"
+    println(greeting + ", " + name + "!")
+    
+    // Test 4: Boolean logic
+    let a = true
+    let b = false
+    println("true and false = " + format(a and b))
+    println("true or false = " + format(a or b))
+    
+    // Test 5: Comparison
+    println("10 > 3 = " + format(x > y))
+    println("10 == 10 = " + format(x == 10))
+    println("10 != 3 = " + format(x != y))
+    
+    // Test 6: Function calls
+    let fib10 = fibonacci(10)
+    println("fibonacci(10) = " + format(fib10))
+    
+    let fact5 = factorial(5)
+    println("factorial(5) = " + format(fact5))
+    
+    // Test 7: Control flow
+    if is_even(42):
+        println("42 is even (correct)")
+    
+    if is_even(7):
+        println("ERROR: 7 is not even!")
+    else:
+        println("7 is odd (correct)")
+    
+    // Test 8: Loops
+    let sum = 0
+    for i in range(1, 11):
+        sum = sum + i
+    println("sum(1..10) = " + format(sum))
+    
+    // Test 9: While loop
+    let count = 0
+    while count < 5:
+        count = count + 1
+    println("while loop count = " + format(count))
+    
+    // Test 10: Nested function calls
+    println("max(42, 17) = " + format(max(42, 17)))
+    
+    // Test 11: Arrays
+    let arr = [1, 2, 3, 4, 5]
+    println("array length = " + format(len(arr)))
+    
+    println("=== All tests complete ===")

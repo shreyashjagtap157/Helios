@@ -1,0 +1,374 @@
+// Omni Standard Library: Serialization
+// Reflection-based serialization for saving/loading models
+
+module std::serde
+
+import std::core
+import std::io
+import std::reflect
+import std::collections
+
+// ============================================
+// Core Traits
+// ============================================
+
+trait Serialize:
+    fn serialize<S: Serializer>(&self, serializer: &mut S) -> Result<(), Error>
+
+trait Deserialize: Sized:
+    fn deserialize<D: Deserializer>(deserializer: &mut D) -> Result<Self, Error>
+
+struct Error:
+    msg: String
+    
+    fn new(msg: &str) -> Error:
+        Error { msg: String::from(msg) }
+
+// ============================================
+// Serializers
+// ============================================
+
+trait Serializer:
+    fn serialize_bool(&mut self, v: bool) -> Result<(), Error>
+    fn serialize_i64(&mut self, v: i64) -> Result<(), Error>
+    fn serialize_u64(&mut self, v: u64) -> Result<(), Error>
+    fn serialize_f64(&mut self, v: f64) -> Result<(), Error>
+    fn serialize_str(&mut self, v: &str) -> Result<(), Error>
+    fn serialize_bytes(&mut self, v: &[u8]) -> Result<(), Error>
+    fn serialize_none(&mut self) -> Result<(), Error>
+    fn serialize_some<T: Serialize>(&mut self, value: &T) -> Result<(), Error>
+    fn serialize_seq_start(&mut self, len: usize) -> Result<(), Error>
+    fn serialize_seq_element<T: Serialize>(&mut self, elem: &T) -> Result<(), Error>
+    fn serialize_seq_end(&mut self) -> Result<(), Error>
+    fn serialize_struct_start(&mut self, name: &str, len: usize) -> Result<(), Error>
+    fn serialize_struct_field<T: Serialize>(&mut self, key: &str, value: &T) -> Result<(), Error>
+    fn serialize_struct_end(&mut self) -> Result<(), Error>
+
+// ============================================
+// Deserializers
+// ============================================
+
+trait Deserializer:
+    fn deserialize_bool(&mut self) -> Result<bool, Error>
+    fn deserialize_i64(&mut self) -> Result<i64, Error>
+    fn deserialize_u64(&mut self) -> Result<u64, Error>
+    fn deserialize_f64(&mut self) -> Result<f64, Error>
+    fn deserialize_str(&mut self) -> Result<String, Error>
+    fn deserialize_bytes(&mut self) -> Result<Vec<u8>, Error>
+    fn deserialize_option<T: Deserialize>(&mut self) -> Result<Option<T>, Error>
+    fn deserialize_seq<T: Deserialize>(&mut self) -> Result<Vec<T>, Error>
+    fn deserialize_struct<T: Deserialize>(&mut self, name: &str) -> Result<T, Error>
+
+// ============================================
+// JSON Serializer
+// ============================================
+
+struct JsonSerializer:
+    output: String
+    depth: usize
+    
+    fn new() -> JsonSerializer:
+        JsonSerializer { output: String::new(), depth: 0 }
+    
+    fn to_string(&self) -> String:
+        self.output.clone()
+
+impl Serializer for JsonSerializer:
+    fn serialize_bool(&mut self, v: bool) -> Result<(), Error>:
+        self.output.push_str(if v { "true" } else { "false" })
+        Ok(())
+    
+    fn serialize_i64(&mut self, v: i64) -> Result<(), Error>:
+        self.output.push_str(&v.to_string())
+        Ok(())
+    
+    fn serialize_u64(&mut self, v: u64) -> Result<(), Error>:
+        self.output.push_str(&v.to_string())
+        Ok(())
+    
+    fn serialize_f64(&mut self, v: f64) -> Result<(), Error>:
+        self.output.push_str(&v.to_string())
+        Ok(())
+    
+    fn serialize_str(&mut self, v: &str) -> Result<(), Error>:
+        self.output.push('"')
+        for c in v.chars():
+            match c:
+                '"' => self.output.push_str("\\\"")
+                '\\' => self.output.push_str("\\\\")
+                '\n' => self.output.push_str("\\n")
+                '\r' => self.output.push_str("\\r")
+                '\t' => self.output.push_str("\\t")
+                _ => self.output.push(c)
+        self.output.push('"')
+        Ok(())
+    
+    fn serialize_bytes(&mut self, v: &[u8]) -> Result<(), Error>:
+        self.output.push('[')
+        for (i, &b) in v.iter().enumerate():
+            if i > 0 { self.output.push(',') }
+            self.output.push_str(&b.to_string())
+        self.output.push(']')
+        Ok(())
+    
+    fn serialize_none(&mut self) -> Result<(), Error>:
+        self.output.push_str("null")
+        Ok(())
+    
+    fn serialize_some<T: Serialize>(&mut self, value: &T) -> Result<(), Error>:
+        value.serialize(self)
+    
+    fn serialize_seq_start(&mut self, _len: usize) -> Result<(), Error>:
+        self.output.push('[')
+        self.depth += 1
+        Ok(())
+    
+    fn serialize_seq_element<T: Serialize>(&mut self, elem: &T) -> Result<(), Error>:
+        if self.output.chars().rev().next() != Some('['):
+            self.output.push(',')
+        elem.serialize(self)
+    
+    fn serialize_seq_end(&mut self) -> Result<(), Error>:
+        self.depth -= 1
+        self.output.push(']')
+        Ok(())
+    
+    fn serialize_struct_start(&mut self, _name: &str, _len: usize) -> Result<(), Error>:
+        self.output.push('{')
+        self.depth += 1
+        Ok(())
+    
+    fn serialize_struct_field<T: Serialize>(&mut self, key: &str, value: &T) -> Result<(), Error>:
+        if self.output.chars().rev().next() != Some('{'):
+            self.output.push(',')
+        self.serialize_str(key)?
+        self.output.push(':')
+        value.serialize(self)
+    
+    fn serialize_struct_end(&mut self) -> Result<(), Error>:
+        self.depth -= 1
+        self.output.push('}')
+        Ok(())
+
+// ============================================
+// JSON Deserializer
+// ============================================
+
+struct JsonDeserializer:
+    input: String
+    position: usize
+    
+    fn new(input: String) -> JsonDeserializer:
+        JsonDeserializer { input, position: 0 }
+    
+    fn skip_whitespace(&mut self):
+        while self.position < self.input.len():
+            let c = self.input.chars().nth(self.position).unwrap()
+            if c != ' ' and c != '\n' and c != '\r' and c != '\t':
+                break
+            self.position += 1
+
+impl Deserializer for JsonDeserializer:
+    fn deserialize_bool(&mut self) -> Result<bool, Error>:
+        self.skip_whitespace()
+        if self.input[self.position..].starts_with("true"):
+            self.position += 4
+            Ok(true)
+        elif self.input[self.position..].starts_with("false"):
+            self.position += 5
+            Ok(false)
+        else:
+            Err(Error::new("Expected bool"))
+    
+    fn deserialize_i64(&mut self) -> Result<i64, Error>:
+        self.skip_whitespace()
+        let start = self.position
+        
+        if self.position < self.input.len() and self.input.chars().nth(self.position).unwrap() == '-':
+            self.position += 1
+        
+        while self.position < self.input.len():
+            let c = self.input.chars().nth(self.position).unwrap()
+            if c.is_digit(10):
+                self.position += 1
+            else:
+                break
+        
+        let num_str = &self.input[start..self.position]
+        num_str.parse::<i64>().map_err(|_| Error::new("Failed to parse i64"))
+    
+    fn deserialize_u64(&mut self) -> Result<u64, Error>:
+        self.skip_whitespace()
+        let start = self.position
+        
+        while self.position < self.input.len():
+            let c = self.input.chars().nth(self.position).unwrap()
+            if c.is_digit(10):
+                self.position += 1
+            else:
+                break
+        
+        let num_str = &self.input[start..self.position]
+        num_str.parse::<u64>().map_err(|_| Error::new("Failed to parse u64"))
+    
+    fn deserialize_f64(&mut self) -> Result<f64, Error>:
+        self.skip_whitespace()
+        let start = self.position
+        
+        if self.position < self.input.len() and self.input.chars().nth(self.position).unwrap() == '-':
+            self.position += 1
+        
+        while self.position < self.input.len():
+            let c = self.input.chars().nth(self.position).unwrap()
+            if c.is_digit(10) or c == '.' or c == 'e' or c == 'E' or c == '+' or c == '-':
+                self.position += 1
+            else:
+                break
+        
+        let num_str = &self.input[start..self.position]
+        num_str.parse::<f64>().map_err(|_| Error::new("Failed to parse f64"))
+    
+    fn deserialize_str(&mut self) -> Result<String, Error>:
+        self.skip_whitespace()
+        if self.position >= self.input.len() or self.input.chars().nth(self.position).unwrap() != '"':
+            return Err(Error::new("Expected string"))
+        
+        self.position += 1
+        let mut result = String::new()
+        
+        while self.position < self.input.len():
+            let c = self.input.chars().nth(self.position).unwrap()
+            if c == '"':
+                self.position += 1
+                return Ok(result)
+            elif c == '\\' and self.position + 1 < self.input.len():
+                self.position += 1
+                let escape = self.input.chars().nth(self.position).unwrap()
+                match escape:
+                    '"' => result.push('"')
+                    '\\' => result.push('\\')
+                    'n' => result.push('\n')
+                    'r' => result.push('\r')
+                    't' => result.push('\t')
+                    _ => result.push(escape)
+                self.position += 1
+            else:
+                result.push(c)
+                self.position += 1
+        
+        Err(Error::new("Unterminated string"))
+    
+    fn deserialize_bytes(&mut self) -> Result<Vec<u8>, Error>:
+        // Parse JSON array of numbers as bytes
+        self.skip_whitespace()
+        if self.position >= self.input.len() or self.input.chars().nth(self.position).unwrap() != '[':
+            return Err(Error::new("Expected array"))
+        
+        self.position += 1
+        let mut bytes = Vec::new()
+        
+        loop:
+            self.skip_whitespace()
+            if self.position < self.input.len() and self.input.chars().nth(self.position).unwrap() == ']':
+                self.position += 1
+                break
+            
+            let b = self.deserialize_u64()? as u8
+            bytes.push(b)
+            
+            self.skip_whitespace()
+            if self.position < self.input.len() and self.input.chars().nth(self.position).unwrap() == ',':
+                self.position += 1
+        
+        Ok(bytes)
+    
+    fn deserialize_option<T: Deserialize>(&mut self) -> Result<Option<T>, Error>:
+        self.skip_whitespace()
+        if self.position < self.input.len() and self.input[self.position..].starts_with("null"):
+            self.position += 4
+            Ok(Option::None)
+        else:
+            T::deserialize(self).map(Option::Some)
+    
+    fn deserialize_seq<T: Deserialize>(&mut self) -> Result<Vec<T>, Error>:
+        self.skip_whitespace()
+        if self.position >= self.input.len() or self.input.chars().nth(self.position).unwrap() != '[':
+            return Err(Error::new("Expected array"))
+        
+        self.position += 1
+        let mut items = Vec::new()
+        
+        loop:
+            self.skip_whitespace()
+            if self.position < self.input.len() and self.input.chars().nth(self.position).unwrap() == ']':
+                self.position += 1
+                break
+            
+            let item = T::deserialize(self)?
+            items.push(item)
+            
+            self.skip_whitespace()
+            if self.position < self.input.len() and self.input.chars().nth(self.position).unwrap() == ',':
+                self.position += 1
+        
+        Ok(items)
+    
+    fn deserialize_struct<T: Deserialize>(&mut self, _name: &str) -> Result<T, Error>:
+        self.skip_whitespace()
+        if self.position >= self.input.len() or self.input.chars().nth(self.position).unwrap() != '{':
+            return Err(Error::new("Expected object"))
+        
+        self.position += 1
+        // Delegate to T's deserializer
+        T::deserialize(self)
+
+// ============================================
+// Default Trait Implementations
+// ============================================
+
+impl Serialize for bool:
+    fn serialize<S: Serializer>(&self, s: &mut S) -> Result<(), Error>:
+        s.serialize_bool(*self)
+
+impl Serialize for i64:
+    fn serialize<S: Serializer>(&self, s: &mut S) -> Result<(), Error>:
+        s.serialize_i64(*self)
+
+impl Serialize for u64:
+    fn serialize<S: Serializer>(&self, s: &mut S) -> Result<(), Error>:
+        s.serialize_u64(*self)
+
+impl Serialize for f64:
+    fn serialize<S: Serializer>(&self, s: &mut S) -> Result<(), Error>:
+        s.serialize_f64(*self)
+
+impl Serialize for String:
+    fn serialize<S: Serializer>(&self, s: &mut S) -> Result<(), Error>:
+        s.serialize_str(self)
+
+impl<T: Serialize> Serialize for collections::Vector<T>:
+    fn serialize<S: Serializer>(&self, s: &mut S) -> Result<(), Error>:
+        s.serialize_seq_start(self.len())?
+        for item in self.iter():
+            s.serialize_seq_element(item)?
+        s.serialize_seq_end()
+
+impl<T: Serialize> Serialize for Option<T>:
+    fn serialize<S: Serializer>(&self, s: &mut S) -> Result<(), Error>:
+        match self:
+            Option::None => s.serialize_none()
+            Option::Some(v) => s.serialize_some(v)
+
+// ============================================
+// Utilities
+// ============================================
+
+fn serialize_to_json<T: Serialize>(value: &T) -> Result<String, Error>:
+    let mut serializer = JsonSerializer::new()
+    value.serialize(&mut serializer)?
+    Ok(serializer.to_string())
+
+fn deserialize_from_json<T: Deserialize>(json: &str) -> Result<T, Error>:
+    let mut deserializer = JsonDeserializer::new(String::from(json))
+    T::deserialize(&mut deserializer)
+

@@ -1,0 +1,112 @@
+// Tutorial 04: Collections & Iterators
+// Demonstrates Vector, HashMap, and functional iterator patterns.
+
+module tutorials::collections
+
+import std::collections::{Vector, HashMap}
+
+// ============================================
+// Vector
+// ============================================
+
+fn vector_demo():
+    println("[Vector]")
+
+    let mut numbers = Vector::new()
+    numbers.push(10)
+    numbers.push(20)
+    numbers.push(30)
+    numbers.push(40)
+    numbers.push(50)
+
+    println("  Length: {}", numbers.len())
+    println("  First: {}", numbers.get(0).unwrap())
+
+    // Iteration
+    for n in &numbers:
+        print("{} ", n)
+    println()
+
+    // Pop the last element
+    let last = numbers.pop()
+    println("  Popped: {}", last.unwrap())
+
+// ============================================
+// HashMap
+// ============================================
+
+fn hashmap_demo():
+    println("[HashMap]")
+
+    let mut scores = HashMap::new()
+    scores.insert("Alice", 95)
+    scores.insert("Bob", 87)
+    scores.insert("Charlie", 92)
+    scores.insert("Diana", 88)
+
+    // Lookup
+    match scores.get("Bob"):
+        Option::Some(s):
+            println("  Bob's score: {}", s)
+        Option::None:
+            println("  Bob not found")
+
+    // Check existence
+    println("  Has Eve? {}", scores.contains_key("Eve"))
+
+    // Iterate over key-value pairs
+    for (name, score) in &scores:
+        println("  {} => {}", name, score)
+
+// ============================================
+// Iterators: map, filter, fold
+// ============================================
+
+fn iterator_demo():
+    println("[Iterators]")
+
+    let data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+    // Filter even numbers and square them
+    let result: Vec<i32> = data.iter()
+        .filter(|x| x % 2 == 0)
+        .map(|x| x * x)
+        .collect()
+    println("  Even squares: {:?}", result)
+
+    // Sum with fold
+    let total = data.iter().fold(0, |acc, x| acc + x)
+    println("  Sum: {}", total)
+
+    // Find first element > 5
+    let found = data.iter().find(|x| *x > 5)
+    println("  First > 5: {}", found.unwrap())
+
+    // Check conditions
+    let all_positive = data.iter().all(|x| *x > 0)
+    let any_even = data.iter().any(|x| x % 2 == 0)
+    println("  All positive? {}", all_positive)
+    println("  Any even? {}", any_even)
+
+    // Count elements matching a predicate
+    let even_count = data.iter().filter(|x| x % 2 == 0).count()
+    println("  Even count: {}", even_count)
+
+// ============================================
+// Entry Point
+// ============================================
+
+fn main():
+    println("=== Tutorial 04: Collections & Iterators ===")
+    println()
+
+    vector_demo()
+    println()
+
+    hashmap_demo()
+    println()
+
+    iterator_demo()
+    println()
+
+    println("=== Done ===")

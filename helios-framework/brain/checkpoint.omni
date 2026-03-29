@@ -1,0 +1,328 @@
+# HELIOS Cognitive State Checkpoint System
+# Save/load cognitive state - knowledge graphs, memories, learned rules
+
+module brain::checkpoint
+
+import core::logging as log
+import system::fs
+import core::json
+import brain::cognitive_cortex
+import brain::knowledge_graph as kg
+import brain::memory_architecture as mem
+import brain::reasoning_engine as re
+
+# Checkpoint format version
+const CHECKPOINT_VERSION: u32 = 2
+
+# ============================================================================
+# COGNITIVE CHECKPOINT (Knowledge Graphs, Memories, Learned Rules)
+# ============================================================================
+
+struct CognitiveCheckpointMetadata:
+    version: u32
+    created_at: String
+    knowledge_node_count: usize
+    knowledge_edge_count: usize
+    memory_item_count: usize
+    learned_rule_count: usize
+    description: Option<String>
+
+
+struct CognitiveCheckpoint:
+    metadata: CognitiveCheckpointMetadata
+    knowledge_data: Option<Vec<u8>>
+    memory_data: Option<Vec<u8>>
+    rules_data: Option<Vec<u8>>
+
+    # Save a full cognitive state checkpoint
+    fn save(
+        knowledge: &kg::KnowledgeGraph,
+        memories: &mem::MemoryStore,
+        rules: &re::LearnedRules,
+        path: &str,
+        description: Option<String>
+    ) -> Result<(), CheckpointError>:
+        log::info("Saving cognitive checkpoint to {}", path)
+
+        fs::create_dir_all(path)?
+
+        # Build metadata
+        let metadata = CognitiveCheckpointMetadata {
+            version: CHECKPOINT_VERSION,
+            created_at: time::now_iso(),
+            knowledge_node_count: knowledge.node_count(),
+            knowledge_edge_count: knowledge.edge_count(),
+            memory_item_count: memories.item_count(),
+            learned_rule_count: rules.count(),
+            description
+        }
+
+        # Serialize metadata
+        let metadata_json = json::serialize(&metadata)
+        fs::write(&format("{}/metadata.json", path), metadata_json.as_bytes())?
+
+        # Serialize knowledge graph
+        let kg_bytes = Self::serialize_knowledge_graph(knowledge)?
+        fs::write(&format("{}/knowledge.bin", path), &kg_bytes)?
+        log::info("Saved {} knowledge nodes, {} edges",
+            metadata.knowledge_node_count, metadata.knowledge_edge_count)
+
+        # Serialize memory store
+        let mem_bytes = Self::serialize_memories(memories)?
+        fs::write(&format("{}/memories.bin", path), &mem_bytes)?
+        log::info("Saved {} memory items", metadata.memory_item_count)
+
+        # Serialize learned rules
+        let rules_bytes = Self::serialize_rules(rules)?
+        fs::write(&format("{}/rules.bin", path), &rules_bytes)?
+        log::info("Saved {} learned rules", metadata.learned_rule_count)
+
+        log::info("Cognitive checkpoint saved successfully")
+        return Ok(())
+
+    # Load a full cognitive state checkpoint
+    fn load(path: &str) -> Result<(own kg::KnowledgeGraph, own mem::MemoryStore, own re::LearnedRules), CheckpointError>:
+        log::info("Loading cognitive checkpoint from {}", path)
+
+        # Load and verify metadata
+        let metadata = Self::load_metadata(path)?
+        if metadata.version != CHECKPOINT_VERSION:
+            log::warn("Checkpoint version mismatch: {} vs {}", metadata.version, CHECKPOINT_VERSION)
+
+        # Load knowledge graph
+        let kg_path = format("{}/knowledge.bin", path)
+        let knowledge = if fs::exists(&kg_path):
+            let kg_bytes = fs::read(&kg_path)?
+            Self::deserialize_knowledge_graph(&kg_bytes)?
+        else:
+            kg::KnowledgeGraph::new()
+        log::info("Loaded {} knowledge nodes", metadata.knowledge_node_count)
+
+        # Load memory store
+        let mem_path = format("{}/memories.bin", path)
+        let memories = if fs::exists(&mem_path):
+            let mem_bytes = fs::read(&mem_path)?
+            Self::deserialize_memories(&mem_bytes)?
+        else:
+            mem::MemoryStore::new("data/memory")
+        log::info("Loaded {} memory items", metadata.memory_item_count)
+
+        # Load learned rules
+        let rules_path = format("{}/rules.bin", path)
+        let rules = if fs::exists(&rules_path):
+            let rules_bytes = fs::read(&rules_path)?
+            Self::deserialize_rules(&rules_bytes)?
+        else:
+            re::LearnedRules::new()
+        log::info("Loaded {} learned rules", metadata.learned_rule_count)
+
+        return Ok((knowledge, memories, rules))
+
+    # Load only the knowledge graph (lightweight load)
+    fn load_knowledge(path: &str) -> Result<own kg::KnowledgeGraph, CheckpointError>:
+        log::info("Loading knowledge graph from {}", path)
+        let kg_path = format("{}/knowledge.bin", path)
+
+        if !fs::exists(&kg_path):
+            return Ok(kg::KnowledgeGraph::new())
+
+        let kg_bytes = fs::read(&kg_path)?
+        Self::deserialize_knowledge_graph(&kg_bytes)
+
+    fn load_metadata(path: &str) -> Result<CognitiveCheckpointMetadata, CheckpointError>:
+        let metadata_path = format("{}/metadata.json", path)
+        let content = fs::read_string(&metadata_path)?
+        return json::deserialize(&content)
+
+    # ========================================================================
+    # Serialization helpers
+    # ========================================================================
+
+    fn serialize_knowledge_graph(knowledge: &kg::KnowledgeGraph) -> Result<Vec<u8>, CheckpointError>:
+        let mut buffer = Vec::new()
+
+        # Write node count
+        let nodes = knowledge.get_all_nodes()
+        buffer.extend_from_slice(&(nodes.len() as u64).to_le_bytes())
+
+        # Serialize each node: id (u64), label_len (u32), label, confidence (f64), data_json
+        for node in &nodes:
+            buffer.extend_from_slice(&node.id.to_le_bytes())
+
+            let label_bytes = node.label.as_bytes()
+            buffer.extend_from_slice(&(label_bytes.len() as u32).to_le_bytes())
+            buffer.extend_from_slice(label_bytes)
+
+            buffer.extend_from_slice(&node.confidence.to_le_bytes())
+
+            let data_json = json::serialize(&node.attributes)
+            let data_bytes = data_json.as_bytes()
+            buffer.extend_from_slice(&(data_bytes.len() as u32).to_le_bytes())
+            buffer.extend_from_slice(data_bytes)
+
+        # Write edge count
+        let edges = knowledge.get_all_edges()
+        buffer.extend_from_slice(&(edges.len() as u64).to_le_bytes())
+
+        # Serialize each edge: from_id (u64), to_id (u64), relation_len (u32), relation, weight (f64)
+        for edge in &edges:
+            buffer.extend_from_slice(&edge.from_id.to_le_bytes())
+            buffer.extend_from_slice(&edge.to_id.to_le_bytes())
+
+            let rel_bytes = edge.relation.as_bytes()
+            buffer.extend_from_slice(&(rel_bytes.len() as u32).to_le_bytes())
+            buffer.extend_from_slice(rel_bytes)
+
+            buffer.extend_from_slice(&edge.weight.to_le_bytes())
+
+        return Ok(buffer)
+
+    fn deserialize_knowledge_graph(data: &[u8]) -> Result<own kg::KnowledgeGraph, CheckpointError>:
+        let mut offset = 0
+        let mut graph = kg::KnowledgeGraph::new()
+
+        # Read nodes
+        let node_count = u64::from_le_bytes(data[offset..offset+8].try_into().unwrap()) as usize
+        offset += 8
+
+        for _ in 0..node_count:
+            let id = u64::from_le_bytes(data[offset..offset+8].try_into().unwrap())
+            offset += 8
+
+            let label_len = u32::from_le_bytes(data[offset..offset+4].try_into().unwrap()) as usize
+            offset += 4
+            let label = String::from_utf8_lossy(&data[offset..offset+label_len]).to_string()
+            offset += label_len
+
+            let confidence = f64::from_le_bytes(data[offset..offset+8].try_into().unwrap())
+            offset += 8
+
+            let data_len = u32::from_le_bytes(data[offset..offset+4].try_into().unwrap()) as usize
+            offset += 4
+            let data_str = String::from_utf8_lossy(&data[offset..offset+data_len]).to_string()
+            offset += data_len
+
+            let attributes = json::deserialize(&data_str).unwrap_or_default()
+            graph.add_node_with_id(id, &label, confidence, attributes)
+
+        # Read edges
+        let edge_count = u64::from_le_bytes(data[offset..offset+8].try_into().unwrap()) as usize
+        offset += 8
+
+        for _ in 0..edge_count:
+            let from_id = u64::from_le_bytes(data[offset..offset+8].try_into().unwrap())
+            offset += 8
+            let to_id = u64::from_le_bytes(data[offset..offset+8].try_into().unwrap())
+            offset += 8
+
+            let rel_len = u32::from_le_bytes(data[offset..offset+4].try_into().unwrap()) as usize
+            offset += 4
+            let relation = String::from_utf8_lossy(&data[offset..offset+rel_len]).to_string()
+            offset += rel_len
+
+            let weight = f64::from_le_bytes(data[offset..offset+8].try_into().unwrap())
+            offset += 8
+
+            graph.add_edge(from_id, to_id, &relation, weight)
+
+        return Ok(graph)
+
+    fn serialize_memories(memories: &mem::MemoryStore) -> Result<Vec<u8>, CheckpointError>:
+        let mut buffer = Vec::new()
+        let items = memories.get_all_items()
+
+        buffer.extend_from_slice(&(items.len() as u64).to_le_bytes())
+
+        for item in &items:
+            let item_json = json::serialize(item)
+            let item_bytes = item_json.as_bytes()
+            buffer.extend_from_slice(&(item_bytes.len() as u32).to_le_bytes())
+            buffer.extend_from_slice(item_bytes)
+
+        return Ok(buffer)
+
+    fn deserialize_memories(data: &[u8]) -> Result<own mem::MemoryStore, CheckpointError>:
+        let mut offset = 0
+        let mut store = mem::MemoryStore::new("data/memory")
+
+        let item_count = u64::from_le_bytes(data[offset..offset+8].try_into().unwrap()) as usize
+        offset += 8
+
+        for _ in 0..item_count:
+            let item_len = u32::from_le_bytes(data[offset..offset+4].try_into().unwrap()) as usize
+            offset += 4
+            let item_str = String::from_utf8_lossy(&data[offset..offset+item_len]).to_string()
+            offset += item_len
+
+            if let Ok(item) = json::deserialize(&item_str):
+                store.add_item(item)
+
+        return Ok(store)
+
+    fn serialize_rules(rules: &re::LearnedRules) -> Result<Vec<u8>, CheckpointError>:
+        let mut buffer = Vec::new()
+        let all_rules = rules.get_all()
+
+        buffer.extend_from_slice(&(all_rules.len() as u64).to_le_bytes())
+
+        for rule in &all_rules:
+            let rule_json = json::serialize(rule)
+            let rule_bytes = rule_json.as_bytes()
+            buffer.extend_from_slice(&(rule_bytes.len() as u32).to_le_bytes())
+            buffer.extend_from_slice(rule_bytes)
+
+        return Ok(buffer)
+
+    fn deserialize_rules(data: &[u8]) -> Result<own re::LearnedRules, CheckpointError>:
+        let mut offset = 0
+        let mut rules = re::LearnedRules::new()
+
+        let rule_count = u64::from_le_bytes(data[offset..offset+8].try_into().unwrap()) as usize
+        offset += 8
+
+        for _ in 0..rule_count:
+            let rule_len = u32::from_le_bytes(data[offset..offset+4].try_into().unwrap()) as usize
+            offset += 4
+            let rule_str = String::from_utf8_lossy(&data[offset..offset+rule_len]).to_string()
+            offset += rule_len
+
+            if let Ok(rule) = json::deserialize(&rule_str):
+                rules.add(rule)
+
+        return Ok(rules)
+
+    # Compact checkpoint: save only knowledge graph
+    fn save_compact(
+        knowledge: &kg::KnowledgeGraph,
+        path: &str
+    ) -> Result<(), CheckpointError>:
+        log::info("Saving compact knowledge checkpoint to {}", path)
+        fs::create_dir_all(path)?
+
+        let metadata = CognitiveCheckpointMetadata {
+            version: CHECKPOINT_VERSION,
+            created_at: time::now_iso(),
+            knowledge_node_count: knowledge.node_count(),
+            knowledge_edge_count: knowledge.edge_count(),
+            memory_item_count: 0,
+            learned_rule_count: 0,
+            description: Some("compact knowledge-only checkpoint".to_string())
+        }
+
+        let metadata_json = json::serialize(&metadata)
+        fs::write(&format("{}/metadata.json", path), metadata_json.as_bytes())?
+
+        let kg_bytes = Self::serialize_knowledge_graph(knowledge)?
+        fs::write(&format("{}/knowledge.bin", path), &kg_bytes)?
+
+        log::info("Compact checkpoint saved: {} nodes, {} edges",
+            metadata.knowledge_node_count, metadata.knowledge_edge_count)
+        return Ok(())
+
+
+enum CheckpointError:
+    IoError(message: String)
+    VersionMismatch(expected: u32, got: u32)
+    CorruptedData
+    DeserializationError(message: String)
+    PathNotFound(path: String)

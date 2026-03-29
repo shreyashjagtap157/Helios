@@ -1,0 +1,781 @@
+// Derive Macros — Automatically Generate Trait Implementations
+// Implements compiler-provided derive attributes for common traits
+
+module compiler::macros::derive
+
+import compiler::parser::ast::{StructDef, EnumDef, NodeId, TypeExpr, Span, Item, ImplBlock, FunctionDef, Param}
+import compiler::semantic::{SemanticError, SymbolTable, TypeId}
+
+// ============================================================================
+// Derive Trait Support
+// ============================================================================
+
+enum DeriveTrait:
+    Clone           // Generate clone() method
+    Debug           // Generate fmt() for debugging
+    Display         // Generate to_string() for display
+    Default         // Generate default() constructor
+    PartialEq       // Generate eq() and ne() methods
+    Eq              // Marker trait (empty)
+    PartialOrd      // Generate lt(), le(), gt(), ge() methods
+    Ord             // Generate cmp() method
+    Hash            // Generate hash() method
+    Copy            // Marker trait (empty, requires Clone)
+    Serialize       // Generate serialization code
+    Deserialize     // Generate deserialization code
+    Reflect         // Generate reflection metadata
+    FieldAccessor   // Generate field accessor methods
+    MethodInvoker   // Generate dynamic method invocation
+    Default2        // Alias for Default
+
+struct DeriveAttribute:
+    traits: Vec<DeriveTrait>
+    span: Span
+
+impl DeriveAttribute:
+    fn parse(attr_str: str) -> Result<DeriveAttribute, str>:
+        // Parse #[derive(Clone, Debug, PartialEq)]
+        
+        var traits = Vec::new()
+        
+        // Split by comma and parse each trait name
+        let parts = attr_str.split(",")
+        
+        for part in parts:
+            let trimmed = part.trim()
+            match trimmed:
+                "Clone" => traits.push(DeriveTrait::Clone)
+                "Debug" => traits.push(DeriveTrait::Debug)
+                "Display" => traits.push(DeriveTrait::Display)
+                "Default" => traits.push(DeriveTrait::Default2)
+                "PartialEq" => traits.push(DeriveTrait::PartialEq)
+                "Eq" => traits.push(DeriveTrait::Eq)
+                "PartialOrd" => traits.push(DeriveTrait::PartialOrd)
+                "Ord" => traits.push(DeriveTrait::Ord)
+                "Hash" => traits.push(DeriveTrait::Hash)
+                "Copy" => traits.push(DeriveTrait::Copy)
+                "Serialize" => traits.push(DeriveTrait::Serialize)
+                "Deserialize" => traits.push(DeriveTrait::Deserialize)
+                "Reflect" => traits.push(DeriveTrait::Reflect)
+                "FieldAccessor" => traits.push(DeriveTrait::FieldAccessor)
+                "MethodInvoker" => traits.push(DeriveTrait::MethodInvoker)
+                _ => return Err(format("Unknown derive trait: {}", trimmed))
+        
+        return Ok(DeriveAttribute {
+            traits: traits,
+            span: Span::dummy(),
+        })
+
+// ============================================================================
+// Clone Derivation
+// ============================================================================
+
+fn derive_clone(struct_def: &StructDef) -> own ImplBlock:
+    // Generate:
+    // impl Clone for MyStruct:
+    //     fn clone(&self) -> Self:
+    //         MyStruct {
+    //             field1: self.field1.clone(),
+    //             field2: self.field2.clone(),
+    //         }
+    
+    let span = struct_def.span.clone()
+    let struct_name = struct_def.name.clone()
+    
+    // Build field assignments: field: self.field.clone()
+    var field_clones = Vec::new()
+    
+    for field in &struct_def.fields:
+        // Create field assignment expression: field: self.field.clone()
+        let field_expr = Expr::MethodCall(
+            Box::new(Expr::FieldAccess(
+                Box::new(Expr::Identifier("self".to_string())),
+                field.name.clone(),
+                span.clone()
+            )),
+            "clone".to_string(),
+            Vec::new(),
+            span.clone()
+        )
+        let assignment = (field.name.clone(), field_expr)
+        field_clones.push(assignment)
+    
+    // Create the struct constructor expression
+    let constructor = Expr::StructLiteral(
+        TypeExpr::Named(struct_name.clone(), Vec::new(), span.clone()),
+        field_clones,
+        span.clone()
+    )
+    
+    // Create fn clone(&self) -> Self { ... }
+    let clone_method = FunctionDef {
+        name: "clone".to_string(),
+        params: vec![
+            Param { name: "self".to_string(), type_expr: TypeExpr::Reference(Box::new(TypeExpr::Named("Self".to_string(), Vec::new(), span.clone())), false) }
+        ],
+        return_type: TypeExpr::Named("Self".to_string(), Vec::new(), span.clone()),
+        body: vec![constructor],
+        generics: Vec::new(),
+        visibility: "pub".to_string(),
+        is_unsafe: false,
+        is_async: false,
+        span: span.clone(),
+        id: 0,
+    }
+    
+    return ImplBlock {
+        trait_type: Some(TypeExpr::Named("Clone".to_string(), Vec::new(), span.clone())),
+        target_type: TypeExpr::Named(struct_name.clone(), Vec::new(), span.clone()),
+        items: vec![Item::Function(clone_method)],
+        generics: struct_def.generics.clone(),
+        span: span,
+        id: 0,
+    }
+
+// ============================================================================
+// Debug Derivation
+// ============================================================================
+
+fn derive_debug(struct_def: &StructDef) -> own ImplBlock:
+    // Generate:
+    // impl Debug for MyStruct:
+    //     fn fmt(&self) -> String:
+    //         let mut s = "MyStruct { ".to_string()
+    //         s.push_str("field1: ")
+    //         s.push_str(&format!("{:?}", self.field1))
+    //         s.push_str(", ")
+    //         ...
+    //         s.push_str(" }")
+    //         s
+    
+    let span = struct_def.span.clone()
+    let struct_name = struct_def.name.clone()
+    
+    // Build debug string statements
+    var fmt_body = Vec::new()
+    
+    // Create: let mut s = "StructName { ".to_string()
+    let mut_s = Stmt::Let(
+        "s".to_string(),
+        Expr::MethodCall(
+            Box::new(Expr::StringLiteral(format!("{} {{ ", struct_name))),
+            "to_string".to_string(),
+            Vec::new(),
+            span.clone()
+        )
+    )
+    fmt_body.push(mut_s)
+    
+    // For each field, add push_str calls
+    let field_count = struct_def.fields.len()
+    for (idx, field) in struct_def.fields.iter().enumerate():
+        // s.push_str("field: ")
+        let field_label = format!("{}: ", field.name)
+        let push_label = Stmt::Expr(Expr::MethodCall(
+            Box::new(Expr::Identifier("s".to_string())),
+            "push_str".to_string(),
+            vec![Expr::StringLiteral(field_label)],
+            span.clone()
+        ))
+        fmt_body.push(push_label)
+        
+        // s.push_str(&format!("{:?}", self.field))
+        let format_call = Expr::FunctionCall(
+            Box::new(Expr::Identifier("format!".to_string())),
+            vec![
+                Expr::StringLiteral("{:?}".to_string()),
+                Expr::FieldAccess(
+                    Box::new(Expr::Identifier("self".to_string())),
+                    field.name.clone(),
+                    span.clone()
+                )
+            ],
+            span.clone()
+        )
+        let push_value = Stmt::Expr(Expr::MethodCall(
+            Box::new(Expr::Identifier("s".to_string())),
+            "push_str".to_string(),
+            vec![format_call],
+            span.clone()
+        ))
+        fmt_body.push(push_value)
+        
+        // Add comma separator (not after last field)
+        if idx < field_count - 1:
+            let push_comma = Stmt::Expr(Expr::MethodCall(
+                Box::new(Expr::Identifier("s".to_string())),
+                "push_str".to_string(),
+                vec![Expr::StringLiteral(", ".to_string())],
+                span.clone()
+            ))
+            fmt_body.push(push_comma)
+    
+    // s.push_str(" }")
+    let push_close = Stmt::Expr(Expr::MethodCall(
+        Box::new(Expr::Identifier("s".to_string())),
+        "push_str".to_string(),
+        vec![Expr::StringLiteral(" }".to_string())],
+        span.clone()
+    ))
+    fmt_body.push(push_close)
+    
+    // return s
+    fmt_body.push(Stmt::Expr(Expr::Identifier("s".to_string())))
+    
+    // Create fn fmt(&self) -> String { ... }
+    let fmt_method = FunctionDef {
+        name: "fmt".to_string(),
+        params: vec![
+            Param { name: "self".to_string(), type_expr: TypeExpr::Reference(Box::new(TypeExpr::Named("Self".to_string(), Vec::new(), span.clone())), false) }
+        ],
+        return_type: TypeExpr::Named("String".to_string(), Vec::new(), span.clone()),
+        body: fmt_body,
+        generics: Vec::new(),
+        visibility: "pub".to_string(),
+        is_unsafe: false,
+        is_async: false,
+        span: span.clone(),
+        id: 0,
+    }
+    
+    return ImplBlock {
+        trait_type: Some(TypeExpr::Named("Debug".to_string(), Vec::new(), span.clone())),
+        target_type: TypeExpr::Named(struct_name.clone(), Vec::new(), span.clone()),
+        items: vec![Item::Function(fmt_method)],
+        generics: struct_def.generics.clone(),
+        span: span,
+        id: 0,
+    }
+
+// ============================================================================
+// Display Derivation
+// ============================================================================
+
+fn derive_display(struct_def: &StructDef) -> own ImplBlock:
+    // Generate:
+    // impl Display for MyStruct:
+    //     fn to_string(&self) -> String:
+    //         format!("MyStruct {{ field1: {}, field2: {} }}", self.field1, self.field2)
+    
+    let span = struct_def.span.clone()
+    let struct_name = struct_def.name.clone()
+    
+    // Build format string and arguments
+    var format_parts = Vec::new()
+    var format_args = vec![Expr::Identifier("self".to_string())]  // First arg is self for method call context
+    
+    format_parts.push(format!("{} {{ ", struct_name))
+    
+    for (idx, field) in struct_def.fields.iter().enumerate():
+        format_parts.push(format!("{}: {{}}", field.name))
+        format_args.push(Expr::FieldAccess(
+            Box::new(Expr::Identifier("self".to_string())),
+            field.name.clone(),
+            span.clone()
+        ))
+        
+        if idx < struct_def.fields.len() - 1:
+            format_parts.push(", ".to_string())
+    
+    format_parts.push(" }".to_string())
+    
+    let format_str = format_parts.join("")
+    
+    // Create fn to_string(&self) -> String { ... }
+    let to_string_method = FunctionDef {
+        name: "to_string".to_string(),
+        params: vec![
+            Param { name: "self".to_string(), type_expr: TypeExpr::Reference(Box::new(TypeExpr::Named("Self".to_string(), Vec::new(), span.clone())), false) }
+        ],
+        return_type: TypeExpr::Named("String".to_string(), Vec::new(), span.clone()),
+        body: vec![Stmt::Expr(Expr::FunctionCall(
+            Box::new(Expr::Identifier("format!".to_string())),
+            format_args,
+            span.clone()
+        ))],
+        generics: Vec::new(),
+        visibility: "pub".to_string(),
+        is_unsafe: false,
+        is_async: false,
+        span: span.clone(),
+        id: 0,
+    }
+    
+    return ImplBlock {
+        trait_type: Some(TypeExpr::Named("Display".to_string(), Vec::new(), span.clone())),
+        target_type: TypeExpr::Named(struct_name.clone(), Vec::new(), span.clone()),
+        items: vec![Item::Function(to_string_method)],
+        generics: struct_def.generics.clone(),
+        span: span,
+        id: 0,
+    }
+
+// ============================================================================
+// Default Derivation
+// ============================================================================
+
+fn derive_default(struct_def: &StructDef) -> own ImplBlock:
+    // Generate:
+    // impl Default for MyStruct:
+    //     fn default() -> Self:
+    //         MyStruct {
+    //             field1: Default::default(),
+    //             field2: Default::default(),
+    //         }
+    
+    let span = struct_def.span.clone()
+    let struct_name = struct_def.name.clone()
+    
+    // Build field defaults: field: Type::default()
+    var field_defaults = Vec::new()
+    
+    for field in &struct_def.fields:
+        let default_expr = Expr::MethodCall(
+            Box::new(Expr::Identifier(field.type_expr.to_string())),
+            "default".to_string(),
+            Vec::new(),
+            span.clone()
+        )
+        field_defaults.push((field.name.clone(), default_expr))
+    
+    // Create the struct constructor
+    let constructor = Expr::StructLiteral(
+        TypeExpr::Named(struct_name.clone(), Vec::new(), span.clone()),
+        field_defaults,
+        span.clone()
+    )
+    
+    // Create fn default() -> Self { ... }
+    let default_method = FunctionDef {
+        name: "default".to_string(),
+        params: Vec::new(),
+        return_type: TypeExpr::Named("Self".to_string(), Vec::new(), span.clone()),
+        body: vec![Stmt::Expr(constructor)],
+        generics: Vec::new(),
+        visibility: "pub".to_string(),
+        is_unsafe: false,
+        is_async: false,
+        span: span.clone(),
+        id: 0,
+    }
+    
+    return ImplBlock {
+        trait_type: Some(TypeExpr::Named("Default".to_string(), Vec::new(), span.clone())),
+        target_type: TypeExpr::Named(struct_name.clone(), Vec::new(), span.clone()),
+        items: vec![Item::Function(default_method)],
+        generics: struct_def.generics.clone(),
+        span: span,
+        id: 0,
+    }
+
+// ============================================================================
+// PartialEq Derivation
+// ============================================================================
+
+fn derive_partial_eq(struct_def: &StructDef) -> own ImplBlock:
+    // Generate:
+    // impl PartialEq for MyStruct:
+    //     fn eq(&self, other: &Self) -> bool:
+    //         self.field1 == other.field1 && self.field2 == other.field2 && ...
+    
+    let span = struct_def.span.clone()
+    let struct_name = struct_def.name.clone()
+    
+    // Build equality checks
+    var eq_exprs = Vec::new()
+    
+    for field in &struct_def.fields:
+        let eq_check = Expr::BinaryOp(
+            Box::new(Expr::FieldAccess(
+                Box::new(Expr::Identifier("self".to_string())),
+                field.name.clone(),
+                span.clone()
+            )),
+            "==".to_string(),
+            Box::new(Expr::FieldAccess(
+                Box::new(Expr::Identifier("other".to_string())),
+                field.name.clone(),
+                span.clone()
+            )),
+            span.clone()
+        )
+        eq_exprs.push(eq_check)
+    
+    // Combine all checks with &&
+    let mut result = eq_exprs.pop().unwrap_or(Expr::BooleanLiteral(true))
+    while let Some(expr) = eq_exprs.pop():
+        result = Expr::BinaryOp(
+            Box::new(expr),
+            "&&".to_string(),
+            Box::new(result),
+            span.clone()
+        )
+    
+    // Create fn eq(&self, other: &Self) -> bool { ... }
+    let eq_method = FunctionDef {
+        name: "eq".to_string(),
+        params: vec![
+            Param { name: "self".to_string(), type_expr: TypeExpr::Reference(Box::new(TypeExpr::Named("Self".to_string(), Vec::new(), span.clone())), false) },
+            Param { name: "other".to_string(), type_expr: TypeExpr::Reference(Box::new(TypeExpr::Named("Self".to_string(), Vec::new(), span.clone())), false) }
+        ],
+        return_type: TypeExpr::Named("bool".to_string(), Vec::new(), span.clone()),
+        body: vec![Stmt::Expr(result)],
+        generics: Vec::new(),
+        visibility: "pub".to_string(),
+        is_unsafe: false,
+        is_async: false,
+        span: span.clone(),
+        id: 0,
+    }
+    
+    return ImplBlock {
+        trait_type: Some(TypeExpr::Named("PartialEq".to_string(), Vec::new(), span.clone())),
+        target_type: TypeExpr::Named(struct_name.clone(), Vec::new(), span.clone()),
+        items: vec![Item::Function(eq_method)],
+        generics: struct_def.generics.clone(),
+        span: span,
+        id: 0,
+    }
+
+// ============================================================================
+// Ord Derivation
+// ============================================================================
+
+fn derive_ord(struct_def: &StructDef) -> own ImplBlock:
+    // Generate:
+    // impl Ord for MyStruct:
+    //     fn cmp(&self, other: &Self) -> Ordering:
+    //         match self.field1.cmp(&other.field1):
+    //             Ordering::Equal => self.field2.cmp(&other.field2)
+    //             other => other
+    
+    let span = struct_def.span.clone()
+    let struct_name = struct_def.name.clone()
+    
+    // Build comparison chain - start from last field and work backwards
+    var cmp_expr = Expr::MethodCall(
+        Box::new(Expr::FieldAccess(
+            Box::new(Expr::Identifier("self".to_string())),
+            struct_def.fields.last().unwrap_or(&struct_def.fields[0]).name.clone(),
+            span.clone()
+        )),
+        "cmp".to_string(),
+        vec![Expr::FieldAccess(
+            Box::new(Expr::Identifier("other".to_string())),
+            struct_def.fields.last().unwrap_or(&struct_def.fields[0]).name.clone(),
+            span.clone()
+        )],
+        span.clone()
+    )
+    
+    // Build match expressions for each field
+    for field in struct_def.fields.iter().rev().skip(1):
+        let field_cmp = Expr::MethodCall(
+            Box::new(Expr::FieldAccess(
+                Box::new(Expr::Identifier("self".to_string())),
+                field.name.clone(),
+                span.clone()
+            )),
+            "cmp".to_string(),
+            vec![Expr::FieldAccess(
+                Box::new(Expr::Identifier("other".to_string())),
+                field.name.clone(),
+                span.clone()
+            )],
+            span.clone()
+        )
+        
+        // Wrap in match Ordering::Equal check
+        let match_expr = Expr::Match(
+            Box::new(field_cmp),
+            vec![
+                (Pattern::EnumVariant("Ordering".to_string(), "Equal".to_string()), cmp_expr),
+                (Pattern::Wildcard, Expr::Identifier("other".to_string()))
+            ],
+            span.clone()
+        )
+        cmp_expr = match_expr
+    
+    // Create fn cmp(&self, other: &Self) -> Ordering { ... }
+    let cmp_method = FunctionDef {
+        name: "cmp".to_string(),
+        params: vec![
+            Param { name: "self".to_string(), type_expr: TypeExpr::Reference(Box::new(TypeExpr::Named("Self".to_string(), Vec::new(), span.clone())), false) },
+            Param { name: "other".to_string(), type_expr: TypeExpr::Reference(Box::new(TypeExpr::Named("Self".to_string(), Vec::new(), span.clone())), false) }
+        ],
+        return_type: TypeExpr::Named("Ordering".to_string(), Vec::new(), span.clone()),
+        body: vec![Stmt::Expr(cmp_expr)],
+        generics: Vec::new(),
+        visibility: "pub".to_string(),
+        is_unsafe: false,
+        is_async: false,
+        span: span.clone(),
+        id: 0,
+    }
+    
+    return ImplBlock {
+        trait_type: Some(TypeExpr::Named("Ord".to_string(), Vec::new(), span.clone())),
+        target_type: TypeExpr::Named(struct_name.clone(), Vec::new(), span.clone()),
+        items: vec![Item::Function(cmp_method)],
+        generics: struct_def.generics.clone(),
+        span: span,
+        id: 0,
+    }
+
+// ============================================================================
+// Hash Derivation
+// ============================================================================
+
+fn derive_hash(struct_def: &StructDef) -> own ImplBlock:
+    // Generate:
+    // impl Hash for MyStruct:
+    //     fn hash(&self) -> u64:
+    //         let mut h = 0u64
+    //         h = h.wrapping_mul(31).wrapping_add(self.field1.hash())
+    //         h = h.wrapping_mul(31).wrapping_add(self.field2.hash())
+    //         h
+    
+    let span = struct_def.span.clone()
+    let struct_name = struct_def.name.clone()
+    
+    // Build hash computation statements
+    var hash_body = vec![
+        Stmt::Let(
+            "h".to_string(),
+            Expr::Cast(
+                Box::new(Expr::IntegerLiteral(0)),
+                TypeExpr::Named("u64".to_string(), Vec::new(), span.clone())
+            )
+        )
+    ]
+    
+    // Generate: h = h.wrapping_mul(31).wrapping_add(self.field.hash())
+    for field in &struct_def.fields:
+        let hash_call = Expr::MethodCall(
+            Box::new(Expr::FieldAccess(
+                Box::new(Expr::Identifier("self".to_string())),
+                field.name.clone(),
+                span.clone()
+            )),
+            "hash".to_string(),
+            Vec::new(),
+            span.clone()
+        )
+        
+        let add_hash = Expr::MethodCall(
+            Box::new(Expr::MethodCall(
+                Box::new(Expr::Identifier("h".to_string())),
+                "wrapping_mul".to_string(),
+                vec![Expr::IntegerLiteral(31)],
+                span.clone()
+            )),
+            "wrapping_add".to_string(),
+            vec![hash_call],
+            span.clone()
+        )
+        
+        hash_body.push(Stmt::Let("h".to_string(), add_hash))
+    
+    // Return h
+    hash_body.push(Stmt::Expr(Expr::Identifier("h".to_string())))
+    
+    // Create fn hash(&self) -> u64 { ... }
+    let hash_method = FunctionDef {
+        name: "hash".to_string(),
+        params: vec![
+            Param { name: "self".to_string(), type_expr: TypeExpr::Reference(Box::new(TypeExpr::Named("Self".to_string(), Vec::new(), span.clone())), false) }
+        ],
+        return_type: TypeExpr::Named("u64".to_string(), Vec::new(), span.clone()),
+        body: hash_body,
+        generics: Vec::new(),
+        visibility: "pub".to_string(),
+        is_unsafe: false,
+        is_async: false,
+        span: span.clone(),
+        id: 0,
+    }
+    
+    return ImplBlock {
+        trait_type: Some(TypeExpr::Named("Hash".to_string(), Vec::new(), span.clone())),
+        target_type: TypeExpr::Named(struct_name.clone(), Vec::new(), span.clone()),
+        items: vec![Item::Function(hash_method)],
+        generics: struct_def.generics.clone(),
+        span: span,
+        id: 0,
+    }
+
+// ============================================================================
+// Reflect Derivation
+// ============================================================================
+
+fn derive_reflect(struct_def: &StructDef) -> own ImplBlock:
+    // Generate:
+    // impl Reflect for MyStruct:
+    //     fn type_info() -> TypeInfo:
+    //         TypeInfo {
+    //             name: "MyStruct",
+    //             fields: vec![
+    //                 FieldInfo { name: "field1", type_name: "i32" },
+    //                 FieldInfo { name: "field2", type_name: "String" },
+    //             ],
+    //             methods: vec![...],
+    //             size: size_of::<MyStruct>(),
+    //         }
+    
+    let span = struct_def.span.clone()
+    let struct_name = struct_def.name.clone()
+    
+    // Build field information list
+    var field_infos = Vec::new()
+    
+    for field in &struct_def.fields:
+        let field_info = Expr::StructLiteral(
+            TypeExpr::Named("FieldInfo".to_string(), Vec::new(), span.clone()),
+            vec![
+                ("name".to_string(), Expr::StringLiteral(field.name.clone())),
+                ("type_name".to_string(), Expr::StringLiteral(field.type_expr.to_string())),
+                ("offset".to_string(), Expr::IntegerLiteral(0)),  // Would be computed in real impl
+                ("is_public".to_string(), Expr::BooleanLiteral(true)),
+            ],
+            span.clone()
+        )
+        field_infos.push(field_info)
+    
+    // Create fields vector
+    let fields_vec = Expr::VectorLiteral(field_infos, span.clone())
+    
+    // Create the TypeInfo struct literal
+    let type_info = Expr::StructLiteral(
+        TypeExpr::Named("TypeInfo".to_string(), Vec::new(), span.clone()),
+        vec![
+            ("name".to_string(), Expr::StringLiteral(struct_name.clone())),
+            ("fields".to_string(), fields_vec),
+            ("methods".to_string(), Expr::VectorLiteral(Vec::new(), span.clone())),
+            ("size".to_string(), Expr::Identifier("std::mem::size_of::<Self>()".to_string())),
+            ("alignment".to_string(), Expr::Identifier("std::mem::align_of::<Self>()".to_string())),
+            ("is_generic".to_string(), Expr::BooleanLiteral(!struct_def.generics.is_empty())),
+        ],
+        span.clone()
+    )
+    
+    // Create fn type_info() -> TypeInfo { ... }
+    let type_info_method = FunctionDef {
+        name: "type_info".to_string(),
+        params: Vec::new(),
+        return_type: TypeExpr::Named("TypeInfo".to_string(), Vec::new(), span.clone()),
+        body: vec![Stmt::Expr(type_info)],
+        generics: Vec::new(),
+        visibility: "pub".to_string(),
+        is_unsafe: false,
+        is_async: false,
+        span: span.clone(),
+        id: 0,
+    }
+    
+    return ImplBlock {
+        trait_type: Some(TypeExpr::Named("Reflect".to_string(), Vec::new(), span.clone())),
+        target_type: TypeExpr::Named(struct_name.clone(), Vec::new(), span.clone()),
+        items: vec![Item::Function(type_info_method)],
+        generics: struct_def.generics.clone(),
+        span: span,
+        id: 0,
+    }
+
+// ============================================================================
+// Derive Macro Processor
+// ============================================================================
+
+struct DeriveProcessor:
+    requested_derives: Vec<DeriveTrait>
+
+impl DeriveProcessor:
+    fn new(derives: Vec<DeriveTrait>) -> own Self:
+        return DeriveProcessor {
+            requested_derives: derives,
+        }
+    
+    fn process_struct(&self, struct_def: &StructDef) -> Result<Vec<ImplBlock>, SemanticError>:
+        var generated_impls = Vec::new()
+        
+        for derive_trait in &self.requested_derives:
+            let impl_block = match derive_trait:
+                DeriveTrait::Clone => derive_clone(struct_def)
+                DeriveTrait::Debug => derive_debug(struct_def)
+                DeriveTrait::Display => derive_display(struct_def)
+                DeriveTrait::Default | DeriveTrait::Default2 => derive_default(struct_def)
+                DeriveTrait::PartialEq => derive_partial_eq(struct_def)
+                DeriveTrait::Ord => derive_ord(struct_def)
+                DeriveTrait::Hash => derive_hash(struct_def)
+                DeriveTrait::Reflect => derive_reflect(struct_def)
+                DeriveTrait::Copy =>
+                    // Copy requires Clone
+                    if self.requested_derives.contains(&DeriveTrait::Clone):
+                        // Generate empty Copy impl (marker trait)
+                        derive_clone(struct_def)
+                    else:
+                        return Err(SemanticError::new("Copy requires Clone".to_string(), struct_def.span.clone()))
+                _ =>
+                    return Err(SemanticError::new(format("Derive not yet implemented"), struct_def.span.clone()))
+            
+            generated_impls.push(impl_block)
+        
+        return Ok(generated_impls)
+    
+    fn process_enum(&self, enum_def: &EnumDef) -> Result<Vec<ImplBlock>, SemanticError>:
+        // Similar to process_struct but handles enum variants
+        var generated_impls = Vec::new()
+        
+        for derive_trait in &self.requested_derives:
+            // Enum derivation is similar to struct
+            // (Full implementation would generate appropriate code)
+            pass
+        
+        return Ok(generated_impls)
+
+// ============================================================================
+// Derive Trait Validation
+// ============================================================================
+
+fn validate_derive(
+    derive_trait: &DeriveTrait,
+    struct_def: &StructDef,
+) -> Result<(), SemanticError>:
+    match derive_trait:
+        DeriveTrait::Copy =>
+            // Copy requires all fields to be Copy
+            for field in &struct_def.fields:
+                // In full implementation, would check field types
+                pass
+            Ok(())
+        DeriveTrait::Clone =>
+            // Clone requires all fields to be Clone
+            Ok(())
+        DeriveTrait::Debug =>
+            // Debug requires all fields to be Debug
+            Ok(())
+        _ => Ok(())
+
+// ============================================================================
+// Enum Derivation Support
+// ============================================================================
+
+// For enums with #[derive(Clone, Debug, PartialEq)]:
+//
+// impl Clone for MyEnum:
+//     fn clone(&self) -> Self:
+//         match self:
+//             MyEnum::Variant1 => MyEnum::Variant1
+//             MyEnum::Variant2(a, b) => MyEnum::Variant2(a.clone(), b.clone())
+//
+// impl Debug for MyEnum:
+//     fn fmt(&self) -> String:
+//         match self:
+//             MyEnum::Variant1 => "MyEnum::Variant1".to_string()
+//             MyEnum::Variant2(a, b) => format("MyEnum::Variant2({:?}, {:?})", a, b)
+//
+// impl PartialEq for MyEnum:
+//     fn eq(&self, other: &Self) -> bool:
+//         match (self, other):
+//             (MyEnum::Variant1, MyEnum::Variant1) => true
+//             (MyEnum::Variant2(a1, b1), MyEnum::Variant2(a2, b2)) => a1 == a2 && b1 == b2
+//             _ => false

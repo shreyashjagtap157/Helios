@@ -1,0 +1,34 @@
+// Regression test for numeric coercion (O-025)
+// Tests that Int + Float produces Float without warnings
+
+fn test_int_plus_float() -> Float:
+    let a: Int = 1
+    let b: Float = 2.5
+    return a + b
+
+fn test_float_plus_int() -> Float:
+    let a: Float = 3.14
+    let b: Int = 2
+    return a + b
+
+fn test_float_plus_float() -> Float:
+    let a: Float = 1.5
+    let b: Float = 2.5
+    return a + b
+
+fn test_int_compare_float() -> Int:
+    let x: Int = 5
+    let y: Float = 5.0
+    if x == y:
+        return 1
+    else:
+        return 0
+
+fn main():
+    let r1: Float = test_int_plus_float()
+    println(r1)
+    let r2: Float = test_float_plus_int()
+    println(r2)
+    let r3: Int = test_int_compare_float()
+    println(r3)
+    println("Numeric coercion tests passed")

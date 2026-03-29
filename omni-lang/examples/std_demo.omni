@@ -1,0 +1,89 @@
+// HELIOS Omni Standard Library Demo
+// Demonstrates usage of the full standard library
+
+import std::core
+import std::collections
+import std::io
+import std::net
+import std::thread
+import std::math
+import std::time
+import std::sys
+
+fn main():
+    println("🌟 Omni Standard Library Demo 🌟")
+    
+    // 1. IO & System
+    demo_system()
+    
+    // 2. Collections
+    demo_collections()
+    
+    // 3. Math
+    demo_math()
+    
+    // 4. Networking
+    demo_net()
+    
+    // 5. Concurrency
+    thread::spawn(|| {
+        demo_concurrency()
+    }).join()
+    
+    println("\n✅ Demo Complete!")
+
+fn demo_system():
+    println("\n[System]")
+    println("OS: {} ({})", sys::os_name(), sys::os_version())
+    println("User: {}", sys::user_name())
+    println("CPUs: {}", sys::num_cpus())
+    println("CWD: {}", sys::current_dir().unwrap())
+
+fn demo_collections():
+    println("\n[Collections]")
+    
+    let mut vec = Vector::new()
+    vec.push(10)
+    vec.push(20)
+    println("Vector: {:?}", vec)
+    
+    let mut map = HashMap::new()
+    map.insert("key", "value")
+    println("Map: {:?}", map)
+
+fn demo_math():
+    println("\n[Math]")
+    println("PI: {}", math::PI)
+    println("Sqrt(2): {}", math::sqrt(2.0))
+    
+    let v1 = math::Vector3::new(1.0, 0.0, 0.0)
+    let v2 = math::Vector3::new(0.0, 1.0, 0.0)
+    println("Dot Product: {}", v1.dot(&v2))
+
+fn demo_net():
+    println("\n[Networking]")
+    let ip = net::IpAddr::parse("127.0.0.1").unwrap()
+    println("Parsed IP: {:?}", ip)
+    
+    // Simulating request (would fail without running server)
+    // let client = net::HttpClient::new()
+    // let resp = client.get("https://example.com")
+
+fn demo_concurrency():
+    println("\n[Concurrency]")
+    
+    let lock = Mutex::new(0)
+    
+    let t = thread::spawn(|| {
+        thread::sleep(100)
+        let mut guard = lock.lock()
+        *guard += 1
+        println("Thread incremented value")
+    })
+    
+    t.join()
+    println("Final value: {}", *lock.lock())
+
+fn println(fmt: &str, ...args):
+    let s = format(fmt, ...args)
+    io::Stdout::println(&s)

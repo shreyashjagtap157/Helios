@@ -1,0 +1,574 @@
+// Omni Standard Library: Algorithms
+// Efficient Sorting, Searching, and Graph Algorithms
+
+module std::algorithm
+
+import std::core
+import std::collections
+import std::math
+
+// ============================================
+// Sorting Algorithms
+// ============================================
+
+// QuickSort (O(n log n))
+fn quick_sort<T: Comparable>(arr: &mut Vector<T>) {
+    if arr.len() <= 1 {
+        return
+    }
+    _quick_sort(arr, 0, arr.len() - 1)
+}
+
+fn _quick_sort<T: Comparable>(arr: &mut Vector<T>, low: usize, high: usize) {
+    if low < high {
+        let p = _partition(arr, low, high)
+        if p > 0 {
+            _quick_sort(arr, low, p - 1)
+        }
+        _quick_sort(arr, p + 1, high)
+    }
+}
+
+fn _partition<T: Comparable>(arr: &mut Vector<T>, low: usize, high: usize) -> usize {
+    let pivot = arr.get(high).unwrap().clone()
+    let mut i = low
+    
+    for j in low..high {
+        if arr.get(j).unwrap() <= &pivot {
+            arr.swap(i, j)
+            i += 1
+        }
+    }
+    arr.swap(i, high)
+    return i
+}
+
+// MergeSort (Stable O(n log n))
+fn merge_sort<T: Comparable + Clone>(arr: &mut Vector<T>) {
+    let len = arr.len()
+    if len <= 1 { return }
+    
+    let mid = len / 2
+    let mut left = Vector::new()
+    let mut right = Vector::new()
+    
+    for i in 0..mid { left.push(arr.get(i).unwrap().clone()) }
+    for i in mid..len { right.push(arr.get(i).unwrap().clone()) }
+    
+    merge_sort(&mut left)
+    merge_sort(&mut right)
+    
+    _merge(arr, &left, &right)
+}
+
+fn _merge<T: Comparable + Clone>(result: &mut Vector<T>, left: &Vector<T>, right: &Vector<T>) {
+    result.clear()
+    let mut i = 0
+    let mut j = 0
+    
+    while i < left.len() && j < right.len() {
+        if left.get(i).unwrap() <= right.get(j).unwrap() {
+            result.push(left.get(i).unwrap().clone())
+            i += 1
+        } else {
+            result.push(right.get(j).unwrap().clone())
+            j += 1
+        }
+    }
+    
+    while i < left.len() {
+        result.push(left.get(i).unwrap().clone())
+        i += 1
+    }
+    
+    while j < right.len() {
+        result.push(right.get(j).unwrap().clone())
+        j += 1
+    }
+}
+
+// ============================================
+// Searching Algorithms
+// ============================================
+
+// Binary Search (O(log n)) - requires sorted array
+fn binary_search<T: Comparable>(arr: &Vector<T>, target: &T) -> Option<usize> {
+    let mut low = 0
+    let mut high = arr.len()
+    
+    while low < high {
+        let mid = low + (high - low) / 2
+        let val = arr.get(mid).unwrap()
+        
+        match val.cmp(target) {
+            Ordering::Equal => return Some(mid),
+            Ordering::Less => low = mid + 1,
+            Ordering::Greater => high = mid,
+        }
+    }
+    return None
+}
+
+// Quick Select (Find kth smallest element in O(n))
+fn quick_select<T: Comparable + Clone>(arr: &Vector<T>, k: usize) -> Option<T> {
+    if k >= arr.len() { return None }
+    let mut temp = arr.clone()
+    return Some(_quick_select_recursive(&mut temp, 0, temp.len() - 1, k))
+}
+
+fn _quick_select_recursive<T: Comparable>(arr: &mut Vector<T>, low: usize, high: usize, k: usize) -> T {
+    if low == high {
+        return arr.get(low).unwrap().clone()
+    }
+    
+    let p = _partition(arr, low, high)
+    
+    if k == p {
+        return arr.get(p).unwrap().clone()
+    } else if k < p {
+        return _quick_select_recursive(arr, low, p - 1, k)
+    } else {
+        return _quick_select_recursive(arr, p + 1, high, k)
+    }
+}
+
+// ============================================
+// Graph Algorithms
+// ============================================
+
+struct Graph<T>:
+    nodes: HashMap<T, Vec<T>> // Adjacency list
+
+    fn new() -> Graph<T>:
+        Graph { nodes: HashMap::new() }
+
+    fn add_edge(&mut self, u: T, v: T) {
+        if !self.nodes.contains_key(&u) {
+            self.nodes.insert(u.clone(), Vec::new())
+        }
+        self.nodes.get_mut(&u).unwrap().push(v)
+    }
+
+// BFS (Breadth-First Search) - Shortest path in unweighted graph
+fn bfs<T: Hash + PartialEq + Clone>(graph: &Graph<T>, start: T, target: T) -> Option<Vec<T>> {
+    let mut queue = Deque::new()
+    queue.push(vec![start.clone()])
+    
+    let mut visited = HashSet::new()
+    visited.insert(start)
+    
+    while !queue.is_empty() {
+        let path = queue.pop_front().unwrap()
+        let node = path.last().unwrap()
+        
+        if node == &target {
+            return Some(path)
+        }
+        
+        if let Some(neighbors) = graph.nodes.get(node) {
+            for neighbor in neighbors {
+                if !visited.contains(neighbor) {
+                    visited.insert(neighbor.clone())
+                    let mut new_path = path.clone()
+                    new_path.push(neighbor.clone())
+                    queue.push(new_path)
+                }
+            }
+        }
+    }
+    return None
+}
+
+// Dijkstra's Algorithm (Shortest path in weighted graph)
+struct WeightedGraph<T>:
+    nodes: HashMap<T, Vec<(T, f64)>>
+
+    fn new() -> WeightedGraph<T>:
+        WeightedGraph { nodes: HashMap::new() }
+
+    fn add_edge(&mut self, from: T, to: T, weight: f64):
+        if not self.nodes.contains_key(&from):
+            self.nodes.insert(from.clone(), Vec::new())
+        self.nodes.get_mut(&from).unwrap().push((to, weight))
+
+    fn shortest_path(&self, start: T, end: T) -> Option<(Vec<T>, f64)>:
+        // Dijkstra's algorithm using a priority queue
+        let mut distances: HashMap<T, f64> = HashMap::new()
+        let mut previous: HashMap<T, Option<T>> = HashMap::new()
+        let mut heap: BinaryHeap<(f64, T)> = BinaryHeap::new()
+        
+        // Initialize
+        distances.insert(start.clone(), 0.0)
+        heap.push((0.0, start.clone()))
+        
+        while not heap.is_empty():
+            let (dist, current) = heap.pop().unwrap()
+            
+            // Found target
+            if current == end:
+                let mut path: Vec<T> = Vec::new()
+                let mut node: Option<T> = Some(end.clone())
+                
+                while node.is_some():
+                    path.push(node.as_ref().unwrap().clone())
+                    node = previous.get(node.as_ref().unwrap())
+                        .and_then(|prev| prev.clone())
+                
+                path.reverse()
+                return Some((path, dist))
+            
+            // Skip if we've found a better path
+            if let Some(&d) = distances.get(&current):
+                if dist > d:
+                    continue
+            
+            // Process neighbors
+            if let Some(neighbors) = self.nodes.get(&current):
+                for (neighbor, weight) in neighbors:
+                    let new_dist = dist + *weight
+                    
+                    let is_better = match distances.get(neighbor):
+                        Some(&d) => new_dist < d
+                        None => true
+                    
+                    if is_better:
+                        distances.insert(neighbor.clone(), new_dist)
+                        previous.insert(neighbor.clone(), Some(current.clone()))
+                        heap.push((new_dist, neighbor.clone()))
+        
+        None  // No path found
+
+// A* Search Algorithm
+fn astar<T: Hash + PartialEq + Clone>(
+    start: T,
+    goal: T,
+    neighbors: Fn(&T) -> Vec<(T, f64)>,
+    heuristic: Fn(&T, &T) -> f64
+) -> Option<(Vec<T>, f64)>:
+    let mut open_set: BinaryHeap<(f64, f64, T)> = BinaryHeap::new()  // (f_score, g_score, node)
+    let mut came_from: HashMap<T, T> = HashMap::new()
+    let mut g_score: HashMap<T, f64> = HashMap::new()
+    
+    g_score.insert(start.clone(), 0.0)
+    let h = heuristic(&start, &goal)
+    open_set.push((-(h), 0.0, start.clone()))  // Negate for min-heap behavior
+    
+    while not open_set.is_empty():
+        let (neg_f, g, current) = open_set.pop().unwrap()
+        
+        if current == goal:
+            // Reconstruct path
+            let mut path: Vec<T> = Vec::new()
+            let mut node = current.clone()
+            path.push(node.clone())
+            
+            while came_from.contains_key(&node):
+                node = came_from.get(&node).unwrap().clone()
+                path.push(node.clone())
+            
+            path.reverse()
+            return Some((path, g))
+        
+        for (neighbor, cost) in neighbors(&current):
+            let tentative_g = g + cost
+            
+            let is_better = match g_score.get(&neighbor):
+                Some(&existing_g) => tentative_g < existing_g
+                None => true
+            
+            if is_better:
+                came_from.insert(neighbor.clone(), current.clone())
+                g_score.insert(neighbor.clone(), tentative_g)
+                let f = tentative_g + heuristic(&neighbor, &goal)
+                open_set.push((-f, tentative_g, neighbor.clone()))
+    
+    None
+
+// Bellman-Ford Algorithm (handles negative weights)
+fn bellman_ford<T: Hash + PartialEq + Clone>(
+    graph: &WeightedGraph<T>,
+    start: T
+) -> Result<HashMap<T, f64>, &str>:
+    let mut distances: HashMap<T, f64> = HashMap::new()
+    
+    // Initialize distances
+    for (node, _) in graph.nodes.iter():
+        distances.insert(node.clone(), f64::INFINITY)
+    distances.insert(start.clone(), 0.0)
+    
+    // Get all edges
+    let mut edges: Vec<(T, T, f64)> = Vec::new()
+    for (u, neighbors) in graph.nodes.iter():
+        for (v, w) in neighbors:
+            edges.push((u.clone(), v.clone(), *w))
+    
+    let num_nodes = graph.nodes.len()
+    
+    // Relax edges |V| - 1 times
+    for _ in 0..num_nodes - 1:
+        for (u, v, w) in &edges:
+            if let Some(&du) = distances.get(u):
+                if du != f64::INFINITY:
+                    let new_dist = du + *w
+                    if let Some(&dv) = distances.get(v):
+                        if new_dist < dv:
+                            distances.insert(v.clone(), new_dist)
+    
+    // Check for negative cycles
+    for (u, v, w) in &edges:
+        if let (Some(&du), Some(&dv)) = (distances.get(u), distances.get(v)):
+            if du != f64::INFINITY and du + *w < dv:
+                return Err("Graph contains negative cycle")
+    
+    Ok(distances)
+
+// Floyd-Warshall Algorithm (all pairs shortest paths)
+fn floyd_warshall(graph: &Vec<Vec<f64>>) -> Vec<Vec<f64>>:
+    let n = graph.len()
+    let mut dist: Vec<Vec<f64>> = graph.clone()
+    
+    for k in 0..n:
+        for i in 0..n:
+            for j in 0..n:
+                if dist[i][k] != f64::INFINITY and dist[k][j] != f64::INFINITY:
+                    let new_dist = dist[i][k] + dist[k][j]
+                    if new_dist < dist[i][j]:
+                        dist[i][j] = new_dist
+    
+    dist
+
+// Topological Sort (for DAGs)
+fn topological_sort<T: Hash + PartialEq + Clone>(graph: &Graph<T>) -> Option<Vec<T>>:
+    let mut in_degree: HashMap<T, usize> = HashMap::new()
+    let mut result: Vec<T> = Vec::new()
+    let mut queue: Deque<T> = Deque::new()
+    
+    // Initialize in-degree for all nodes
+    for (node, neighbors) in graph.nodes.iter():
+        if not in_degree.contains_key(node):
+            in_degree.insert(node.clone(), 0)
+        for neighbor in neighbors:
+            let count = in_degree.get(neighbor).unwrap_or(&0) + 1
+            in_degree.insert(neighbor.clone(), count)
+    
+    // Add nodes with in-degree 0 to queue
+    for (node, &degree) in in_degree.iter():
+        if degree == 0:
+            queue.push_back(node.clone())
+    
+    while not queue.is_empty():
+        let node = queue.pop_front().unwrap()
+        result.push(node.clone())
+        
+        if let Some(neighbors) = graph.nodes.get(&node):
+            for neighbor in neighbors:
+                let degree = in_degree.get(neighbor).unwrap() - 1
+                in_degree.insert(neighbor.clone(), degree)
+                if degree == 0:
+                    queue.push_back(neighbor.clone())
+    
+    // Check for cycle
+    if result.len() == in_degree.len():
+        Some(result)
+    else:
+        None  // Graph has a cycle
+
+// Strongly Connected Components (Tarjan's algorithm)
+struct TarjanSCC<T>:
+    index: usize
+    stack: Vec<T>
+    on_stack: HashSet<T>
+    indices: HashMap<T, usize>
+    low_links: HashMap<T, usize>
+    sccs: Vec<Vec<T>>
+
+fn tarjan_scc<T: Hash + PartialEq + Clone>(graph: &Graph<T>) -> Vec<Vec<T>>:
+    let mut state = TarjanSCC {
+        index: 0,
+        stack: Vec::new(),
+        on_stack: HashSet::new(),
+        indices: HashMap::new(),
+        low_links: HashMap::new(),
+        sccs: Vec::new(),
+    }
+    
+    for (node, _) in graph.nodes.iter():
+        if not state.indices.contains_key(node):
+            _tarjan_strongconnect(graph, node.clone(), &mut state)
+    
+    state.sccs
+
+fn _tarjan_strongconnect<T: Hash + PartialEq + Clone>(
+    graph: &Graph<T>,
+    v: T,
+    state: &mut TarjanSCC<T>
+):
+    state.indices.insert(v.clone(), state.index)
+    state.low_links.insert(v.clone(), state.index)
+    state.index += 1
+    state.stack.push(v.clone())
+    state.on_stack.insert(v.clone())
+    
+    if let Some(neighbors) = graph.nodes.get(&v):
+        for w in neighbors:
+            if not state.indices.contains_key(w):
+                _tarjan_strongconnect(graph, w.clone(), state)
+                let low_v = *state.low_links.get(&v).unwrap()
+                let low_w = *state.low_links.get(w).unwrap()
+                state.low_links.insert(v.clone(), low_v.min(low_w))
+            else if state.on_stack.contains(w):
+                let low_v = *state.low_links.get(&v).unwrap()
+                let idx_w = *state.indices.get(w).unwrap()
+                state.low_links.insert(v.clone(), low_v.min(idx_w))
+    
+    // If v is a root node, pop the stack and generate SCC
+    if state.low_links.get(&v) == state.indices.get(&v):
+        let mut scc: Vec<T> = Vec::new()
+        loop:
+            let w = state.stack.pop().unwrap()
+            state.on_stack.remove(&w)
+            scc.push(w.clone())
+            if w == v:
+                break
+        state.sccs.push(scc)
+
+// Minimum Spanning Tree (Kruskal's algorithm)
+struct UnionFind:
+    parent: Vec<usize>
+    rank: Vec<usize>
+
+impl UnionFind:
+    fn new(n: usize) -> UnionFind:
+        let parent: Vec<usize> = (0..n).collect()
+        let rank: Vec<usize> = vec![0; n]
+        UnionFind { parent: parent, rank: rank }
+    
+    fn find(mut self, x: usize) -> usize:
+        if self.parent[x] != x:
+            self.parent[x] = self.find(self.parent[x])  // Path compression
+        self.parent[x]
+    
+    fn union(mut self, x: usize, y: usize) -> bool:
+        let root_x = self.find(x)
+        let root_y = self.find(y)
+        
+        if root_x == root_y:
+            return false
+        
+        // Union by rank
+        if self.rank[root_x] < self.rank[root_y]:
+            self.parent[root_x] = root_y
+        else if self.rank[root_x] > self.rank[root_y]:
+            self.parent[root_y] = root_x
+        else:
+            self.parent[root_y] = root_x
+            self.rank[root_x] += 1
+        
+        true
+
+fn kruskal_mst(num_nodes: usize, edges: &Vec<(usize, usize, f64)>) -> Vec<(usize, usize, f64)>:
+    // Sort edges by weight
+    let mut sorted_edges = edges.clone()
+    sorted_edges.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap())
+    
+    let mut uf = UnionFind::new(num_nodes)
+    let mut mst: Vec<(usize, usize, f64)> = Vec::new()
+    
+    for (u, v, w) in sorted_edges:
+        if uf.union(u, v):
+            mst.push((u, v, w))
+            if mst.len() == num_nodes - 1:
+                break
+    
+    mst
+
+// Binary Heap (Priority Queue)
+struct BinaryHeap<T>:
+    data: Vec<T>
+
+impl BinaryHeap<T: Comparable>:
+    fn new() -> BinaryHeap<T>:
+        BinaryHeap { data: Vec::new() }
+    
+    fn is_empty(&self) -> bool:
+        self.data.is_empty()
+    
+    fn len(&self) -> usize:
+        self.data.len()
+    
+    fn push(mut self, item: T):
+        self.data.push(item)
+        self._sift_up(self.data.len() - 1)
+    
+    fn pop(mut self) -> Option<T>:
+        if self.data.is_empty():
+            return None
+        
+        let last_idx = self.data.len() - 1
+        self.data.swap(0, last_idx)
+        let item = self.data.pop()
+        
+        if not self.data.is_empty():
+            self._sift_down(0)
+        
+        item
+    
+    fn peek(&self) -> Option<&T>:
+        self.data.first()
+    
+    fn _sift_up(mut self, mut idx: usize):
+        while idx > 0:
+            let parent = (idx - 1) / 2
+            if self.data[idx] > self.data[parent]:
+                self.data.swap(idx, parent)
+                idx = parent
+            else:
+                break
+    
+    fn _sift_down(mut self, mut idx: usize):
+        let len = self.data.len()
+        loop:
+            let left = 2 * idx + 1
+            let right = 2 * idx + 2
+            let mut largest = idx
+            
+            if left < len and self.data[left] > self.data[largest]:
+                largest = left
+            if right < len and self.data[right] > self.data[largest]:
+                largest = right
+            
+            if largest == idx:
+                break
+            
+            self.data.swap(idx, largest)
+            idx = largest
+
+// ============================================
+// Functional Utilities
+// ============================================
+
+fn map<T, U>(arr: &Vector<T>, f: Fn(&T) -> U) -> Vector<U> {
+    let mut result = Vector::with_capacity(arr.len())
+    for item in arr.iter() {
+        result.push(f(item))
+    }
+    return result
+}
+
+fn filter<T: Clone>(arr: &Vector<T>, f: Fn(&T) -> bool) -> Vector<T> {
+    let mut result = Vector::new()
+    for item in arr.iter() {
+        if f(item) {
+            result.push(item.clone())
+        }
+    }
+    return result
+}
+
+fn reduce<T, U>(arr: &Vector<T>, init: U, f: Fn(U, &T) -> U) -> U {
+    let mut acc = init
+    for item in arr.iter() {
+        acc = f(acc, item)
+    }
+    return acc
+}

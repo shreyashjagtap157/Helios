@@ -1,0 +1,18 @@
+// Omni Standard Library: Logging
+// Basic logging functions (stubs — wraps println with level prefixes)
+
+module std::logging
+
+import std::core
+
+fn log_info(msg: &str):
+    println("[INFO] " + msg)
+
+fn log_warn(msg: &str):
+    println("[WARN] " + msg)
+
+fn log_error(msg: &str):
+    println("[ERROR] " + msg)
+
+fn log_debug(msg: &str):
+    println("[DEBUG] " + msg)

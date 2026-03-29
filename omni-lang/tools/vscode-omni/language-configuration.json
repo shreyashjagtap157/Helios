@@ -1,0 +1,108 @@
+{
+    "comments": {
+        "lineComment": "//",
+        "blockComment": [
+            "/*",
+            "*/"
+        ]
+    },
+    "brackets": [
+        [
+            "{",
+            "}"
+        ],
+        [
+            "[",
+            "]"
+        ],
+        [
+            "(",
+            ")"
+        ]
+    ],
+    "autoClosingPairs": [
+        {
+            "open": "{",
+            "close": "}"
+        },
+        {
+            "open": "[",
+            "close": "]"
+        },
+        {
+            "open": "(",
+            "close": ")"
+        },
+        {
+            "open": "\"",
+            "close": "\"",
+            "notIn": [
+                "string"
+            ]
+        },
+        {
+            "open": "'",
+            "close": "'",
+            "notIn": [
+                "string",
+                "comment"
+            ]
+        },
+        {
+            "open": "/*",
+            "close": " */",
+            "notIn": [
+                "string"
+            ]
+        }
+    ],
+    "surroundingPairs": [
+        [
+            "{",
+            "}"
+        ],
+        [
+            "[",
+            "]"
+        ],
+        [
+            "(",
+            ")"
+        ],
+        [
+            "\"",
+            "\""
+        ],
+        [
+            "'",
+            "'"
+        ]
+    ],
+    "folding": {
+        "offSide": false,
+        "markers": {
+            "start": "^\\s*//\\s*#?region\\b|\\{\\s*$",
+            "end": "^\\s*//\\s*#?endregion\\b|^\\s*\\}"
+        }
+    },
+    "indentationRules": {
+        "increaseIndentPattern": "(\\{[^}]*$|\\b(fn|struct|enum|trait|impl|if|elif|else|for|while|match|try|catch|finally|module)\\b.*:\\s*$)",
+        "decreaseIndentPattern": "^\\s*(\\}|\\)|\\]|elif|else|catch|finally)"
+    },
+    "onEnterRules": [
+        {
+            "beforeText": "^\\s*(fn|struct|enum|trait|impl|if|elif|else|for|while|match|try|catch|finally)\\b.*:\\s*$",
+            "action": {
+                "indent": "indent"
+            }
+        },
+        {
+            "beforeText": "\\{\\s*$",
+            "afterText": "^\\s*\\}",
+            "action": {
+                "indent": "indent"
+            }
+        }
+    ],
+    "wordPattern": "[a-zA-Z_][a-zA-Z0-9_]*"
+}

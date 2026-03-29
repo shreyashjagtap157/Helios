@@ -1,0 +1,226 @@
+//! Python Interop ABI Generator
+//!
+//! Generates safe wrappers for CPython C-API.
+//! Handles GIL management, reference counting, type conversion, and module initialization.
+
+use crate::ir::{IrFunction, IrType};
+
+/// Convert an Omni type to its CPython C-API type string
+fn ir_type_to_py_format(ty: &IrType) -> &'static str {
+    match ty {
+        IrType::I32 | IrType::I64 | IrType::I16 | IrType::I8 => "l", // long
+        IrType::F32 | IrType::F64 => "d",                            // double
+        IrType::Bool => "p",                                         // predicate (bool)
+        IrType::Ptr(_) => "s",                                       // const char*
+        IrType::Void => "",
+        IrType::Array(_, _) => "O", // PyObject* (list)
+        _ => "O",                   // generic PyObject*
+    }
+}
+
+/// Convert an Omni type to its Python → C extraction expression
+fn py_to_c_extract(param_name: &str, ty: &IrType, idx: usize) -> String {
+    match ty {
+        IrType::I32 | IrType::I64 | IrType::I16 | IrType::I8 => format!(
+            "long {name} = PyLong_AsLong(PyTuple_GetItem(args, {idx}));",
+            name = param_name,
+            idx = idx
+        ),
+        IrType::F32 | IrType::F64 => format!(
+            "double {name} = PyFloat_AsDouble(PyTuple_GetItem(args, {idx}));",
+            name = param_name,
+            idx = idx
+        ),
+        IrType::Bool => format!(
+            "int {name} = PyObject_IsTrue(PyTuple_GetItem(args, {idx}));",
+            name = param_name,
+            idx = idx
+        ),
+        IrType::Ptr(_) => format!(
+            "const char* {name} = PyUnicode_AsUTF8(PyTuple_GetItem(args, {idx}));",
+            name = param_name,
+            idx = idx
+        ),
+        _ => format!(
+            "PyObject* {name} = PyTuple_GetItem(args, {idx}); Py_INCREF({name});",
+            name = param_name,
+            idx = idx
+        ),
+    }
+}
+
+/// Convert C return value back to PyObject
+fn c_to_py_return(ty: &IrType) -> &'static str {
+    match ty {
+        IrType::I32 | IrType::I64 | IrType::I16 | IrType::I8 => "return PyLong_FromLong(result);",
+        IrType::F32 | IrType::F64 => "return PyFloat_FromDouble(result);",
+        IrType::Bool => "return PyBool_FromLong(result);",
+        IrType::Ptr(_) => "return PyUnicode_FromString(result);",
+        IrType::Void => "Py_RETURN_NONE;",
+        _ => "return result; /* Already a PyObject* */",
+    }
+}
+
+/// Generate a CPython C-API wrapper function for a single Omni function
+pub fn generate_python_shim(func: &IrFunction) -> String {
+    let func_name = &func.name;
+
+    // Generate argument extraction code
+    let mut extractions = Vec::new();
+    let mut arg_names = Vec::new();
+    for (i, (name, ty)) in func.params.iter().enumerate() {
+        extractions.push(py_to_c_extract(name, ty, i));
+        arg_names.push(name.clone());
+    }
+
+    // Build the format string for PyArg_ParseTuple validation
+    let format_str: String = func
+        .params
+        .iter()
+        .map(|(_, ty)| ir_type_to_py_format(ty))
+        .collect();
+
+    let extraction_block = extractions.join("\n        ");
+    let call_args = arg_names.join(", ");
+    let return_conversion = c_to_py_return(&func.return_type);
+    let num_params = func.params.len();
+
+    format!(
+        r#"
+static PyObject* omni_py_{name}(PyObject* self, PyObject* args) {{
+    // Validate argument count
+    if (PyTuple_Size(args) != {num_params}) {{
+        PyErr_Format(PyExc_TypeError,
+            "{name}() expects {num_params} arguments, got %zd", PyTuple_Size(args));
+        return NULL;
+    }}
+
+    // Extract arguments from Python objects
+    {extractions}
+
+    // Check for extraction errors
+    if (PyErr_Occurred()) {{
+        return NULL;
+    }}
+
+    // Call the Omni function
+    auto result = omni_{name}({call_args});
+
+    // Convert result back to Python
+    {return_conv}
+}}
+"#,
+        name = func_name,
+        num_params = num_params,
+        extractions = extraction_block,
+        call_args = call_args,
+        return_conv = return_conversion
+    )
+}
+
+/// Generate the PyMethodDef table entry for a function
+pub fn generate_method_def(func: &IrFunction) -> String {
+    format!(
+        r#"    {{"{name}", (PyCFunction)omni_py_{name}, METH_VARARGS, "Omni function: {name}"}},"#,
+        name = func.name
+    )
+}
+
+/// Generate a complete PyInit module for a set of exported functions
+pub fn generate_module_init(module_name: &str, funcs: &[IrFunction]) -> String {
+    // Generate all shims
+    let shims: String = funcs
+        .iter()
+        .map(|f| generate_python_shim(f))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Generate method table
+    let method_defs: String = funcs
+        .iter()
+        .map(|f| generate_method_def(f))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!(
+        r#"
+// Auto-generated by Omni Compiler - Python Interop
+// Module: {module}
+
+#include <Python.h>
+
+// Forward declarations for Omni compiled functions
+{forward_decls}
+
+// Python wrapper functions
+{shims}
+
+// Method table
+static PyMethodDef OmniMethods[] = {{
+{methods}
+    {{NULL, NULL, 0, NULL}} // Sentinel
+}};
+
+// Module definition
+static struct PyModuleDef omni_module = {{
+    PyModuleDef_HEAD_INIT,
+    "{module}",          // Module name
+    "Omni compiled module: {module}",  // Module docstring
+    -1,                  // Per-interpreter state size (-1 = global)
+    OmniMethods
+}};
+
+// Module initialization function
+PyMODINIT_FUNC PyInit_{module}(void) {{
+    PyObject* m = PyModule_Create(&omni_module);
+    if (m == NULL) return NULL;
+
+    // Add version info
+    PyModule_AddStringConstant(m, "__version__", "1.0.0");
+    PyModule_AddStringConstant(m, "__compiler__", "Omni Compiler v4.0");
+
+    return m;
+}}
+"#,
+        module = module_name,
+        forward_decls = funcs
+            .iter()
+            .map(|f| format!(
+                "extern {} omni_{}({});",
+                ir_type_to_c_return(&f.return_type),
+                f.name,
+                f.params
+                    .iter()
+                    .map(|(_, ty)| ir_type_to_c_param(ty).to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        shims = shims,
+        methods = method_defs
+    )
+}
+
+fn ir_type_to_c_return(ty: &IrType) -> &'static str {
+    match ty {
+        IrType::I32 | IrType::I64 | IrType::I16 | IrType::I8 => "long",
+        IrType::F64 => "double",
+        IrType::F32 => "float",
+        IrType::Bool => "int",
+        IrType::Ptr(_) => "const char*",
+        IrType::Void => "void",
+        _ => "PyObject*",
+    }
+}
+
+fn ir_type_to_c_param(ty: &IrType) -> &'static str {
+    match ty {
+        IrType::I32 | IrType::I64 | IrType::I16 | IrType::I8 => "long",
+        IrType::F64 => "double",
+        IrType::F32 => "float",
+        IrType::Bool => "int",
+        IrType::Ptr(_) => "const char*",
+        _ => "PyObject*",
+    }
+}

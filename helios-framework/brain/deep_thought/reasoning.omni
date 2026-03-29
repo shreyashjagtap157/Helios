@@ -1,0 +1,563 @@
+# HELIOS Deep Thought Module
+# Extended reasoning for complex problems requiring multi-step analysis
+# Implements deliberate, slow thinking (System 2)
+
+module brain::deep_thought
+
+import core::logging as log
+import core::collections::{Vec, HashMap, HashSet}
+import brain::reasoning_engine as re
+import brain::knowledge_graph as kg
+import brain::memory_architecture as mem
+
+# ============================================================================
+# DEEP THINKING ENGINE
+# ============================================================================
+
+# Handles complex problems that require extended reasoning time
+struct DeepThinkingEngine:
+    # Reasoning components
+    reasoning_engine: re::ReasoningEngine
+    knowledge_graph: kg::KnowledgeGraph
+    memory: mem::MemorySystem
+    
+    # Thinking state
+    current_problem: Option<Problem>
+    thinking_steps: Vec<ThinkingStep>
+    hypotheses: Vec<Hypothesis>
+    conclusions: Vec<Conclusion>
+    
+    # Configuration
+    max_thinking_depth: usize
+    max_hypotheses: usize
+    confidence_threshold: f64
+    
+    fn new(
+        reasoning_engine: re::ReasoningEngine,
+        knowledge_graph: kg::KnowledgeGraph,
+        memory: mem::MemorySystem
+    ) -> own DeepThinkingEngine:
+        return DeepThinkingEngine {
+            reasoning_engine,
+            knowledge_graph,
+            memory,
+            current_problem: None,
+            thinking_steps: Vec::new(),
+            hypotheses: Vec::new(),
+            conclusions: Vec::new(),
+            max_thinking_depth: 10,
+            max_hypotheses: 20,
+            confidence_threshold: 0.7
+        }
+    
+    # Begin deep analysis of a problem
+    fn analyze(&mut self, problem: Problem) -> AnalysisResult:
+        log::info("Beginning deep analysis: {}", problem.summary())
+        self.current_problem = Some(problem.clone())
+        self.thinking_steps.clear()
+        self.hypotheses.clear()
+        self.conclusions.clear()
+        
+        # Step 1: Decompose the problem
+        let subproblems = self.decompose(&problem)
+        self.record_step(ThinkingStep::Decomposition(subproblems.clone()))
+        
+        # Step 2: Gather relevant knowledge
+        let relevant_knowledge = self.gather_knowledge(&problem, &subproblems)
+        self.record_step(ThinkingStep::KnowledgeGathering(relevant_knowledge.len()))
+        
+        # Step 3: Generate initial hypotheses
+        self.generate_hypotheses(&problem, &relevant_knowledge)
+        self.record_step(ThinkingStep::HypothesisGeneration(self.hypotheses.len()))
+        
+        # Step 4: Evaluate hypotheses through reasoning chains
+        let evaluated = self.evaluate_hypotheses()
+        self.record_step(ThinkingStep::HypothesisEvaluation(evaluated))
+        
+        # Step 5: Synthesize conclusions
+        let result = self.synthesize_conclusion()
+        self.record_step(ThinkingStep::Synthesis)
+        
+        log::info("Deep analysis complete: {} steps, {} conclusions",
+            self.thinking_steps.len(), self.conclusions.len())
+        
+        return result
+    
+    # Break down complex problem into subproblems
+    fn decompose(&self, problem: &Problem) -> Vec<Subproblem>:
+        let mut subproblems = Vec::new()
+        
+        # Identify key components of the problem
+        let components = self.identify_components(problem)
+        
+        for component in components:
+            # Check if we can solve this directly
+            if self.can_solve_directly(&component):
+                subproblems.push(Subproblem {
+                    id: subproblems.len(),
+                    description: component,
+                    complexity: Complexity::Simple,
+                    dependencies: Vec::new()
+                })
+            else:
+                # Further decompose
+                let sub_components = self.identify_components(&Problem::from_text(&component))
+                for sc in sub_components:
+                    subproblems.push(Subproblem {
+                        id: subproblems.len(),
+                        description: sc,
+                        complexity: Complexity::Moderate,
+                        dependencies: Vec::new()
+                    })
+        
+        # Identify dependencies between subproblems
+        self.identify_dependencies(&mut subproblems)
+        
+        return subproblems
+    
+    fn identify_components(&self, problem: &Problem) -> Vec<String>:
+        let mut components = Vec::new()
+        
+        # Extract key questions/aspects
+        for sentence in problem.text.split("."):
+            let trimmed = sentence.trim()
+            if trimmed.contains("?") || trimmed.contains("how") || 
+               trimmed.contains("what") || trimmed.contains("why"):
+                components.push(trimmed.to_string())
+        
+        # If no clear questions, treat as single component
+        if components.is_empty():
+            components.push(problem.text.clone())
+        
+        return components
+    
+    fn can_solve_directly(&self, component: &str) -> bool:
+        # Check if we have direct knowledge or simple inference path
+        let query = kg::Query::semantic(component)
+        let results = self.knowledge_graph.search(&query)
+        
+        return results.len() > 0 && results[0].confidence > self.confidence_threshold
+    
+    fn identify_dependencies(&self, subproblems: &mut Vec<Subproblem>):
+        # Identify which subproblems depend on others
+        for i in 0..subproblems.len():
+            for j in 0..subproblems.len():
+                if i != j:
+                    if self.depends_on(&subproblems[i], &subproblems[j]):
+                        subproblems[i].dependencies.push(j)
+    
+    fn depends_on(&self, a: &Subproblem, b: &Subproblem) -> bool:
+        # Check if solving a requires solving b first
+        # Simple heuristic: check for shared concepts
+        let a_concepts = self.extract_concepts(&a.description)
+        let b_concepts = self.extract_concepts(&b.description)
+        
+        let shared: Vec<_> = a_concepts.iter()
+            .filter(|c| b_concepts.contains(c))
+            .collect()
+        
+        return shared.len() > 0
+    
+    fn extract_concepts(&self, text: &str) -> Vec<String>:
+        # Extract key concepts/entities from text
+        let words: Vec<&str> = text.split_whitespace().collect()
+        words.iter()
+            .filter(|w| w.len() > 4)  # Simple filter for meaningful words
+            .map(|w| w.to_lowercase())
+            .collect()
+    
+    # Gather relevant knowledge for the problem
+    fn gather_knowledge(&self, problem: &Problem, subproblems: &[Subproblem]) -> Vec<kg::KnowledgeNode>:
+        let mut all_knowledge = Vec::new()
+        let mut seen_ids = HashSet::new()
+        
+        # Query for main problem
+        let main_results = self.knowledge_graph.semantic_search(&problem.text, 20)
+        for node in main_results:
+            if !seen_ids.contains(&node.id):
+                seen_ids.insert(node.id)
+                all_knowledge.push(node)
+        
+        # Query for each subproblem
+        for sp in subproblems:
+            let results = self.knowledge_graph.semantic_search(&sp.description, 10)
+            for node in results:
+                if !seen_ids.contains(&node.id):
+                    seen_ids.insert(node.id)
+                    all_knowledge.push(node)
+        
+        # Also retrieve from episodic memory
+        let memory_results = self.memory.recall_relevant(&problem.text, 10)
+        for mem_item in memory_results:
+            # Convert memory to knowledge node format
+            let node = kg::KnowledgeNode::from_memory(&mem_item)
+            if !seen_ids.contains(&node.id):
+                seen_ids.insert(node.id)
+                all_knowledge.push(node)
+        
+        return all_knowledge
+    
+    # Generate hypotheses based on problem and knowledge
+    fn generate_hypotheses(&mut self, problem: &Problem, knowledge: &[kg::KnowledgeNode]):
+        # Use different hypothesis generation strategies
+        
+        # Strategy 1: Direct inference from knowledge
+        for node in knowledge:
+            if let Some(hypothesis) = self.infer_hypothesis_from_knowledge(problem, node):
+                self.add_hypothesis(hypothesis)
+        
+        # Strategy 2: Analogical reasoning
+        let analogies = self.find_analogies(problem, knowledge)
+        for analogy in analogies:
+            if let Some(hypothesis) = self.generate_from_analogy(&analogy):
+                self.add_hypothesis(hypothesis)
+        
+        # Strategy 3: Abductive reasoning (inference to best explanation)
+        let explanatory = self.abductive_hypotheses(problem, knowledge)
+        for hypothesis in explanatory:
+            self.add_hypothesis(hypothesis)
+        
+        # Limit hypotheses
+        if self.hypotheses.len() > self.max_hypotheses:
+            self.hypotheses.sort_by(|a, b| 
+                b.initial_plausibility.partial_cmp(&a.initial_plausibility)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            )
+            self.hypotheses.truncate(self.max_hypotheses)
+    
+    fn add_hypothesis(&mut self, hypothesis: Hypothesis):
+        # Check for duplicates
+        let dominated = self.hypotheses.iter().any(|h| h.subsumes(&hypothesis))
+        if !dominated:
+            self.hypotheses.push(hypothesis)
+    
+    fn infer_hypothesis_from_knowledge(&self, problem: &Problem, node: &kg::KnowledgeNode) -> Option<Hypothesis>:
+        # Check if node directly supports an answer
+        let relevance = self.compute_relevance(problem, node)
+        if relevance > 0.5:
+            return Some(Hypothesis {
+                id: self.hypotheses.len(),
+                statement: format!("Based on {}: {}", node.name, node.get_summary()),
+                source: HypothesisSource::DirectKnowledge(node.id),
+                initial_plausibility: relevance,
+                supporting_evidence: vec![node.id],
+                contradicting_evidence: Vec::new(),
+                evaluated_confidence: None
+            })
+        return None
+    
+    fn compute_relevance(&self, problem: &Problem, node: &kg::KnowledgeNode) -> f64:
+        // Compute semantic relevance between problem and knowledge node
+        let problem_concepts = self.extract_concepts(&problem.text)
+        let node_concepts = self.extract_concepts(&node.name)
+        
+        let intersection = problem_concepts.iter()
+            .filter(|c| node_concepts.contains(c))
+            .count()
+        let union = problem_concepts.len() + node_concepts.len() - intersection
+        
+        if union == 0:
+            return 0.0
+        return intersection as f64 / union as f64
+    
+    fn find_analogies(&self, problem: &Problem, knowledge: &[kg::KnowledgeNode]) -> Vec<Analogy>:
+        // Find structurally similar problems we've solved before
+        let mut analogies = Vec::new()
+        let problem_concepts = self.extract_concepts(&problem.text)
+        
+        for node in knowledge:
+            // Check if this knowledge node describes a previously solved problem
+            let node_concepts = self.extract_concepts(&node.name)
+            
+            // Build a concept mapping between source and target domains
+            let mut mapping = HashMap::new()
+            let mut shared_count = 0
+            
+            for pc in &problem_concepts:
+                for nc in &node_concepts:
+                    // Simple string similarity: shared prefix or substring
+                    if pc == nc:
+                        mapping.insert(pc.clone(), nc.clone())
+                        shared_count += 1
+                    elif pc.len() > 3 && nc.len() > 3:
+                        // Check for partial overlap (common prefix >= 4 chars)
+                        let common_len = pc.chars().zip(nc.chars())
+                            .take_while(|(a, b)| a == b).count()
+                        if common_len >= 4:
+                            mapping.insert(pc.clone(), nc.clone())
+                            shared_count += 1
+            
+            // Calculate structural similarity based on concept overlap
+            let total_concepts = problem_concepts.len() + node_concepts.len()
+            if total_concepts > 0 && shared_count > 0:
+                let similarity = (2.0 * shared_count as f64) / total_concepts as f64
+                
+                if similarity > 0.2:  // Minimum threshold for useful analogy
+                    analogies.push(Analogy {
+                        source_problem: Problem::from_text(&node.name),
+                        mapping,
+                        structural_similarity: similarity
+                    })
+        
+        // Sort by similarity (highest first)
+        analogies.sort_by(|a, b| b.structural_similarity.partial_cmp(&a.structural_similarity).unwrap_or(std::cmp::Ordering::Equal))
+        
+        // Return top-5 analogies
+        analogies.truncate(5)
+        analogies
+    
+    fn generate_from_analogy(&self, analogy: &Analogy) -> Option<Hypothesis>:
+        // Transfer solution structure from source to target using the mapping
+        if analogy.structural_similarity < 0.1:
+            return None
+        
+        // Build hypothesis statement by mapping source concepts to target domain
+        let mut hypothesis_parts = Vec::new()
+        for (target_concept, source_concept) in &analogy.mapping:
+            hypothesis_parts.push(format!("{} relates to {} (by analogy with {})",
+                target_concept, source_concept, analogy.source_problem.summary()))
+        
+        if hypothesis_parts.is_empty():
+            return None
+        
+        let statement = format!("By analogy with '{}': {}",
+            analogy.source_problem.summary(),
+            hypothesis_parts.join("; "))
+        
+        Some(Hypothesis {
+            id: 0,  // Will be assigned by caller
+            statement,
+            source: HypothesisSource::Analogy(0),
+            initial_plausibility: analogy.structural_similarity * 0.7,
+            supporting_evidence: Vec::new(),
+            contradicting_evidence: Vec::new(),
+            evaluated_confidence: None
+        })
+    
+    fn abductive_hypotheses(&self, problem: &Problem, knowledge: &[kg::KnowledgeNode]) -> Vec<Hypothesis>:
+        // Abductive reasoning: inference to the best explanation
+        // Given observations (problem), generate hypotheses that would explain them
+        let mut hypotheses = Vec::new()
+        let problem_concepts = self.extract_concepts(&problem.text)
+        
+        // Strategy: for each concept in the problem, find knowledge that
+        // could serve as an explanation (cause → effect reasoning)
+        let mut hypothesis_id = 0
+        
+        for concept in &problem_concepts:
+            let mut explanations = Vec::new()
+            
+            for node in knowledge:
+                let relevance = self.compute_relevance(problem, node)
+                if relevance > 0.3:
+                    explanations.push((node, relevance))
+            
+            // Sort explanations by relevance
+            explanations.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal))
+            
+            // Generate hypotheses from top explanations
+            for (node, relevance) in explanations.iter().take(3):
+                let statement = format!(
+                    "The concept '{}' in the problem can be explained by: {}",
+                    concept, node.name
+                )
+                
+                hypotheses.push(Hypothesis {
+                    id: hypothesis_id,
+                    statement,
+                    source: HypothesisSource::Abduction,
+                    initial_plausibility: relevance * 0.6,
+                    supporting_evidence: Vec::new(),
+                    contradicting_evidence: Vec::new(),
+                    evaluated_confidence: None
+                })
+                hypothesis_id += 1
+        
+        // Deduplicate: remove hypotheses that are subsumed by others
+        let mut unique = Vec::new()
+        for h in &hypotheses:
+            let is_subsumed = hypotheses.iter().any(|other| 
+                other.id != h.id && other.subsumes(h) && other.initial_plausibility >= h.initial_plausibility
+            )
+            if !is_subsumed:
+                unique.push(h.clone())
+        
+        unique
+    
+    # Evaluate hypotheses through reasoning
+    fn evaluate_hypotheses(&mut self) -> usize:
+        let mut evaluated_count = 0
+        
+        for hypothesis in &mut self.hypotheses:
+            // Run reasoning chains to evaluate
+            let confidence = self.evaluate_single_hypothesis(hypothesis)
+            hypothesis.evaluated_confidence = Some(confidence)
+            evaluated_count += 1
+        
+        // Sort by evaluated confidence
+        self.hypotheses.sort_by(|a, b| {
+            let a_conf = a.evaluated_confidence.unwrap_or(0.0)
+            let b_conf = b.evaluated_confidence.unwrap_or(0.0)
+            b_conf.partial_cmp(&a_conf).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        
+        return evaluated_count
+    
+    fn evaluate_single_hypothesis(&self, hypothesis: &Hypothesis) -> f64:
+        // Check logical consistency
+        let consistency = self.reasoning_engine.check_consistency(&hypothesis.statement)
+        
+        // Check evidence support
+        let support = hypothesis.supporting_evidence.len() as f64
+        let contradiction = hypothesis.contradicting_evidence.len() as f64
+        let evidence_ratio = if support + contradiction > 0.0:
+            support / (support + contradiction)
+        else:
+            0.5
+        
+        // Combine factors
+        let combined = hypothesis.initial_plausibility * 0.3 +
+                       consistency * 0.4 +
+                       evidence_ratio * 0.3
+        
+        return combined
+    
+    # Synthesize final conclusion
+    fn synthesize_conclusion(&mut self) -> AnalysisResult:
+        let best_hypotheses: Vec<_> = self.hypotheses.iter()
+            .filter(|h| h.evaluated_confidence.unwrap_or(0.0) > self.confidence_threshold)
+            .take(3)
+            .collect()
+        
+        if best_hypotheses.is_empty():
+            return AnalysisResult {
+                success: false,
+                answer: None,
+                confidence: 0.0,
+                reasoning_trace: self.thinking_steps.clone(),
+                alternative_answers: Vec::new()
+            }
+        
+        let best = &best_hypotheses[0]
+        let confidence = best.evaluated_confidence.unwrap_or(0.0)
+        
+        let conclusion = Conclusion {
+            statement: best.statement.clone(),
+            confidence,
+            supporting_hypotheses: vec![best.id],
+            reasoning_summary: self.summarize_reasoning()
+        }
+        self.conclusions.push(conclusion.clone())
+        
+        let alternatives: Vec<_> = best_hypotheses.iter()
+            .skip(1)
+            .map(|h| (h.statement.clone(), h.evaluated_confidence.unwrap_or(0.0)))
+            .collect()
+        
+        return AnalysisResult {
+            success: true,
+            answer: Some(conclusion.statement),
+            confidence,
+            reasoning_trace: self.thinking_steps.clone(),
+            alternative_answers: alternatives
+        }
+    
+    fn summarize_reasoning(&self) -> String:
+        let mut summary = String::new()
+        for (i, step) in self.thinking_steps.iter().enumerate():
+            summary.push_str(&format!("{}. {}\n", i + 1, step.description()))
+        return summary
+    
+    fn record_step(&mut self, step: ThinkingStep):
+        self.thinking_steps.push(step)
+
+
+# ============================================================================
+# DATA STRUCTURES
+# ============================================================================
+
+struct Problem:
+    text: String
+    context: Option<String>
+    constraints: Vec<String>
+    
+    fn summary(&self) -> &str:
+        &self.text
+    
+    fn from_text(text: &str) -> own Problem:
+        Problem {
+            text: text.to_string(),
+            context: None,
+            constraints: Vec::new()
+        }
+
+
+struct Subproblem:
+    id: usize
+    description: String
+    complexity: Complexity
+    dependencies: Vec<usize>
+
+
+enum Complexity:
+    Simple
+    Moderate
+    Complex
+
+
+struct Hypothesis:
+    id: usize
+    statement: String
+    source: HypothesisSource
+    initial_plausibility: f64
+    supporting_evidence: Vec<usize>
+    contradicting_evidence: Vec<usize>
+    evaluated_confidence: Option<f64>
+    
+    fn subsumes(&self, other: &Hypothesis) -> bool:
+        // Check if this hypothesis is more general than other
+        self.statement.contains(&other.statement)
+
+
+enum HypothesisSource:
+    DirectKnowledge(id: usize)
+    Analogy(source_problem: usize)
+    Abduction
+    Combination(ids: Vec<usize>)
+
+
+struct Conclusion:
+    statement: String
+    confidence: f64
+    supporting_hypotheses: Vec<usize>
+    reasoning_summary: String
+
+
+struct Analogy:
+    source_problem: Problem
+    mapping: HashMap<String, String>
+    structural_similarity: f64
+
+
+enum ThinkingStep:
+    Decomposition(subproblems: Vec<Subproblem>)
+    KnowledgeGathering(count: usize)
+    HypothesisGeneration(count: usize)
+    HypothesisEvaluation(count: usize)
+    Synthesis
+    
+    fn description(&self) -> String:
+        match self:
+            ThinkingStep::Decomposition(sp) => format!("Decomposed into {} subproblems", sp.len())
+            ThinkingStep::KnowledgeGathering(n) => format!("Gathered {} relevant knowledge items", n)
+            ThinkingStep::HypothesisGeneration(n) => format!("Generated {} hypotheses", n)
+            ThinkingStep::HypothesisEvaluation(n) => format!("Evaluated {} hypotheses", n)
+            ThinkingStep::Synthesis => "Synthesized final conclusion".to_string()
+
+
+struct AnalysisResult:
+    success: bool
+    answer: Option<String>
+    confidence: f64
+    reasoning_trace: Vec<ThinkingStep>
+    alternative_answers: Vec<(String, f64)>

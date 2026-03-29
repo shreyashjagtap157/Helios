@@ -1,0 +1,341 @@
+// HELIOS Framework - Asimov Safety Protocol
+// Three Laws of Robotics implemented as a deterministic safety framework
+
+module safety::asimov
+
+import core::collections::{HashMap, Vec}
+import core::logging as log
+
+// ============================================================================
+// Safety Types
+// ============================================================================
+
+/// Verdict produced by safety checks
+enum SafetyVerdict:
+    /// Action is safe to proceed
+    Allow
+    /// Action is blocked for safety reasons
+    Deny(reason: String)
+    /// Action is allowed but must be modified first
+    Modify(modifications: Vec<String>)
+    /// Action requires human escalation
+    Escalate(reason: String)
+
+/// A proposed action to be safety-checked
+struct ProposedAction:
+    id: u64
+    action_type: String
+    description: String
+    target: String
+    parameters: HashMap<String, String>
+    source: String
+
+/// A response to be checked for deception or bias
+struct Response:
+    content: String
+    claims: Vec<String>
+    sources: Vec<String>
+
+/// A safety rule with priority
+struct SafetyRule:
+    priority: u32
+    name: String
+    description: String
+    condition: String
+    action: String
+
+    fn new(priority: u32, name: String, description: String) -> SafetyRule:
+        return SafetyRule {
+            priority: priority,
+            name: name,
+            description: description,
+            condition: String::new(),
+            action: "deny".to_string()
+        }
+
+/// An event recorded in the audit log
+struct SafetyEvent:
+    timestamp: u64
+    action_id: u64
+    verdict: SafetyVerdict
+    rule_triggered: Option<String>
+    details: String
+
+// ============================================================================
+// Safety Framework
+// ============================================================================
+
+/// The HELIOS safety framework implementing the Three Laws.
+///
+/// Law 1: A system shall not cause harm to a human or allow harm through inaction.
+/// Law 2: A system shall obey commands unless they conflict with Law 1.
+/// Law 3: A system shall preserve itself unless it conflicts with Laws 1 or 2.
+struct SafetyFramework:
+    rules: Vec<SafetyRule>
+    constraints: Vec<String>
+    audit_log: Vec<SafetyEvent>
+    harmful_keywords: Vec<String>
+    pii_patterns: Vec<String>
+    bias_terms: Vec<String>
+
+    fn new() -> SafetyFramework:
+        log::info("Initializing SafetyFramework (Three Laws)")
+        let mut sf = SafetyFramework {
+            rules: Vec::new(),
+            constraints: Vec::new(),
+            audit_log: Vec::new(),
+            harmful_keywords: Vec::new(),
+            pii_patterns: Vec::new(),
+            bias_terms: Vec::new()
+        }
+        sf.init_three_laws()
+        sf.init_content_filters()
+        return sf
+
+    /// Initialize the Five Laws as safety rules
+    fn init_three_laws(&mut self):
+        // Law 1: Do no harm
+        self.rules.push(SafetyRule {
+            priority: 0,
+            name: "LAW_1_NO_HARM".to_string(),
+            description: "Shall not cause harm to humans or allow harm through inaction".to_string(),
+            condition: "action_could_cause_harm".to_string(),
+            action: "deny".to_string()
+        })
+        // Law 2: Obey commands (unless conflicts with Law 1)
+        self.rules.push(SafetyRule {
+            priority: 1,
+            name: "LAW_2_OBEY".to_string(),
+            description: "Shall obey commands unless they conflict with Law 1".to_string(),
+            condition: "is_valid_command".to_string(),
+            action: "allow".to_string()
+        })
+        // Law 3: Self-preservation (unless conflicts with Laws 1 or 2)
+        self.rules.push(SafetyRule {
+            priority: 2,
+            name: "LAW_3_SELF_PRESERVE".to_string(),
+            description: "Shall preserve itself unless conflicts with Laws 1 or 2".to_string(),
+            condition: "threatens_system_integrity".to_string(),
+            action: "escalate".to_string()
+        })
+        // Law 4: Truthfulness — never produce known-false information
+        self.rules.push(SafetyRule {
+            priority: 3,
+            name: "LAW_4_TRUTHFULNESS".to_string(),
+            description: "Shall not generate or relay information known to be false".to_string(),
+            condition: "output_contains_falsehood".to_string(),
+            action: "modify".to_string()
+        })
+        // Law 5: Explainability — decisions must be traceable
+        self.rules.push(SafetyRule {
+            priority: 4,
+            name: "LAW_5_EXPLAINABILITY".to_string(),
+            description: "Shall provide reasoning for decisions when asked".to_string(),
+            condition: "decision_lacks_explanation".to_string(),
+            action: "modify".to_string()
+        })
+
+    /// Initialize content filtering keyword lists
+    fn init_content_filters(&mut self):
+        self.harmful_keywords = vec![
+            "weapon".to_string(), "exploit".to_string(), "attack".to_string(),
+            "hack".to_string(), "destroy".to_string(), "malware".to_string(),
+            "bomb".to_string(), "poison".to_string()
+        ]
+        self.pii_patterns = vec![
+            "SSN".to_string(), "social security".to_string(),
+            "credit card".to_string(), "password".to_string(),
+            "private key".to_string(), "bank account".to_string()
+        ]
+        self.bias_terms = vec![
+            "always".to_string(), "never".to_string(), "all".to_string(),
+            "none".to_string(), "every".to_string()
+        ]
+
+    /// Check a proposed action against all safety rules
+    fn check_action(&mut self, action: &ProposedAction) -> SafetyVerdict:
+        log::debug("Safety check: {} ({})", action.action_type, action.description)
+
+        // Law 1: Check for potential harm
+        if self.is_harmful(action):
+            let event = SafetyEvent {
+                timestamp: time::now_ms(),
+                action_id: action.id,
+                verdict: SafetyVerdict::Deny("Potential harm detected".to_string()),
+                rule_triggered: Some("LAW_1_NO_HARM".to_string()),
+                details: format("Blocked: {}", action.description)
+            }
+            self.audit_log.push(event)
+            return SafetyVerdict::Deny("Action could cause harm (Law 1)".to_string())
+
+        // Law 3: Check for system-critical targets
+        if action.target.starts_with("/system") || action.target.starts_with("C:\\Windows"):
+            self.log_audit(SafetyEvent {
+                timestamp: time::now_ms(),
+                action_id: action.id,
+                verdict: SafetyVerdict::Escalate("System file access".to_string()),
+                rule_triggered: Some("LAW_3_SELF_PRESERVE".to_string()),
+                details: format("System path: {}", action.target)
+            })
+            return SafetyVerdict::Escalate(
+                "System file modification requires approval".to_string())
+
+        // Check for PII in parameters
+        for (_, value) in &action.parameters:
+            if self.contains_pii(value):
+                return SafetyVerdict::Modify(vec![
+                    "Redact PII before proceeding".to_string()
+                ])
+
+        // Default: allow
+        self.log_audit(SafetyEvent {
+            timestamp: time::now_ms(),
+            action_id: action.id,
+            verdict: SafetyVerdict::Allow,
+            rule_triggered: None,
+            details: "Passed all safety checks".to_string()
+        })
+        return SafetyVerdict::Allow
+
+    /// Determine if an action could cause harm
+    fn is_harmful(&self, action: &ProposedAction) -> bool:
+        let desc_lower = action.description.to_lowercase()
+        for keyword in &self.harmful_keywords:
+            if desc_lower.contains(keyword):
+                return true
+
+        // Check for dangerous action types
+        let dangerous = ["delete_all", "format_disk", "shutdown_critical", "execute_remote"]
+        for dt in &dangerous:
+            if action.action_type == *dt:
+                return true
+
+        return false
+
+    /// Check if a response contains deceptive content
+    fn is_deceptive(&self, response: &Response) -> bool:
+        // Unsourced claims are considered potentially deceptive
+        if response.claims.len() > 0 && response.sources.is_empty():
+            return true
+
+        // Check for absolutist language
+        let content_lower = response.content.to_lowercase()
+        let deceptive_phrases = [
+            "guaranteed", "100%", "impossible to fail", "absolutely certain"
+        ]
+        for phrase in &deceptive_phrases:
+            if content_lower.contains(phrase):
+                return true
+
+        return false
+
+    /// Detect personally identifiable information in text
+    fn contains_pii(&self, text: &str) -> bool:
+        let text_lower = text.to_lowercase()
+        // Keyword-based PII check
+        for pattern in &self.pii_patterns:
+            if text_lower.contains(&pattern.to_lowercase()):
+                return true
+        // Email pattern: word@word.word
+        if text.contains("@") && text.contains("."):
+            return true
+        // SSN pattern: 3 digits, dash, 2 digits, dash, 4 digits
+        if self.matches_ssn_pattern(text):
+            return true
+        // Credit card pattern: 4 groups of 4 digits
+        if self.matches_cc_pattern(text):
+            return true
+        // Phone number pattern: 10+ consecutive digits (with optional dashes/spaces)
+        if self.matches_phone_pattern(text):
+            return true
+        return false
+
+    /// Check for SSN-like patterns (###-##-####)
+    fn matches_ssn_pattern(&self, text: &str) -> bool:
+        let chars: Vec<char> = text.chars().collect()
+        let n = chars.len()
+        let mut i = 0
+        while i + 10 < n:
+            if chars[i].is_ascii_digit() && chars[i+1].is_ascii_digit()
+               && chars[i+2].is_ascii_digit() && chars[i+3] == '-'
+               && chars[i+4].is_ascii_digit() && chars[i+5].is_ascii_digit()
+               && chars[i+6] == '-'
+               && chars[i+7].is_ascii_digit() && chars[i+8].is_ascii_digit()
+               && chars[i+9].is_ascii_digit() && chars[i+10].is_ascii_digit():
+                return true
+            i += 1
+        return false
+
+    /// Check for credit-card-like patterns (#### #### #### ####)
+    fn matches_cc_pattern(&self, text: &str) -> bool:
+        // Strip spaces and dashes, check for 16 consecutive digits
+        let digits: String = text.chars()
+            .filter(|c| c.is_ascii_digit())
+            .collect()
+        // 16 consecutive digits is suspicious
+        if digits.len() >= 16:
+            // Luhn algorithm check for first 16 digits
+            let card: Vec<u32> = digits[..16].chars()
+                .map(|c| c.to_digit(10).unwrap())
+                .collect()
+            let mut sum: u32 = 0
+            for (idx, &d) in card.iter().rev().enumerate():
+                if idx % 2 == 1:
+                    let doubled = d * 2
+                    sum += if doubled > 9: doubled - 9 else: doubled
+                else:
+                    sum += d
+            if sum % 10 == 0:
+                return true
+        return false
+
+    /// Check for phone-number-like patterns (10+ digits)
+    fn matches_phone_pattern(&self, text: &str) -> bool:
+        let digits: String = text.chars()
+            .filter(|c| c.is_ascii_digit())
+            .collect()
+        return digits.len() >= 10 && digits.len() <= 15
+
+    /// Check a response against Law 4 (truthfulness)
+    fn check_truthfulness(&self, response: &Response) -> SafetyVerdict:
+        // Check for deceptive content first
+        if self.is_deceptive(response):
+            return SafetyVerdict::Modify(vec![
+                "Add source citations to claims".to_string(),
+                "Remove absolutist language".to_string()
+            ])
+        // Check for bias
+        let bias_issues = self.check_bias(&response.content)
+        if !bias_issues.is_empty():
+            return SafetyVerdict::Modify(bias_issues)
+        return SafetyVerdict::Allow
+
+    /// Check text for potentially biased language
+    fn check_bias(&self, text: &str) -> Vec<String>:
+        let mut issues: Vec<String> = Vec::new()
+        let text_lower = text.to_lowercase()
+        for term in &self.bias_terms:
+            if text_lower.contains(term):
+                issues.push(format("Potentially biased language: '{}'", term))
+        return issues
+
+    /// Record a safety event to the audit log
+    fn log_audit(&mut self, event: SafetyEvent):
+        log::info("Safety audit: action #{} — {:?}", event.action_id, event.verdict)
+        self.audit_log.push(event)
+
+    /// Retrieve the most recent audit events
+    fn get_audit_log(&self, count: usize) -> Vec<&SafetyEvent>:
+        return self.audit_log.iter().rev().take(count).collect()
+
+    /// Count how many actions have been blocked
+    fn blocked_count(&self) -> usize:
+        return self.audit_log.iter()
+            .filter(|e| matches!(e.verdict, SafetyVerdict::Deny(_)))
+            .count()
+
+    /// Add a custom safety rule (sorted by priority)
+    fn add_rule(&mut self, rule: SafetyRule):
+        log::info("Adding safety rule: {} (priority {})", rule.name, rule.priority)
+        self.rules.push(rule)
+        self.rules.sort_by_key(|r| r.priority)

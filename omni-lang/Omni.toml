@@ -1,0 +1,14 @@
+[package]
+name = "omni-lang"
+version = "2.0.0"
+authors = ["HELIOS Project"]
+mode = "hosted"
+abi_version = "1.0.0"
+ir_version = "1.0.0"
+
+[dependencies]
+std = { version = "2.0.0", features = ["async", "tensor", "gpu"] }
+
+[build]
+target = "x86_64-pc-windows-msvc"
+optimization = 2

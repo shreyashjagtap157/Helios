@@ -1,0 +1,121 @@
+// Tutorial 05: Async & Concurrency
+// Demonstrates threads, channels, mutexes, and async/await in Omni.
+
+module tutorials::async_concurrency
+
+import std::thread
+import std::thread::{Mutex, Channel, Arc}
+import std::async::{spawn_task, block_on}
+
+// ============================================
+// Threads
+// ============================================
+
+fn thread_demo():
+    println("[Threads]")
+
+    let handle = thread::spawn(|| {
+        for i in 0..3:
+            println("  Worker thread: {}", i)
+            thread::sleep(50)
+    })
+
+    for i in 0..3:
+        println("  Main thread: {}", i)
+        thread::sleep(50)
+
+    handle.join().unwrap()
+    println("  Both threads finished.")
+
+// ============================================
+// Channels (message passing)
+// ============================================
+
+fn channel_demo():
+    println("[Channels]")
+
+    let (tx, rx) = Channel::new()
+
+    // Producer thread
+    thread::spawn(|| {
+        let messages = ["hello", "from", "another", "thread"]
+        for msg in messages:
+            tx.send(msg.to_string())
+            thread::sleep(20)
+        tx.close()
+    })
+
+    // Consumer (main thread)
+    while let Some(msg) = rx.recv():
+        println("  Received: {}", msg)
+
+// ============================================
+// Mutex (shared state)
+// ============================================
+
+fn mutex_demo():
+    println("[Mutex]")
+
+    let counter = Arc::new(Mutex::new(0))
+    let mut handles = Vec::new()
+
+    for i in 0..5:
+        let counter = counter.clone()
+        let h = thread::spawn(|| {
+            let mut guard = counter.lock()
+            *guard += 1
+        })
+        handles.push(h)
+
+    for h in handles:
+        h.join().unwrap()
+
+    println("  Final counter: {}", *counter.lock())
+
+// ============================================
+// Async / Await
+// ============================================
+
+async fn compute(id: u32) -> u32:
+    println("  Task {} starting", id)
+    thread::sleep(100)
+    println("  Task {} done", id)
+    return id * 10
+
+async fn run_async():
+    println("[Async/Await]")
+
+    // Spawn concurrent tasks
+    let task1 = spawn_task(compute(1))
+    let task2 = spawn_task(compute(2))
+    let task3 = spawn_task(compute(3))
+
+    // Await results
+    let r1 = await task1
+    let r2 = await task2
+    let r3 = await task3
+
+    println("  Results: {}, {}, {}", r1, r2, r3)
+    println("  Total: {}", r1 + r2 + r3)
+
+// ============================================
+// Entry Point
+// ============================================
+
+fn main():
+    println("=== Tutorial 05: Async & Concurrency ===")
+    println()
+
+    thread_demo()
+    println()
+
+    channel_demo()
+    println()
+
+    mutex_demo()
+    println()
+
+    block_on(run_async())
+    println()
+
+    println("=== Done ===")

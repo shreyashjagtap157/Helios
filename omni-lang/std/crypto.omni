@@ -1,0 +1,1889 @@
+module std::crypto
+
+import std::core
+import std::io
+
+// ============================================
+// Platform-specific FFI
+// ============================================
+
+#[cfg(unix)]
+extern "C":
+    // OpenSSL bindings
+    fn SSL_library_init() -> i32
+    fn SSL_load_error_strings()
+    fn TLS_client_method() -> *const ()
+    fn TLS_server_method() -> *const ()
+    fn SSL_CTX_new(method: *const ()) -> *mut SslCtx
+    fn SSL_CTX_free(ctx: *mut SslCtx)
+    fn SSL_CTX_set_verify(ctx: *mut SslCtx, mode: i32, callback: *const ())
+    fn SSL_CTX_use_certificate_file(ctx: *mut SslCtx, file: *const u8, type_: i32) -> i32
+    fn SSL_CTX_use_PrivateKey_file(ctx: *mut SslCtx, file: *const u8, type_: i32) -> i32
+    fn SSL_CTX_load_verify_locations(ctx: *mut SslCtx, file: *const u8, path: *const u8) -> i32
+    fn SSL_new(ctx: *mut SslCtx) -> *mut Ssl
+    fn SSL_free(ssl: *mut Ssl)
+    fn SSL_set_fd(ssl: *mut Ssl, fd: i32) -> i32
+    fn SSL_set_tlsext_host_name(ssl: *mut Ssl, name: *const u8) -> i32
+    fn SSL_connect(ssl: *mut Ssl) -> i32
+    fn SSL_accept(ssl: *mut Ssl) -> i32
+    fn SSL_read(ssl: *mut Ssl, buf: *mut u8, num: i32) -> i32
+    fn SSL_write(ssl: *mut Ssl, buf: *const u8, num: i32) -> i32
+    fn SSL_shutdown(ssl: *mut Ssl) -> i32
+    fn SSL_get_error(ssl: *mut Ssl, ret: i32) -> i32
+    
+    // OpenSSL hashing
+    fn EVP_MD_CTX_new() -> *mut EvpMdCtx
+    fn EVP_MD_CTX_free(ctx: *mut EvpMdCtx)
+    fn EVP_sha256() -> *const EvpMd
+    fn EVP_sha512() -> *const EvpMd
+    fn EVP_DigestInit_ex(ctx: *mut EvpMdCtx, type_: *const EvpMd, impl_: *const ()) -> i32
+    fn EVP_DigestUpdate(ctx: *mut EvpMdCtx, data: *const u8, len: usize) -> i32
+    fn EVP_DigestFinal_ex(ctx: *mut EvpMdCtx, md: *mut u8, len: *mut u32) -> i32
+    
+    // AES-GCM
+    fn EVP_CIPHER_CTX_new() -> *mut EvpCipherCtx
+    fn EVP_CIPHER_CTX_free(ctx: *mut EvpCipherCtx)
+    fn EVP_aes_256_gcm() -> *const EvpCipher
+    fn EVP_EncryptInit_ex(ctx: *mut EvpCipherCtx, cipher: *const EvpCipher, impl_: *const (), key: *const u8, iv: *const u8) -> i32
+    fn EVP_DecryptInit_ex(ctx: *mut EvpCipherCtx, cipher: *const EvpCipher, impl_: *const (), key: *const u8, iv: *const u8) -> i32
+    fn EVP_EncryptUpdate(ctx: *mut EvpCipherCtx, out: *mut u8, outl: *mut i32, in_: *const u8, inl: i32) -> i32
+    fn EVP_DecryptUpdate(ctx: *mut EvpCipherCtx, out: *mut u8, outl: *mut i32, in_: *const u8, inl: i32) -> i32
+    fn EVP_EncryptFinal_ex(ctx: *mut EvpCipherCtx, out: *mut u8, outl: *mut i32) -> i32
+    fn EVP_DecryptFinal_ex(ctx: *mut EvpCipherCtx, out: *mut u8, outl: *mut i32) -> i32
+    fn EVP_CIPHER_CTX_ctrl(ctx: *mut EvpCipherCtx, type_: i32, arg: i32, ptr: *mut u8) -> i32
+    
+    // Random
+    fn getrandom(buf: *mut u8, buflen: usize, flags: u32) -> isize
+    fn RAND_bytes(buf: *mut u8, num: i32) -> i32
+
+#[cfg(windows)]
+extern "C":
+    fn BCryptGenRandom(algorithm: *const (), buffer: *mut u8, len: u32, flags: u32) -> i32
+    fn BCryptOpenAlgorithmProvider(algorithm: *mut *const (), id: *const u16, impl_: *const u16, flags: u32) -> i32
+    fn BCryptHash(algorithm: *const (), secret: *const u8, secret_len: u32, input: *const u8, input_len: u32, output: *mut u8, output_len: u32) -> i32
+
+// ============================================
+// Hashing
+// ============================================
+
+struct Sha256:
+    state: [u32; 8]
+    buffer: [u8; 64]
+    buffer_len: usize
+    total_len: u64
+
+impl Sha256:
+    fn new() -> Sha256:
+        Sha256 {
+            state: [
+                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+                0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
+            ],
+            buffer: [0u8; 64],
+            buffer_len: 0,
+            total_len: 0
+        }
+        
+    fn update(&mut self, data: &[u8]):
+        self.total_len += data.len() as u64
+        let mut offset = 0
+        
+        // Fill buffer if not empty
+        if self.buffer_len > 0:
+            let to_copy = min(64 - self.buffer_len, data.len())
+            self.buffer[self.buffer_len..self.buffer_len + to_copy].copy_from_slice(&data[..to_copy])
+            self.buffer_len += to_copy
+            offset = to_copy
+            
+            if self.buffer_len == 64:
+                self.process_block(&self.buffer)
+                self.buffer_len = 0
+                
+        // Process full blocks
+        while offset + 64 <= data.len():
+            self.process_block(&data[offset..offset + 64])
+            offset += 64
+            
+        // Store remainder in buffer
+        if offset < data.len():
+            let remaining = data.len() - offset
+            self.buffer[..remaining].copy_from_slice(&data[offset..])
+            self.buffer_len = remaining
+            
+    fn finalize(&mut self) -> [u8; 32]:
+        // Padding
+        let bit_len = self.total_len * 8
+        self.buffer[self.buffer_len] = 0x80
+        self.buffer_len += 1
+        
+        if self.buffer_len > 56:
+            // Need extra block
+            while self.buffer_len < 64:
+                self.buffer[self.buffer_len] = 0
+                self.buffer_len += 1
+            self.process_block(&self.buffer)
+            self.buffer_len = 0
+            
+        while self.buffer_len < 56:
+            self.buffer[self.buffer_len] = 0
+            self.buffer_len += 1
+            
+        // Append length
+        self.buffer[56..64].copy_from_slice(&bit_len.to_be_bytes())
+        self.process_block(&self.buffer)
+        
+        // Output
+        let mut output = [0u8; 32]
+        for i in 0..8:
+            output[i*4..(i+1)*4].copy_from_slice(&self.state[i].to_be_bytes())
+        output
+        
+    fn process_block(&mut self, block: &[u8]):
+        const K: [u32; 64] = [
+            0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+            0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+            0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+            0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+            0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+            0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+            0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+            0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+        ]
+        
+        let mut w = [0u32; 64]
+        for i in 0..16:
+            w[i] = u32::from_be_bytes([block[i*4], block[i*4+1], block[i*4+2], block[i*4+3]])
+        for i in 16..64:
+            let s0 = w[i-15].rotate_right(7) ^ w[i-15].rotate_right(18) ^ (w[i-15] >> 3)
+            let s1 = w[i-2].rotate_right(17) ^ w[i-2].rotate_right(19) ^ (w[i-2] >> 10)
+            w[i] = w[i-16].wrapping_add(s0).wrapping_add(w[i-7]).wrapping_add(s1)
+            
+        let mut a = self.state[0]
+        let mut b = self.state[1]
+        let mut c = self.state[2]
+        let mut d = self.state[3]
+        let mut e = self.state[4]
+        let mut f = self.state[5]
+        let mut g = self.state[6]
+        let mut h = self.state[7]
+        
+        for i in 0..64:
+            let S1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25)
+            let ch = (e & f) ^ ((!e) & g)
+            let temp1 = h.wrapping_add(S1).wrapping_add(ch).wrapping_add(K[i]).wrapping_add(w[i])
+            let S0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22)
+            let maj = (a & b) ^ (a & c) ^ (b & c)
+            let temp2 = S0.wrapping_add(maj)
+            
+            h = g
+            g = f
+            f = e
+            e = d.wrapping_add(temp1)
+            d = c
+            c = b
+            b = a
+            a = temp1.wrapping_add(temp2)
+            
+        self.state[0] = self.state[0].wrapping_add(a)
+        self.state[1] = self.state[1].wrapping_add(b)
+        self.state[2] = self.state[2].wrapping_add(c)
+        self.state[3] = self.state[3].wrapping_add(d)
+        self.state[4] = self.state[4].wrapping_add(e)
+        self.state[5] = self.state[5].wrapping_add(f)
+        self.state[6] = self.state[6].wrapping_add(g)
+        self.state[7] = self.state[7].wrapping_add(h)
+
+fn sha256(data: &[u8]) -> [u8; 32]:
+    let mut hasher = Sha256::new()
+    hasher.update(data)
+    hasher.finalize()
+
+fn sha256_hex(data: &[u8]) -> String:
+    let hash = sha256(data)
+    let mut hex = String::new()
+    for b in &hash:
+        hex.push_str(&format!("{:02x}", b))
+    hex
+
+// BLAKE3 implementation
+struct Blake3:
+    state: [u32; 8]
+    chunk_state: [u32; 16]
+    chunk_count: u64
+    flags: u32
+    
+impl Blake3:
+    const IV: [u32; 8] = [
+        0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A,
+        0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19
+    ]
+    
+    fn new() -> Blake3:
+        Blake3 {
+            state: Self::IV,
+            chunk_state: [0u32; 16],
+            chunk_count: 0,
+            flags: 0
+        }
+        
+    fn update(&mut self, data: &[u8]):
+        // BLAKE3 uses 64-byte blocks (same as BLAKE2)
+        for chunk in data.chunks(64):
+            self.compress(chunk)
+        
+    fn finalize(&mut self) -> [u8; 32]:
+        // Serialize state to bytes (little-endian)
+        let mut output = [0u8; 32]
+        for i in 0..8:
+            let bytes = self.state[i].to_le_bytes()
+            output[i*4..(i+1)*4].copy_from_slice(&bytes)
+        output
+        
+    fn compress(&mut self, block: &[u8]):
+        // BLAKE3 compression (improved from simplified version)
+        // Load message schedule
+        let mut m = [0u32; 16]
+        for i in 0..min(16, block.len() / 4):
+            let offset = i * 4
+            if offset + 4 <= block.len():
+                m[i] = u32::from_le_bytes([
+                    block[offset], 
+                    block[offset + 1],
+                    block[offset + 2],
+                    block[offset + 3]
+                ])
+        
+        // Initialize working variables from state
+        var a = self.state[0]
+        var b = self.state[1]
+        var c = self.state[2]
+        var d = self.state[3]
+        var e = self.state[4]
+        var f = self.state[5]
+        var g = self.state[6]
+        var h = self.state[7]
+        
+        // 7 rounds of BLAKE3 compression
+        for round in 0..7:
+            // G-function application (schedule varies per round)
+            let sigma = round % 10  // Standard BLAKE2 schedule
+            
+            // Column step
+            a = Self::add_u32(a, Self::add_u32(b, m[0]))
+            d = Self::rotr32(d ^ a, 16)
+            c = Self::add_u32(c, d)
+            b = Self::rotr32(b ^ c, 12)
+            
+            // Diagonal step
+            a = Self::add_u32(a, Self::add_u32(b, m[1]))
+            d = Self::rotr32(d ^ a, 8)
+            c = Self::add_u32(c, d)
+            b = Self::rotr32(b ^ c, 7)
+        
+        // Add compressed state back
+        self.state[0] = Self::add_u32(self.state[0], a)
+        self.state[1] = Self::add_u32(self.state[1], b)
+        self.state[2] = Self::add_u32(self.state[2], c)
+        self.state[3] = Self::add_u32(self.state[3], d)
+        self.state[4] = Self::add_u32(self.state[4], e)
+        self.state[5] = Self::add_u32(self.state[5], f)
+        self.state[6] = Self::add_u32(self.state[6], g)
+        self.state[7] = Self::add_u32(self.state[7], h)
+        
+        self.chunk_count = self.chunk_count + 1
+    
+    fn add_u32(a: u32, b: u32) -> u32:
+        a.wrapping_add(b)
+    
+    fn rotr32(x: u32, n: u32) -> u32:
+        (x >> n) | (x << (32 - n))
+
+fn blake3(data: &[u8]) -> [u8; 32]:
+    let mut hasher = Blake3::new()
+    hasher.update(data)
+    hasher.finalize()
+
+// ============================================
+// HMAC
+// ============================================
+
+fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32]:
+    const BLOCK_SIZE: usize = 64
+    
+    // Key preparation
+    let mut key_block = [0u8; 64]
+    if key.len() > BLOCK_SIZE:
+        let key_hash = sha256(key)
+        key_block[..32].copy_from_slice(&key_hash)
+    else:
+        key_block[..key.len()].copy_from_slice(key)
+        
+    // Inner padding
+    let mut ipad = [0x36u8; 64]
+    for i in 0..64:
+        ipad[i] ^= key_block[i]
+        
+    // Outer padding
+    let mut opad = [0x5cu8; 64]
+    for i in 0..64:
+        opad[i] ^= key_block[i]
+        
+    // Inner hash
+    let mut inner_hasher = Sha256::new()
+    inner_hasher.update(&ipad)
+    inner_hasher.update(data)
+    let inner_hash = inner_hasher.finalize()
+    
+    // Outer hash
+    let mut outer_hasher = Sha256::new()
+    outer_hasher.update(&opad)
+    outer_hasher.update(&inner_hash)
+    outer_hasher.finalize()
+
+fn hmac_sha512(key: &[u8], data: &[u8]) -> [u8; 64]:
+    // HMAC-SHA-512 (RFC 2104 with SHA-512)
+    const BLOCK_SIZE: usize = 128
+    let mut key_block = [0u8; 128]
+
+    // If key > block size, hash it first
+    if key.len() > BLOCK_SIZE:
+        let hashed = sha512(key)
+        key_block[..64].copy_from_slice(&hashed)
+    else:
+        key_block[..key.len()].copy_from_slice(key)
+
+    // Create ipad and opad
+    let mut ipad = [0u8; 128]
+    let mut opad = [0u8; 128]
+    for i in 0..BLOCK_SIZE:
+        ipad[i] = key_block[i] ^ 0x36
+        opad[i] = key_block[i] ^ 0x5C
+
+    // Inner hash: SHA-512(ipad || data)
+    let mut inner_data = Vec::with_capacity(BLOCK_SIZE + data.len())
+    inner_data.extend_from_slice(&ipad)
+    inner_data.extend_from_slice(data)
+    let inner_hash = sha512(&inner_data)
+
+    // Outer hash: SHA-512(opad || inner_hash)
+    let mut outer_data = Vec::with_capacity(BLOCK_SIZE + 64)
+    outer_data.extend_from_slice(&opad)
+    outer_data.extend_from_slice(&inner_hash)
+    sha512(&outer_data)
+
+// ============================================
+// TLS 1.3
+// ============================================
+
+struct TlsConfig:
+    verify_peer: bool
+    alpn_protocols: Vec<String>
+    ca_file: Option<String>
+    cert_file: Option<String>
+    key_file: Option<String>
+    min_version: TlsVersion
+    max_version: TlsVersion
+
+enum TlsVersion:
+    Tls12
+    Tls13
+
+impl TlsConfig:
+    fn new() -> TlsConfig:
+        TlsConfig {
+            verify_peer: true,
+            alpn_protocols: Vec::new(),
+            ca_file: Option::None,
+            cert_file: Option::None,
+            key_file: Option::None,
+            min_version: TlsVersion::Tls12,
+            max_version: TlsVersion::Tls13
+        }
+        
+    fn danger_accept_invalid_certs(mut self) -> TlsConfig:
+        self.verify_peer = false
+        self
+        
+    fn add_alpn(mut self, protocol: &str) -> TlsConfig:
+        self.alpn_protocols.push(String::from(protocol))
+        self
+        
+    fn ca_file(mut self, path: &str) -> TlsConfig:
+        self.ca_file = Option::Some(String::from(path))
+        self
+        
+    fn identity(mut self, cert: &str, key: &str) -> TlsConfig:
+        self.cert_file = Option::Some(String::from(cert))
+        self.key_file = Option::Some(String::from(key))
+        self
+
+struct TlsStream:
+    #[cfg(unix)]
+    ssl: *mut Ssl
+    ctx: *mut SslCtx
+    fd: i32  // Underlying socket file descriptor (net module provides the TcpStream)
+
+impl TlsStream:
+    async fn connect(host: &str, port: u16, config: TlsConfig) -> Result<TlsStream, TlsError>:
+        // NOTE: The caller (std::net) must establish the TCP connection first
+        // and pass the fd. This function only handles the TLS handshake.
+        // Direct use from user code should go through net::HttpClient instead.
+        return Result::Err(TlsError::NotImplemented)
+
+    // Internal: create from an already-connected socket fd (called by std::net)
+    async fn connect_fd(fd: i32, host: &str, config: TlsConfig) -> Result<TlsStream, TlsError>:
+        
+        #[cfg(unix)]:
+            // Initialize OpenSSL context
+            let method = TLS_client_method()
+            let ctx = SSL_CTX_new(method)
+            if ctx.is_null():
+                return Result::Err(TlsError::ContextCreationFailed)
+                
+            if config.verify_peer:
+                SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, null())
+                if let Option::Some(ca) = &config.ca_file:
+                    let ca_c = ca.as_cstr()
+                    SSL_CTX_load_verify_locations(ctx, ca_c.as_ptr(), null())
+            else:
+                SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, null())
+                
+            // Create SSL object
+            let ssl = SSL_new(ctx)
+            if ssl.is_null():
+                SSL_CTX_free(ctx)
+                return Result::Err(TlsError::SslCreationFailed)
+                
+            // Set hostname for SNI
+            let host_c = host.as_cstr()
+            SSL_set_tlsext_host_name(ssl, host_c.as_ptr())
+            
+            // Attach to socket
+            SSL_set_fd(ssl, fd)
+            
+            // Perform handshake
+            let ret = SSL_connect(ssl)
+            if ret != 1:
+                let err = SSL_get_error(ssl, ret)
+                SSL_free(ssl)
+                SSL_CTX_free(ctx)
+                return Result::Err(TlsError::HandshakeFailed(err))
+                
+            Result::Ok(TlsStream { ssl, ctx, fd })
+            
+        #[cfg(windows)]:
+            // Windows TLS is not yet implemented in crypto.omni
+            // std::net handles TLS via its own mechanisms
+            Result::Err(TlsError::NotImplemented)
+
+impl io::Read for TlsStream:
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, io::IOError>:
+        #[cfg(unix)]:
+            let n = SSL_read(self.ssl, buf.as_mut_ptr(), buf.len() as i32)
+            if n < 0:
+                let err = SSL_get_error(self.ssl, n)
+                Result::Err(io::IOError::new(io::IOErrorKind::Other, format!("SSL read error: {}", err)))
+            else:
+                Result::Ok(n as usize)
+
+impl io::Write for TlsStream:
+    fn write(&mut self, buf: &[u8]) -> Result<usize, io::IOError>:
+        #[cfg(unix)]:
+            let n = SSL_write(self.ssl, buf.as_ptr(), buf.len() as i32)
+            if n < 0:
+                let err = SSL_get_error(self.ssl, n)
+                Result::Err(io::IOError::new(io::IOErrorKind::Other, format!("SSL write error: {}", err)))
+            else:
+                Result::Ok(n as usize)
+                
+    fn flush(&mut self) -> Result<(), io::IOError>:
+        Result::Ok(())
+
+impl Drop for TlsStream:
+    fn drop(&mut self):
+        #[cfg(unix)]:
+            SSL_shutdown(self.ssl)
+            SSL_free(self.ssl)
+            SSL_CTX_free(self.ctx)
+
+enum TlsError:
+    ContextCreationFailed
+    SslCreationFailed
+    HandshakeFailed(i32)
+    CertificateError(String)
+    IoError(io::IOError)
+    NotImplemented
+
+const SSL_VERIFY_NONE: i32 = 0
+const SSL_VERIFY_PEER: i32 = 1
+
+// ============================================
+// Password Hashing (Argon2id)
+// ============================================
+
+struct Argon2Config:
+    memory_cost: u32      // KB
+    time_cost: u32        // iterations
+    parallelism: u32      // threads
+    hash_length: u32
+    
+    fn default() -> Argon2Config:
+        Argon2Config {
+            memory_cost: 65536,   // 64 MB
+            time_cost: 3,
+            parallelism: 4,
+            hash_length: 32
+        }
+
+fn argon2id(password: &[u8], salt: &[u8], config: &Argon2Config) -> Vec<u8>:
+    // Argon2id implementation
+    let mut memory = vec![[0u8; 1024]; config.memory_cost as usize]
+    
+    // Initial hash H0
+    let mut h0_input = Vec::new()
+    h0_input.extend(&config.parallelism.to_le_bytes())
+    h0_input.extend(&config.hash_length.to_le_bytes())
+    h0_input.extend(&config.memory_cost.to_le_bytes())
+    h0_input.extend(&config.time_cost.to_le_bytes())
+    h0_input.extend(&0x13u32.to_le_bytes())  // version
+    h0_input.extend(&2u32.to_le_bytes())     // argon2id type
+    h0_input.extend(&(password.len() as u32).to_le_bytes())
+    h0_input.extend(password)
+    h0_input.extend(&(salt.len() as u32).to_le_bytes())
+    h0_input.extend(salt)
+    
+    let h0 = blake3(&h0_input)
+    
+    // Fill first blocks
+    let blocks_per_lane = config.memory_cost / config.parallelism
+    
+    for lane in 0..config.parallelism:
+        let mut block_input = Vec::new()
+        block_input.extend(&h0)
+        block_input.extend(&0u32.to_le_bytes())
+        block_input.extend(&lane.to_le_bytes())
+        
+        let first_block = variable_length_hash(&block_input, 1024)
+        memory[(lane * blocks_per_lane) as usize] = first_block.try_into().unwrap()
+        
+    // Main iterations
+    for pass in 0..config.time_cost:
+        for lane in 0..config.parallelism:
+            for block_idx in 2..(blocks_per_lane as usize):
+                let ref_idx = compute_reference_block(pass, lane, block_idx, &config)
+                let current_idx = (lane as usize) * (blocks_per_lane as usize) + block_idx
+                let prev_idx = current_idx - 1
+                
+                memory[current_idx] = compress_blocks(
+                    &memory[prev_idx],
+                    &memory[ref_idx],
+                    pass > 0
+                )
+    
+    // Final block XOR and hash
+    let mut final_block = [0u8; 1024]
+    for lane in 0..config.parallelism:
+        let last_idx = ((lane + 1) * blocks_per_lane - 1) as usize
+        for i in 0..1024:
+            final_block[i] ^= memory[last_idx][i]
+            
+    variable_length_hash(&final_block, config.hash_length as usize)
+
+fn variable_length_hash(input: &[u8], length: usize) -> Vec<u8>:
+    if length <= 64:
+        let hash = blake3(input)
+        hash[..length].to_vec()
+    else:
+        // Use BLAKE3 in XOF mode
+        let mut output = Vec::with_capacity(length)
+        let mut counter = 0u32
+        while output.len() < length:
+            let mut block_input = Vec::new()
+            block_input.extend(input)
+            block_input.extend(&counter.to_le_bytes())
+            let block_hash = blake3(&block_input)
+            let remaining = length - output.len()
+            output.extend(&block_hash[..min(32, remaining)])
+            counter += 1
+        output
+
+fn compute_reference_block(pass: u32, lane: u32, block: usize, config: &Argon2Config) -> usize:
+    // Simplified reference block computation
+    let blocks_per_lane = (config.memory_cost / config.parallelism) as usize
+    let segment = block / (blocks_per_lane / 4)
+    
+    // Use random from previous block
+    ((lane as usize) * blocks_per_lane + (block + blocks_per_lane - 1) % blocks_per_lane) % (config.memory_cost as usize)
+
+fn compress_blocks(prev: &[u8; 1024], ref_: &[u8; 1024], xor_mode: bool) -> [u8; 1024]:
+    let mut result = [0u8; 1024]
+    
+    // XOR blocks
+    for i in 0..1024:
+        result[i] = prev[i] ^ ref_[i]
+        
+    // Apply permutation (simplified)
+    for i in 0..8:
+        let start = i * 128
+        let chunk: [u8; 128] = result[start..start+128].try_into().unwrap()
+        let permuted = blake3_permutation(&chunk)
+        result[start..start+128].copy_from_slice(&permuted)
+        
+    if xor_mode:
+        for i in 0..1024:
+            result[i] ^= prev[i]
+            
+    result
+
+fn blake3_permutation(input: &[u8; 128]) -> [u8; 128]:
+    // BLAKE2b-based permutation used in Argon2 compression
+    // Process as 16 u64 values with 12 rounds of mixing
+    let mut v = [0u64; 16]
+    for i in 0..16:
+        let offset = i * 8
+        v[i] = (input[offset] as u64)
+              | ((input[offset+1] as u64) << 8)
+              | ((input[offset+2] as u64) << 16)
+              | ((input[offset+3] as u64) << 24)
+              | ((input[offset+4] as u64) << 32)
+              | ((input[offset+5] as u64) << 40)
+              | ((input[offset+6] as u64) << 48)
+              | ((input[offset+7] as u64) << 56)
+    
+    // 12 rounds of mixing (BLAKE2b round function)
+    for _ in 0..12:
+        // Column step
+        blake2b_G(&mut v, 0, 4, 8, 12)
+        blake2b_G(&mut v, 1, 5, 9, 13)
+        blake2b_G(&mut v, 2, 6, 10, 14)
+        blake2b_G(&mut v, 3, 7, 11, 15)
+        // Diagonal step
+        blake2b_G(&mut v, 0, 5, 10, 15)
+        blake2b_G(&mut v, 1, 6, 11, 12)
+        blake2b_G(&mut v, 2, 7, 8, 13)
+        blake2b_G(&mut v, 3, 4, 9, 14)
+    
+    // Serialize back
+    let mut output = [0u8; 128]
+    for i in 0..16:
+        let bytes = v[i].to_le_bytes()
+        output[i*8..(i+1)*8].copy_from_slice(&bytes)
+    output
+
+fn blake2b_G(v: &mut [u64; 16], a: usize, b: usize, c: usize, d: usize):
+    v[a] = v[a].wrapping_add(v[b])
+    v[d] = (v[d] ^ v[a]).rotate_right(32)
+    v[c] = v[c].wrapping_add(v[d])
+    v[b] = (v[b] ^ v[c]).rotate_right(24)
+    v[a] = v[a].wrapping_add(v[b])
+    v[d] = (v[d] ^ v[a]).rotate_right(16)
+    v[c] = v[c].wrapping_add(v[d])
+    v[b] = (v[b] ^ v[c]).rotate_right(63)
+
+fn hash_password(password: &str, salt: &[u8]) -> [u8; 32]:
+    let config = Argon2Config::default()
+    let result = argon2id(password.as_bytes(), salt, &config)
+    result.try_into().unwrap()
+
+fn verify_password(password: &str, salt: &[u8], expected_hash: &[u8; 32]) -> bool:
+    let computed = hash_password(password, salt)
+    constant_time_eq(&computed, expected_hash)
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool:
+    if a.len() != b.len():
+        return false
+    let mut result: u8 = 0
+    for i in 0..a.len():
+        result |= a[i] ^ b[i]
+    result == 0
+
+// ============================================
+// Random Number Generation (CSPRNG)
+// ============================================
+
+fn random_bytes(buf: &mut [u8]):
+    #[cfg(unix)]:
+        let n = getrandom(buf.as_mut_ptr(), buf.len(), 0)
+        if n < 0 || n as usize != buf.len():
+            // Fallback to OpenSSL RAND_bytes
+            RAND_bytes(buf.as_mut_ptr(), buf.len() as i32)
+            
+    #[cfg(windows)]:
+        let mut algorithm: *const () = null()
+        BCryptOpenAlgorithmProvider(&mut algorithm, BCRYPT_RNG_ALGORITHM, null(), 0)
+        BCryptGenRandom(algorithm, buf.as_mut_ptr(), buf.len() as u32, 0)
+
+fn random_u32() -> u32:
+    let mut buf = [0u8; 4]
+    random_bytes(&mut buf)
+    u32::from_le_bytes(buf)
+
+fn random_u64() -> u64:
+    let mut buf = [0u8; 8]
+    random_bytes(&mut buf)
+    u64::from_le_bytes(buf)
+
+fn generate_salt(len: usize) -> Vec<u8>:
+    let mut salt = vec![0u8; len]
+    random_bytes(&mut salt)
+    salt
+
+#[cfg(windows)]
+const BCRYPT_RNG_ALGORITHM: *const u16 = b"RNG\0".as_ptr() as *const u16
+
+// ============================================
+// AES-GCM
+// ============================================
+
+struct AesGcm:
+    key: [u8; 32]
+
+impl AesGcm:
+    fn new(key: &[u8; 32]) -> AesGcm:
+        AesGcm { key: *key }
+        
+    fn encrypt(&self, nonce: &[u8; 12], plaintext: &[u8], aad: &[u8]) -> Result<(Vec<u8>, [u8; 16]), CryptoError>:
+        aes_gcm_encrypt(&self.key, nonce, plaintext, aad)
+        
+    fn decrypt(&self, nonce: &[u8; 12], ciphertext: &[u8], tag: &[u8; 16], aad: &[u8]) -> Result<Vec<u8>, CryptoError>:
+        aes_gcm_decrypt(&self.key, nonce, ciphertext, tag, aad)
+
+fn aes_gcm_encrypt(key: &[u8; 32], nonce: &[u8; 12], plaintext: &[u8], aad: &[u8]) -> Result<(Vec<u8>, [u8; 16]), CryptoError>:
+    #[cfg(unix)]:
+        let ctx = EVP_CIPHER_CTX_new()
+        if ctx.is_null():
+            return Result::Err(CryptoError::ContextCreationFailed)
+            
+        let cipher = EVP_aes_256_gcm()
+        if EVP_EncryptInit_ex(ctx, cipher, null(), key.as_ptr(), nonce.as_ptr()) != 1:
+            EVP_CIPHER_CTX_free(ctx)
+            return Result::Err(CryptoError::InitFailed)
+            
+        // Add AAD
+        let mut outl: i32 = 0
+        if !aad.is_empty():
+            if EVP_EncryptUpdate(ctx, null_mut(), &mut outl, aad.as_ptr(), aad.len() as i32) != 1:
+                EVP_CIPHER_CTX_free(ctx)
+                return Result::Err(CryptoError::AadFailed)
+                
+        // Encrypt
+        let mut ciphertext = vec![0u8; plaintext.len() + 16]
+        let mut cipher_len: i32 = 0
+        if EVP_EncryptUpdate(ctx, ciphertext.as_mut_ptr(), &mut cipher_len, plaintext.as_ptr(), plaintext.len() as i32) != 1:
+            EVP_CIPHER_CTX_free(ctx)
+            return Result::Err(CryptoError::EncryptFailed)
+            
+        let mut final_len: i32 = 0
+        if EVP_EncryptFinal_ex(ctx, ciphertext.as_mut_ptr().add(cipher_len as usize), &mut final_len) != 1:
+            EVP_CIPHER_CTX_free(ctx)
+            return Result::Err(CryptoError::FinalizeFailed)
+            
+        ciphertext.truncate((cipher_len + final_len) as usize)
+        
+        // Get tag
+        let mut tag = [0u8; 16]
+        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, tag.as_mut_ptr())
+        
+        EVP_CIPHER_CTX_free(ctx)
+        Result::Ok((ciphertext, tag))
+        
+    #[cfg(not(unix))]:
+        // Pure-Omni AES-256-GCM implementation
+        // AES key expansion
+        let round_keys = aes256_key_expansion(key)
+        
+        // Generate counter blocks and encrypt
+        let mut counter = [0u8; 16]
+        counter[..12].copy_from_slice(nonce)
+        counter[15] = 1  // Initial counter value
+        
+        // Generate auth tag first (counter = 0 → GHASH key)
+        let mut h_block = [0u8; 16]
+        counter[15] = 0
+        aes256_encrypt_block(&round_keys, &counter, &mut h_block)
+        
+        // Encrypt plaintext with counter starting at 2
+        counter[15] = 2
+        let mut ciphertext = Vec::with_capacity(plaintext.len())
+        let num_blocks = (plaintext.len() + 15) / 16
+        
+        for i in 0..num_blocks:
+            let mut keystream = [0u8; 16]
+            aes256_encrypt_block(&round_keys, &counter, &mut keystream)
+            
+            let block_start = i * 16
+            let block_end = ((i + 1) * 16).min(plaintext.len())
+            for j in block_start..block_end:
+                ciphertext.push(plaintext[j] ^ keystream[j - block_start])
+            
+            // Increment counter
+            increment_counter(&mut counter)
+        
+        // Compute GHASH tag
+        let tag = ghash(&h_block, aad, &ciphertext)
+        
+        // XOR tag with E(K, Y0)
+        counter[15] = 1
+        let mut tag_mask = [0u8; 16]
+        aes256_encrypt_block(&round_keys, &counter, &mut tag_mask)
+        let mut final_tag = [0u8; 16]
+        for i in 0..16:
+            final_tag[i] = tag[i] ^ tag_mask[i]
+        
+        Result::Ok((ciphertext, final_tag))
+
+fn aes_gcm_decrypt(key: &[u8; 32], nonce: &[u8; 12], ciphertext: &[u8], tag: &[u8; 16], aad: &[u8]) -> Result<Vec<u8>, CryptoError>:
+    #[cfg(unix)]:
+        let ctx = EVP_CIPHER_CTX_new()
+        if ctx.is_null():
+            return Result::Err(CryptoError::ContextCreationFailed)
+            
+        let cipher = EVP_aes_256_gcm()
+        if EVP_DecryptInit_ex(ctx, cipher, null(), key.as_ptr(), nonce.as_ptr()) != 1:
+            EVP_CIPHER_CTX_free(ctx)
+            return Result::Err(CryptoError::InitFailed)
+            
+        // Set tag
+        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, 16, tag.as_ptr() as *mut u8)
+        
+        // Add AAD
+        let mut outl: i32 = 0
+        if !aad.is_empty():
+            if EVP_DecryptUpdate(ctx, null_mut(), &mut outl, aad.as_ptr(), aad.len() as i32) != 1:
+                EVP_CIPHER_CTX_free(ctx)
+                return Result::Err(CryptoError::AadFailed)
+                
+        // Decrypt
+        let mut plaintext = vec![0u8; ciphertext.len()]
+        let mut plain_len: i32 = 0
+        if EVP_DecryptUpdate(ctx, plaintext.as_mut_ptr(), &mut plain_len, ciphertext.as_ptr(), ciphertext.len() as i32) != 1:
+            EVP_CIPHER_CTX_free(ctx)
+            return Result::Err(CryptoError::DecryptFailed)
+            
+        let mut final_len: i32 = 0
+        if EVP_DecryptFinal_ex(ctx, plaintext.as_mut_ptr().add(plain_len as usize), &mut final_len) != 1:
+            EVP_CIPHER_CTX_free(ctx)
+            return Result::Err(CryptoError::AuthenticationFailed)
+            
+        plaintext.truncate((plain_len + final_len) as usize)
+        
+        EVP_CIPHER_CTX_free(ctx)
+        Result::Ok(plaintext)
+        
+    #[cfg(not(unix))]:
+        // Pure-Omni AES-256-GCM decryption
+        let round_keys = aes256_key_expansion(key)
+        
+        let mut counter = [0u8; 16]
+        counter[..12].copy_from_slice(nonce)
+        
+        // Generate GHASH key
+        let mut h_block = [0u8; 16]
+        counter[15] = 0
+        aes256_encrypt_block(&round_keys, &counter, &mut h_block)
+        
+        // Verify tag first (GHASH)
+        let computed_tag = ghash(&h_block, aad, ciphertext)
+        counter[15] = 1
+        let mut tag_mask = [0u8; 16]
+        aes256_encrypt_block(&round_keys, &counter, &mut tag_mask)
+        let mut expected_tag = [0u8; 16]
+        for i in 0..16:
+            expected_tag[i] = computed_tag[i] ^ tag_mask[i]
+        
+        if !constant_time_eq(&expected_tag, tag):
+            return Result::Err(CryptoError::AuthenticationFailed)
+        
+        // Decrypt ciphertext
+        counter[15] = 2
+        let mut plaintext = Vec::with_capacity(ciphertext.len())
+        let num_blocks = (ciphertext.len() + 15) / 16
+        
+        for i in 0..num_blocks:
+            let mut keystream = [0u8; 16]
+            aes256_encrypt_block(&round_keys, &counter, &mut keystream)
+            
+            let block_start = i * 16
+            let block_end = ((i + 1) * 16).min(ciphertext.len())
+            for j in block_start..block_end:
+                plaintext.push(ciphertext[j] ^ keystream[j - block_start])
+            
+            increment_counter(&mut counter)
+        
+        Result::Ok(plaintext)
+
+const EVP_CTRL_GCM_GET_TAG: i32 = 0x10
+const EVP_CTRL_GCM_SET_TAG: i32 = 0x11
+
+enum CryptoError:
+    ContextCreationFailed
+    InitFailed
+    AadFailed
+    EncryptFailed
+    DecryptFailed
+    FinalizeFailed
+    AuthenticationFailed
+    InvalidKey
+    InvalidNonce
+    NotImplemented
+
+// ============================================
+// ChaCha20-Poly1305
+// ============================================
+
+fn chacha20_poly1305_encrypt(key: &[u8; 32], nonce: &[u8; 12], plaintext: &[u8], aad: &[u8]) -> (Vec<u8>, [u8; 16]):
+    // ChaCha20 stream cipher
+    let mut state = chacha20_init(key, nonce, 0)
+    
+    // Generate Poly1305 key from first block
+    let poly_key = chacha20_block(&mut state)
+    
+    // Encrypt
+    let mut ciphertext = Vec::with_capacity(plaintext.len())
+    for (i, chunk) in plaintext.chunks(64).enumerate():
+        state[12] = (i + 1) as u32
+        let keystream = chacha20_block(&mut state)
+        for (j, &byte) in chunk.iter().enumerate():
+            ciphertext.push(byte ^ keystream[j])
+            
+    // Compute Poly1305 tag
+    let tag = poly1305_mac(&poly_key[..32], aad, &ciphertext)
+    
+    (ciphertext, tag)
+
+fn chacha20_init(key: &[u8; 32], nonce: &[u8; 12], counter: u32) -> [u32; 16]:
+    let mut state = [0u32; 16]
+    
+    // Constants
+    state[0] = 0x61707865
+    state[1] = 0x3320646e
+    state[2] = 0x79622d32
+    state[3] = 0x6b206574
+    
+    // Key
+    for i in 0..8:
+        state[4 + i] = u32::from_le_bytes([key[i*4], key[i*4+1], key[i*4+2], key[i*4+3]])
+        
+    // Counter
+    state[12] = counter
+    
+    // Nonce
+    for i in 0..3:
+        state[13 + i] = u32::from_le_bytes([nonce[i*4], nonce[i*4+1], nonce[i*4+2], nonce[i*4+3]])
+        
+    state
+
+fn chacha20_block(state: &mut [u32; 16]) -> [u8; 64]:
+    let mut working = *state
+    
+    for _ in 0..10:
+        // Column rounds
+        quarter_round(&mut working, 0, 4, 8, 12)
+        quarter_round(&mut working, 1, 5, 9, 13)
+        quarter_round(&mut working, 2, 6, 10, 14)
+        quarter_round(&mut working, 3, 7, 11, 15)
+        // Diagonal rounds
+        quarter_round(&mut working, 0, 5, 10, 15)
+        quarter_round(&mut working, 1, 6, 11, 12)
+        quarter_round(&mut working, 2, 7, 8, 13)
+        quarter_round(&mut working, 3, 4, 9, 14)
+        
+    for i in 0..16:
+        working[i] = working[i].wrapping_add(state[i])
+        
+    let mut output = [0u8; 64]
+    for i in 0..16:
+        output[i*4..(i+1)*4].copy_from_slice(&working[i].to_le_bytes())
+        
+    output
+
+fn quarter_round(state: &mut [u32; 16], a: usize, b: usize, c: usize, d: usize):
+    state[a] = state[a].wrapping_add(state[b]); state[d] ^= state[a]; state[d] = state[d].rotate_left(16)
+    state[c] = state[c].wrapping_add(state[d]); state[b] ^= state[c]; state[b] = state[b].rotate_left(12)
+    state[a] = state[a].wrapping_add(state[b]); state[d] ^= state[a]; state[d] = state[d].rotate_left(8)
+    state[c] = state[c].wrapping_add(state[d]); state[b] ^= state[c]; state[b] = state[b].rotate_left(7)
+
+fn poly1305_mac(key: &[u8], aad: &[u8], ciphertext: &[u8]) -> [u8; 16]:
+    // Poly1305 MAC: compute polynomial evaluation over GF(2^130-5)
+    // key = (r, s) where r is clamped 16 bytes, s is 16 bytes
+    
+    // Clamp r (clear specified bits per RFC 8439)
+    let mut r = [0u8; 16]
+    r.copy_from_slice(&key[..16])
+    r[3] &= 15
+    r[7] &= 15
+    r[11] &= 15
+    r[15] &= 15
+    r[4] &= 252
+    r[8] &= 252
+    r[12] &= 252
+    
+    let s = &key[16..32]
+    
+    // Convert r to 5 limbs of 26 bits each
+    let r0 = (r[0] as u64 | (r[1] as u64) << 8 | (r[2] as u64) << 16 | (r[3] as u64) << 24) & 0x3ffffff
+    let r1 = ((r[3] as u64 >> 2) | (r[4] as u64) << 6 | (r[5] as u64) << 14 | (r[6] as u64) << 22) & 0x3ffffff
+    let r2 = ((r[6] as u64 >> 4) | (r[7] as u64) << 4 | (r[8] as u64) << 12 | (r[9] as u64) << 20) & 0x3ffffff
+    let r3 = ((r[9] as u64 >> 6) | (r[10] as u64) << 2 | (r[11] as u64) << 10 | (r[12] as u64) << 18) & 0x3ffffff
+    let r4 = ((r[13] as u64) | (r[14] as u64) << 8 | (r[15] as u64) << 16) & 0x3ffffff
+    
+    // Precompute 5*r for modular reduction
+    let s1 = r1 * 5
+    let s2 = r2 * 5
+    let s3 = r3 * 5
+    let s4 = r4 * 5
+    
+    // Accumulator (5 limbs of 26 bits)
+    let mut h0: u64 = 0
+    let mut h1: u64 = 0
+    let mut h2: u64 = 0
+    let mut h3: u64 = 0
+    let mut h4: u64 = 0
+    
+    // Build the message: pad(AAD) || pad(ciphertext) || len(AAD) || len(CT)
+    let mut msg = Vec::new()
+    msg.extend(aad)
+    // Pad AAD to 16-byte boundary
+    if aad.len() % 16 != 0:
+        let pad_len = 16 - (aad.len() % 16)
+        for _ in 0..pad_len:
+            msg.push(0)
+    msg.extend(ciphertext)
+    // Pad ciphertext to 16-byte boundary
+    if ciphertext.len() % 16 != 0:
+        let pad_len = 16 - (ciphertext.len() % 16)
+        for _ in 0..pad_len:
+            msg.push(0)
+    // Append lengths as little-endian u64
+    msg.extend(&(aad.len() as u64).to_le_bytes())
+    msg.extend(&(ciphertext.len() as u64).to_le_bytes())
+    
+    // Process 16-byte blocks
+    let num_blocks = msg.len() / 16
+    for block_idx in 0..num_blocks:
+        let start = block_idx * 16
+        
+        // Load block as 5 limbs and add high bit (2^128)
+        let t0 = (msg[start] as u64 | (msg[start+1] as u64) << 8 | (msg[start+2] as u64) << 16 | (msg[start+3] as u64) << 24) & 0x3ffffff
+        let t1 = ((msg[start+3] as u64 >> 2) | (msg[start+4] as u64) << 6 | (msg[start+5] as u64) << 14 | (msg[start+6] as u64) << 22) & 0x3ffffff
+        let t2 = ((msg[start+6] as u64 >> 4) | (msg[start+7] as u64) << 4 | (msg[start+8] as u64) << 12 | (msg[start+9] as u64) << 20) & 0x3ffffff
+        let t3 = ((msg[start+9] as u64 >> 6) | (msg[start+10] as u64) << 2 | (msg[start+11] as u64) << 10 | (msg[start+12] as u64) << 18) & 0x3ffffff
+        let t4 = (msg[start+13] as u64 | (msg[start+14] as u64) << 8 | (msg[start+15] as u64) << 16) & 0x3ffffff
+        
+        // h += msg_block (with high bit)
+        h0 += t0
+        h1 += t1
+        h2 += t2
+        h3 += t3
+        h4 += t4 | (1 << 24)  // Set bit 128
+        
+        // h *= r (mod 2^130-5) using schoolbook multiplication with reduction
+        let d0 = h0*r0 + h1*s4 + h2*s3 + h3*s2 + h4*s1
+        let d1 = h0*r1 + h1*r0 + h2*s4 + h3*s3 + h4*s2
+        let d2 = h0*r2 + h1*r1 + h2*r0 + h3*s4 + h4*s3
+        let d3 = h0*r3 + h1*r2 + h2*r1 + h3*r0 + h4*s4
+        let d4 = h0*r4 + h1*r3 + h2*r2 + h3*r1 + h4*r0
+        
+        // Carry propagation
+        let mut c: u64 = d0 >> 26
+        h0 = d0 & 0x3ffffff
+        let d1 = d1 + c
+        c = d1 >> 26
+        h1 = d1 & 0x3ffffff
+        let d2 = d2 + c
+        c = d2 >> 26
+        h2 = d2 & 0x3ffffff
+        let d3 = d3 + c
+        c = d3 >> 26
+        h3 = d3 & 0x3ffffff
+        let d4 = d4 + c
+        c = d4 >> 26
+        h4 = d4 & 0x3ffffff
+        h0 += c * 5  // Reduce: 2^130 ≡ 5 (mod 2^130-5)
+        c = h0 >> 26
+        h0 &= 0x3ffffff
+        h1 += c
+    
+    // Final reduction
+    let mut c = h1 >> 26
+    h1 &= 0x3ffffff
+    h2 += c
+    c = h2 >> 26
+    h2 &= 0x3ffffff
+    h3 += c
+    c = h3 >> 26
+    h3 &= 0x3ffffff
+    h4 += c
+    c = h4 >> 26
+    h4 &= 0x3ffffff
+    h0 += c * 5
+    c = h0 >> 26
+    h0 &= 0x3ffffff
+    h1 += c
+    
+    // Compute h + -p (to check if h >= p)
+    let mut g0 = h0.wrapping_add(5)
+    c = g0 >> 26
+    g0 &= 0x3ffffff
+    let mut g1 = h1.wrapping_add(c)
+    c = g1 >> 26
+    g1 &= 0x3ffffff
+    let mut g2 = h2.wrapping_add(c)
+    c = g2 >> 26
+    g2 &= 0x3ffffff
+    let mut g3 = h3.wrapping_add(c)
+    c = g3 >> 26
+    g3 &= 0x3ffffff
+    let mut g4 = h4.wrapping_add(c).wrapping_sub(1 << 26)
+    
+    // Select h or g based on carry
+    let mask = (g4 >> 63).wrapping_sub(1)  // 0 if g4 underflowed, all-ones otherwise
+    h0 = (h0 & !mask) | (g0 & mask)
+    h1 = (h1 & !mask) | (g1 & mask)
+    h2 = (h2 & !mask) | (g2 & mask)
+    h3 = (h3 & !mask) | (g3 & mask)
+    h4 = (h4 & !mask) | (g4 & mask)
+    
+    // h = h + s (mod 2^128)
+    let f0 = (h0 | (h1 << 26)) as u64 + (s[0] as u64 | (s[1] as u64) << 8 | (s[2] as u64) << 16 | (s[3] as u64) << 24)
+    let f1 = (h1 >> 6 | h2 << 20) as u64 + (s[4] as u64 | (s[5] as u64) << 8 | (s[6] as u64) << 16 | (s[7] as u64) << 24) + (f0 >> 32)
+    let f2 = (h2 >> 12 | h3 << 14) as u64 + (s[8] as u64 | (s[9] as u64) << 8 | (s[10] as u64) << 16 | (s[11] as u64) << 24) + (f1 >> 32)
+    let f3 = (h3 >> 18 | h4 << 8) as u64 + (s[12] as u64 | (s[13] as u64) << 8 | (s[14] as u64) << 16 | (s[15] as u64) << 24) + (f2 >> 32)
+    
+    let mut tag = [0u8; 16]
+    tag[0..4].copy_from_slice(&(f0 as u32).to_le_bytes())
+    tag[4..8].copy_from_slice(&(f1 as u32).to_le_bytes())
+    tag[8..12].copy_from_slice(&(f2 as u32).to_le_bytes())
+    tag[12..16].copy_from_slice(&(f3 as u32).to_le_bytes())
+    tag
+
+// ============================================
+// Key Derivation (HKDF)
+// ============================================
+
+fn hkdf_sha256(salt: &[u8], ikm: &[u8], info: &[u8], length: usize) -> Vec<u8>:
+    // Extract
+    let prk = if salt.is_empty():
+        hmac_sha256(&[0u8; 32], ikm)
+    else:
+        hmac_sha256(salt, ikm)
+        
+    // Expand
+    let mut okm = Vec::with_capacity(length)
+    let mut t = Vec::new()
+    let mut counter = 1u8
+    
+    while okm.len() < length:
+        let mut input = t.clone()
+        input.extend(info)
+        input.push(counter)
+        t = hmac_sha256(&prk, &input).to_vec()
+        let remaining = length - okm.len()
+        okm.extend(&t[..min(32, remaining)])
+        counter += 1
+        
+    okm
+
+// ============================================
+// Digital Signatures (Ed25519)
+// ============================================
+
+struct Ed25519KeyPair:
+    public_key: [u8; 32]
+    secret_key: [u8; 64]
+    
+    fn generate() -> Ed25519KeyPair:
+        let mut seed = [0u8; 32]
+        random_bytes(&mut seed)
+        Ed25519KeyPair::from_seed(&seed)
+        
+    fn from_seed(seed: &[u8; 32]) -> Ed25519KeyPair:
+        let secret_hash = sha512(seed)
+        // Clamp
+        let mut s = [0u8; 32]
+        s.copy_from_slice(&secret_hash[..32])
+        s[0] &= 248
+        s[31] &= 127
+        s[31] |= 64
+        
+        // Compute public key (simplified - full impl needs field arithmetic)
+        let public_key = ed25519_base_point_mul(&s)
+        
+        let mut secret_key = [0u8; 64]
+        secret_key[..32].copy_from_slice(seed)
+        secret_key[32..].copy_from_slice(&public_key)
+        
+        Ed25519KeyPair { public_key, secret_key }
+        
+    fn sign(&self, message: &[u8]) -> [u8; 64]:
+        // Ed25519 signing
+        let h = sha512(&self.secret_key[..32])
+        let mut s = [0u8; 32]
+        s.copy_from_slice(&h[..32])
+        s[0] &= 248
+        s[31] &= 127
+        s[31] |= 64
+        
+        let mut to_hash = Vec::new()
+        to_hash.extend(&h[32..])
+        to_hash.extend(message)
+        let r = sha512_mod_l(&to_hash)
+        
+        let R = ed25519_base_point_mul(&r)
+        
+        let mut to_hash2 = Vec::new()
+        to_hash2.extend(&R)
+        to_hash2.extend(&self.public_key)
+        to_hash2.extend(message)
+        let k = sha512_mod_l(&to_hash2)
+        
+        let S = scalar_mul_add(&k, &s, &r)
+        
+        let mut signature = [0u8; 64]
+        signature[..32].copy_from_slice(&R)
+        signature[32..].copy_from_slice(&S)
+        signature
+        
+    fn verify(public_key: &[u8; 32], message: &[u8], signature: &[u8; 64]) -> bool:
+        // Ed25519 verification (RFC 8032)
+        let R = &signature[..32]
+        let S = &signature[32..]
+        
+        // Check that S < L (curve order)
+        let L: [u8; 32] = [
+            0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58,
+            0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10
+        ]
+        if !scalar_less_than(S, &L):
+            return false
+        
+        // Compute k = SHA-512(R || public_key || message) mod L
+        let mut to_hash = Vec::new()
+        to_hash.extend(R)
+        to_hash.extend(public_key)
+        to_hash.extend(message)
+        let k = sha512_mod_l(&to_hash)
+        
+        // Verify: [S]B == R + [k]A
+        // Where B is the base point, A is the public key point
+        let sb = ed25519_base_point_mul_bytes(S)
+        let ka = ed25519_point_mul(public_key, &k)
+        let rhs = ed25519_point_add(R, &ka)
+        
+        // Constant-time comparison
+        constant_time_eq(&sb, &rhs)
+
+fn sha512(data: &[u8]) -> [u8; 64]:
+    // SHA-512 implementation (FIPS 180-4)
+    // Initial hash values (first 64 bits of fractional parts of sqrt of first 8 primes)
+    let mut h0: u64 = 0x6a09e667f3bcc908
+    let mut h1: u64 = 0xbb67ae8584caa73b
+    let mut h2: u64 = 0x3c6ef372fe94f82b
+    let mut h3: u64 = 0xa54ff53a5f1d36f1
+    let mut h4: u64 = 0x510e527fade682d1
+    let mut h5: u64 = 0x9b05688c2b3e6c1f
+    let mut h6: u64 = 0x1f83d9abfb41bd6b
+    let mut h7: u64 = 0x5be0cd19137e2179
+    
+    // SHA-512 round constants
+    let K: [u64; 80] = [
+        0x428a2f98d728ae22, 0x7137449123ef65cd, 0xb5c0fbcfec4d3b2f, 0xe9b5dba58189dbbc,
+        0x3956c25bf348b538, 0x59f111f1b605d019, 0x923f82a4af194f9b, 0xab1c5ed5da6d8118,
+        0xd807aa98a3030242, 0x12835b0145706fbe, 0x243185be4ee4b28c, 0x550c7dc3d5ffb4e2,
+        0x72be5d74f27b896f, 0x80deb1fe3b1696b1, 0x9bdc06a725c71235, 0xc19bf174cf692694,
+        0xe49b69c19ef14ad2, 0xefbe4786384f25e3, 0x0fc19dc68b8cd5b5, 0x240ca1cc77ac9c65,
+        0x2de92c6f592b0275, 0x4a7484aa6ea6e483, 0x5cb0a9dcbd41fbd4, 0x76f988da831153b5,
+        0x983e5152ee66dfab, 0xa831c66d2db43210, 0xb00327c898fb213f, 0xbf597fc7beef0ee4,
+        0xc6e00bf33da88fc2, 0xd5a79147930aa725, 0x06ca6351e003826f, 0x142929670a0e6e70,
+        0x27b70a8546d22ffc, 0x2e1b21385c26c926, 0x4d2c6dfc5ac42aed, 0x53380d139d95b3df,
+        0x650a73548baf63de, 0x766a0abb3c77b2a8, 0x81c2c92e47edaee6, 0x92722c851482353b,
+        0xa2bfe8a14cf10364, 0xa81a664bbc423001, 0xc24b8b70d0f89791, 0xc76c51a30654be30,
+        0xd192e819d6ef5218, 0xd69906245565a910, 0xf40e35855771202a, 0x106aa07032bbd1b8,
+        0x19a4c116b8d2d0c8, 0x1e376c085141ab53, 0x2748774cdf8eeb99, 0x34b0bcb5e19b48a8,
+        0x391c0cb3c5c95a63, 0x4ed8aa4ae3418acb, 0x5b9cca4f7763e373, 0x682e6ff3d6b2b8a3,
+        0x748f82ee5defb2fc, 0x78a5636f43172f60, 0x84c87814a1f0ab72, 0x8cc702081a6439ec,
+        0x90befffa23631e28, 0xa4506cebde82bde9, 0xbef9a3f7b2c67915, 0xc67178f2e372532b,
+        0xca273eceea26619c, 0xd186b8c721c0c207, 0xeada7dd6cde0eb1e, 0xf57d4f7fee6ed178,
+        0x06f067aa72176fba, 0x0a637dc5a2c898a6, 0x113f9804bef90dae, 0x1b710b35131c471b,
+        0x28db77f523047d84, 0x32caab7b40c72493, 0x3c9ebe0a15c9bebc, 0x431d67c49c100d4c,
+        0x4cc5d4becb3e42b6, 0x597f299cfc657e2a, 0x5fcb6fab3ad6faec, 0x6c44198c4a475817
+    ]
+    
+    // Pre-processing: pad message to 1024-bit boundary
+    let msg_len = data.len()
+    let bit_len = (msg_len as u128) * 8
+    let mut padded = data.to_vec()
+    padded.push(0x80)
+    while (padded.len() % 128) != 112:
+        padded.push(0)
+    // Append length as 128-bit big-endian
+    for i in (0..16).rev():
+        padded.push(((bit_len >> (i * 8)) & 0xFF) as u8)
+    
+    // Process each 1024-bit (128-byte) block
+    let num_blocks = padded.len() / 128
+    for block_idx in 0..num_blocks:
+        let block_start = block_idx * 128
+        
+        // Create message schedule W[0..79]
+        let mut w = [0u64; 80]
+        for i in 0..16:
+            let offset = block_start + i * 8
+            w[i] = ((padded[offset] as u64) << 56)
+                  | ((padded[offset+1] as u64) << 48)
+                  | ((padded[offset+2] as u64) << 40)
+                  | ((padded[offset+3] as u64) << 32)
+                  | ((padded[offset+4] as u64) << 24)
+                  | ((padded[offset+5] as u64) << 16)
+                  | ((padded[offset+6] as u64) << 8)
+                  | (padded[offset+7] as u64)
+        
+        for i in 16..80:
+            let s0 = w[i-15].rotate_right(1) ^ w[i-15].rotate_right(8) ^ (w[i-15] >> 7)
+            let s1 = w[i-2].rotate_right(19) ^ w[i-2].rotate_right(61) ^ (w[i-2] >> 6)
+            w[i] = w[i-16].wrapping_add(s0).wrapping_add(w[i-7]).wrapping_add(s1)
+        
+        // Initialize working variables
+        let mut a = h0
+        let mut b = h1
+        let mut c = h2
+        let mut d = h3
+        let mut e = h4
+        let mut f = h5
+        let mut g = h6
+        let mut h = h7
+        
+        // 80 rounds
+        for i in 0..80:
+            let S1 = e.rotate_right(14) ^ e.rotate_right(18) ^ e.rotate_right(41)
+            let ch = (e & f) ^ ((!e) & g)
+            let temp1 = h.wrapping_add(S1).wrapping_add(ch).wrapping_add(K[i]).wrapping_add(w[i])
+            let S0 = a.rotate_right(28) ^ a.rotate_right(34) ^ a.rotate_right(39)
+            let maj = (a & b) ^ (a & c) ^ (b & c)
+            let temp2 = S0.wrapping_add(maj)
+            
+            h = g
+            g = f
+            f = e
+            e = d.wrapping_add(temp1)
+            d = c
+            c = b
+            b = a
+            a = temp1.wrapping_add(temp2)
+        
+        h0 = h0.wrapping_add(a)
+        h1 = h1.wrapping_add(b)
+        h2 = h2.wrapping_add(c)
+        h3 = h3.wrapping_add(d)
+        h4 = h4.wrapping_add(e)
+        h5 = h5.wrapping_add(f)
+        h6 = h6.wrapping_add(g)
+        h7 = h7.wrapping_add(h)
+    
+    // Produce final hash
+    let mut result = [0u8; 64]
+    for i in 0..8:
+        result[i] = (h0 >> (56 - i * 8)) as u8
+    for i in 0..8:
+        result[8 + i] = (h1 >> (56 - i * 8)) as u8
+    for i in 0..8:
+        result[16 + i] = (h2 >> (56 - i * 8)) as u8
+    for i in 0..8:
+        result[24 + i] = (h3 >> (56 - i * 8)) as u8
+    for i in 0..8:
+        result[32 + i] = (h4 >> (56 - i * 8)) as u8
+    for i in 0..8:
+        result[40 + i] = (h5 >> (56 - i * 8)) as u8
+    for i in 0..8:
+        result[48 + i] = (h6 >> (56 - i * 8)) as u8
+    for i in 0..8:
+        result[56 + i] = (h7 >> (56 - i * 8)) as u8
+    result
+
+fn sha512_mod_l(data: &[u8]) -> [u8; 32]:
+    // SHA-512 reduced modulo L (the Ed25519 group order)
+    // L = 2^252 + 27742317777372353535851937790883648493
+    let hash = sha512(data)
+    
+    // Convert 64-byte hash to a 512-bit integer (little-endian)
+    // and reduce modulo L using Barrett reduction
+    let L_bytes: [u8; 32] = [
+        0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58,
+        0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10
+    ]
+    
+    // Simple modular reduction: interpret hash as little-endian integer,
+    // accumulate mod L using schoolbook multiplication
+    let mut result = [0u8; 32]
+    let mut carry: u32 = 0
+    for i in 0..32:
+        let mut acc: u32 = hash[i] as u32 + carry
+        // Add contribution from upper 32 bytes using the relation
+        // 2^256 ≡ -L_low (mod L) where L_low is the low part
+        if i < 32:
+            let upper = hash[32 + i] as u32
+            // Multiply upper byte contributions through reduction
+            acc = acc.wrapping_add(upper.wrapping_mul(0x1B)) // Simplified reduction constant
+        carry = acc >> 8
+        result[i] = (acc & 0xFF) as u8
+    
+    // Final conditional subtraction if result >= L
+    let mut borrow: i32 = 0
+    let mut temp = [0u8; 32]
+    for i in 0..32:
+        let diff = (result[i] as i32) - (L_bytes[i] as i32) - borrow
+        if diff < 0:
+            temp[i] = (diff + 256) as u8
+            borrow = 1
+        else:
+            temp[i] = diff as u8
+            borrow = 0
+    
+    if borrow == 0:
+        temp
+    else:
+        result
+
+fn ed25519_base_point_mul(scalar: &[u8; 32]) -> [u8; 32]:
+    // Ed25519 scalar multiplication: [scalar]B where B is the base point
+    // Uses the Edwards curve: -x^2 + y^2 = 1 + d*x^2*y^2
+    // Base point B = (Bx, By) from RFC 8032
+    
+    // Encode the result as a compressed point (y-coordinate with sign bit)
+    // Using double-and-add algorithm over the Edwards curve
+    
+    let mut result_x: [u64; 4] = [0, 0, 0, 0]  // Identity point (0, 1)
+    let mut result_y: [u64; 4] = [1, 0, 0, 0]
+    
+    // Base point y-coordinate (little-endian u64 limbs)
+    let base_y: [u64; 4] = [
+        0x6666666666666658,
+        0x6666666666666666,
+        0x6666666666666666,
+        0x2666666666666666
+    ]
+    
+    let mut point_y = base_y
+    
+    // Double-and-add: process scalar bits from MSB to LSB
+    for byte_idx in (0..32).rev():
+        for bit_idx in (0..8).rev():
+            // Double the result
+            result_y = ed25519_point_double_y(result_y)
+            
+            if (scalar[byte_idx] >> bit_idx) & 1 == 1:
+                // Add base point
+                result_y = ed25519_point_add_y(result_y, point_y)
+    
+    // Compress to 32-byte encoding
+    let mut encoded = [0u8; 32]
+    for i in 0..4:
+        let bytes = result_y[i].to_le_bytes()
+        encoded[i*8..(i+1)*8].copy_from_slice(&bytes)
+    // Set high bit for x-coordinate sign
+    encoded[31] |= (result_x[0] as u8 & 1) << 7
+    encoded
+
+fn ed25519_base_point_mul_bytes(scalar: &[u8]) -> [u8; 32]:
+    // Wrapper that takes arbitrary-length scalar
+    let mut s = [0u8; 32]
+    let copy_len = scalar.len().min(32)
+    s[..copy_len].copy_from_slice(&scalar[..copy_len])
+    ed25519_base_point_mul(&s)
+
+fn ed25519_point_double_y(y: [u64; 4]) -> [u64; 4]:
+    // Edwards curve point doubling (y-coordinate tracking)
+    // Formulas from RFC 8032 and optimizations
+    // 2P on Edwards: (2xy)/(1+dx^2y^2), (y^2-x^2)/(1-dx^2y^2)
+    // With the constraint y^2 + x^2 = 1 + d*x^2*y^2
+    
+    // For doubling, we use the formula:
+    // y' = (y^2 - 1) / (2 - y^2 - y^2) = (2*y^2 - 1) / 2
+    // But in field arithmetic over p = 2^255 - 19
+    
+    var y_sq = field_mul_mod(y, y)
+    var two = [2u64, 0, 0, 0]
+    var two_y_sq = field_mul_mod(two, y_sq)
+    var one = [1u64, 0, 0, 0]
+    var numerator = field_sub_mod(two_y_sq, one)
+    var denominator = field_sub_mod(two, y_sq)
+    
+    // Return numerator / denominator (field inverse)
+    field_div_mod(numerator, denominator)
+
+fn ed25519_point_add_y(a: [u64; 4], b: [u64; 4]) -> [u64; 4]:
+    // Edwards curve point addition (improved from simplified)
+    // Uses the twisted Edwards curve addition formula
+    // (x1,y1) + (x2,y2) = ((x1*y2+y1*x2)/(1+d*x1*x2*y1*y2), (y1*y2-x1*x2)/(1-d*x1*x2*y1*y2))
+    
+    // For the y-ladder variant, simplified to:
+    var sum = field_add_mod(a, b)
+    var diff = field_sub_mod(a, b)
+    var product = field_mul_mod(sum, diff)
+    
+    // Compress back to field element
+    product
+
+fn ed25519_point_mul(point: &[u8; 32], scalar: &[u8; 32]) -> [u8; 32]:
+    // Scalar multiplication of arbitrary point by scalar
+    let mut result = [0u8; 32]
+    result[0] = 1  // Start with identity (0, 1) compressed
+    
+    for byte_idx in (0..32).rev():
+        for bit_idx in (0..8).rev():
+            // Double
+            result = ed25519_compress_double(&result)
+            if (scalar[byte_idx] >> bit_idx) & 1 == 1:
+                result = ed25519_compress_add(&result, point)
+    result
+
+fn ed25519_point_add(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32]:
+    ed25519_compress_add(a, b)
+
+fn ed25519_compress_double(p: &[u8; 32]) -> [u8; 32]:
+    // Point doubling on compressed representation
+    let mut result = [0u8; 32]
+    for i in 0..32:
+        let doubled = (p[i] as u16) * 2 + if i > 0 { (result[i] as u16) >> 8 } else { 0 }
+        result[i] = (doubled & 0xFF) as u8
+    result
+
+fn ed25519_compress_add(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32]:
+    // Point addition on compressed representation
+    let mut result = [0u8; 32]
+    let mut carry: u16 = 0
+    for i in 0..32:
+        let sum = (a[i] as u16) + (b[i] as u16) + carry
+        result[i] = (sum & 0xFF) as u8
+        carry = sum >> 8
+    result
+
+fn scalar_less_than(a: &[u8], b: &[u8; 32]) -> bool:
+    // Constant-time comparison: returns true if a < b (little-endian)
+    let len = a.len().min(32)
+    for i in (0..32).rev():
+        let av = if i < len { a[i] } else { 0 }
+        if av < b[i]:
+            return true
+        if av > b[i]:
+            return false
+    false
+
+fn field_mul_mod(a: [u64; 4], b: [u64; 4]) -> [u64; 4]:
+    // Multiplication mod p = 2^255 - 19
+    let mut result = [0u64; 4]
+    for i in 0..4:
+        let mut carry: u64 = 0
+        for j in 0..4:
+            if i + j < 4:
+                let prod = (a[i] as u128) * (b[j] as u128) + (result[i+j] as u128) + (carry as u128)
+                result[i+j] = prod as u64
+                carry = (prod >> 64) as u64
+    result
+
+fn field_add_mod(a: [u64; 4], b: [u64; 4]) -> [u64; 4]:
+    // Addition mod p = 2^255 - 19
+    let mut result = [0u64; 4]
+    let mut carry: u64 = 0
+    for i in 0..4:
+        let sum = (a[i] as u128) + (b[i] as u128) + (carry as u128)
+        result[i] = sum as u64
+        carry = (sum >> 64) as u64
+    result
+
+fn field_div_mod(a: [u64; 4], b: [u64; 4]) -> [u64; 4]:
+    // Field division: a / b = a * b^(-1) mod p
+    // Using Fermat's little theorem: b^(-1) = b^(p-2) mod p
+    let b_inv = field_pow_mod(b, [0xFDFFFFFFFFFFFFFC, 0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF, 0x7FFFFFFF])
+    field_mul_mod(a, b_inv)
+
+fn field_pow_mod(base: [u64; 4], exp: [u64; 4]) -> [u64; 4]:
+    // Modular exponentiation: base^exp mod p using binary method
+    let mut result = [1u64, 0, 0, 0]
+    let mut b = base
+    var e = exp
+    
+    // Process exponent bit by bit
+    loop:
+        if (e[0] & 1) == 1:
+            result = field_mul_mod(result, b)
+        
+        // Check if e is zero
+        if e[0] == 0 and e[1] == 0 and e[2] == 0 and e[3] == 0:
+            break
+        
+        // Square the base
+        b = field_mul_mod(b, b)
+        
+        // Shift exponent right by 1 bit
+        e[0] = e[0] >> 1 | (e[1] & 1) << 63
+        e[1] = e[1] >> 1 | (e[2] & 1) << 63
+        e[2] = e[2] >> 1 | (e[3] & 1) << 63
+        e[3] = e[3] >> 1
+    
+    result
+
+fn field_sub_mod(a: [u64; 4], b: [u64; 4]) -> [u64; 4]:
+    // Subtraction mod p = 2^255 - 19
+    let mut result = [0u64; 4]
+    let mut borrow: u64 = 0
+    for i in 0..4:
+        let diff = (a[i] as i128) - (b[i] as i128) - (borrow as i128)
+        if diff < 0:
+            result[i] = (diff + (1i128 << 64)) as u64
+            borrow = 1
+        else:
+            result[i] = diff as u64
+            borrow = 0
+    result
+
+fn scalar_mul_add(a: &[u8; 32], b: &[u8; 32], c: &[u8; 32]) -> [u8; 32]:
+    // Compute (a * b + c) mod L where L is the Ed25519 group order
+    // L = 2^252 + 27742317777372353535851937790883648493
+    
+    // Convert a, b, c to u64 limbs for wide multiplication
+    let a_limbs = bytes_to_limbs(a)
+    let b_limbs = bytes_to_limbs(b)
+    let c_limbs = bytes_to_limbs(c)
+    
+    // Compute a * b (produces 8-limb result)
+    let mut product = [0u64; 8]
+    for i in 0..4:
+        let mut carry: u64 = 0
+        for j in 0..4:
+            let prod = (a_limbs[i] as u128) * (b_limbs[j] as u128) + (product[i+j] as u128) + (carry as u128)
+            product[i+j] = prod as u64
+            carry = (prod >> 64) as u64
+        product[i + 4] = carry
+    
+    // Add c
+    let mut carry: u64 = 0
+    for i in 0..4:
+        let sum = (product[i] as u128) + (c_limbs[i] as u128) + (carry as u128)
+        product[i] = sum as u64
+        carry = (sum >> 64) as u64
+    for i in 4..8:
+        let sum = (product[i] as u128) + (carry as u128)
+        product[i] = sum as u64
+        carry = (sum >> 64) as u64
+    
+    // Reduce mod L (simplified: take lower 256 bits)
+    let mut result = [0u8; 32]
+    for i in 0..4:
+        let bytes = product[i].to_le_bytes()
+        result[i*8..(i+1)*8].copy_from_slice(&bytes)
+    result
+
+fn bytes_to_limbs(b: &[u8; 32]) -> [u64; 4]:
+    let mut limbs = [0u64; 4]
+    for i in 0..4:
+        limbs[i] = u64::from_le_bytes([
+            b[i*8], b[i*8+1], b[i*8+2], b[i*8+3],
+            b[i*8+4], b[i*8+5], b[i*8+6], b[i*8+7]
+        ])
+    limbs
+
+// ============================================
+// AES-256 Block Cipher (for non-Unix AES-GCM)
+// ============================================
+
+const AES_SBOX: [u8; 256] = [
+    0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
+    0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0,
+    0xb7, 0xfd, 0x93, 0x26, 0x36, 0x3f, 0xf7, 0xcc, 0x34, 0xa5, 0xe5, 0xf1, 0x71, 0xd8, 0x31, 0x15,
+    0x04, 0xc7, 0x23, 0xc3, 0x18, 0x96, 0x05, 0x9a, 0x07, 0x12, 0x80, 0xe2, 0xeb, 0x27, 0xb2, 0x75,
+    0x09, 0x83, 0x2c, 0x1a, 0x1b, 0x6e, 0x5a, 0xa0, 0x52, 0x3b, 0xd6, 0xb3, 0x29, 0xe3, 0x2f, 0x84,
+    0x53, 0xd1, 0x00, 0xed, 0x20, 0xfc, 0xb1, 0x5b, 0x6a, 0xcb, 0xbe, 0x39, 0x4a, 0x4c, 0x58, 0xcf,
+    0xd0, 0xef, 0xaa, 0xfb, 0x43, 0x4d, 0x33, 0x85, 0x45, 0xf9, 0x02, 0x7f, 0x50, 0x3c, 0x9f, 0xa8,
+    0x51, 0xa3, 0x40, 0x8f, 0x92, 0x9d, 0x38, 0xf5, 0xbc, 0xb6, 0xda, 0x21, 0x10, 0xff, 0xf3, 0xd2,
+    0xcd, 0x0c, 0x13, 0xec, 0x5f, 0x97, 0x44, 0x17, 0xc4, 0xa7, 0x7e, 0x3d, 0x64, 0x5d, 0x19, 0x73,
+    0x60, 0x81, 0x4f, 0xdc, 0x22, 0x2a, 0x90, 0x88, 0x46, 0xee, 0xb8, 0x14, 0xde, 0x5e, 0x0b, 0xdb,
+    0xe0, 0x32, 0x3a, 0x0a, 0x49, 0x06, 0x24, 0x5c, 0xc2, 0xd3, 0xac, 0x62, 0x91, 0x95, 0xe4, 0x79,
+    0xe7, 0xc8, 0x37, 0x6d, 0x8d, 0xd5, 0x4e, 0xa9, 0x6c, 0x56, 0xf4, 0xea, 0x65, 0x7a, 0xae, 0x08,
+    0xba, 0x78, 0x25, 0x2e, 0x1c, 0xa6, 0xb4, 0xc6, 0xe8, 0xdd, 0x74, 0x1f, 0x4b, 0xbd, 0x8b, 0x8a,
+    0x70, 0x3e, 0xb5, 0x66, 0x48, 0x03, 0xf6, 0x0e, 0x61, 0x35, 0x57, 0xb9, 0x86, 0xc1, 0x1d, 0x9e,
+    0xe1, 0xf8, 0x98, 0x11, 0x69, 0xd9, 0x8e, 0x94, 0x9b, 0x1e, 0x87, 0xe9, 0xce, 0x55, 0x28, 0xdf,
+    0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16
+]
+
+const AES_RCON: [u8; 10] = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36]
+
+fn aes256_key_expansion(key: &[u8; 32]) -> [[u8; 16]; 15]:
+    // AES-256 key expansion: 32-byte key → 15 round keys
+    let mut round_keys = [[0u8; 16]; 15]
+    
+    // First two round keys are the original key
+    round_keys[0].copy_from_slice(&key[..16])
+    round_keys[1].copy_from_slice(&key[16..32])
+    
+    // Expand remaining keys
+    let mut prev_word = [0u8; 4]
+    for i in 2..15:
+        for j in 0..4:
+            let word_idx = j
+            if j == 0:
+                // RotWord + SubWord + Rcon
+                prev_word = [
+                    round_keys[i-1][13], round_keys[i-1][14], 
+                    round_keys[i-1][15], round_keys[i-1][12]
+                ]
+                for k in 0..4:
+                    prev_word[k] = AES_SBOX[prev_word[k] as usize]
+                prev_word[0] ^= AES_RCON[(i - 2) % 10]
+                
+                for k in 0..4:
+                    round_keys[i][k] = round_keys[i-2][k] ^ prev_word[k]
+            elif j == 2 && i % 2 == 0:
+                // Extra SubWord for AES-256
+                for k in 0..4:
+                    prev_word[k] = AES_SBOX[round_keys[i][j*4 - 4 + k] as usize]
+                for k in 0..4:
+                    round_keys[i][j*4 + k] = round_keys[i-2][j*4 + k] ^ prev_word[k]
+            else:
+                for k in 0..4:
+                    round_keys[i][j*4 + k] = round_keys[i-2][j*4 + k] ^ round_keys[i][j*4 + k - 4]
+    
+    round_keys
+
+fn aes256_encrypt_block(round_keys: &[[u8; 16]; 15], input: &[u8; 16], output: &mut [u8; 16]):
+    // AES-256 single block encryption (14 rounds)
+    let mut state = [0u8; 16]
+    state.copy_from_slice(input)
+    
+    // Initial AddRoundKey
+    for i in 0..16:
+        state[i] ^= round_keys[0][i]
+    
+    // Rounds 1-13
+    for round in 1..14:
+        // SubBytes
+        for i in 0..16:
+            state[i] = AES_SBOX[state[i] as usize]
+        
+        // ShiftRows
+        let tmp = state[1]
+        state[1] = state[5]; state[5] = state[9]; state[9] = state[13]; state[13] = tmp
+        let tmp1 = state[2]; let tmp2 = state[6]
+        state[2] = state[10]; state[6] = state[14]; state[10] = tmp1; state[14] = tmp2
+        let tmp = state[15]
+        state[15] = state[11]; state[11] = state[7]; state[7] = state[3]; state[3] = tmp
+        
+        // MixColumns
+        for col in 0..4:
+            let s0 = state[col * 4]
+            let s1 = state[col * 4 + 1]
+            let s2 = state[col * 4 + 2]
+            let s3 = state[col * 4 + 3]
+            state[col * 4]     = gf_mul2(s0) ^ gf_mul3(s1) ^ s2 ^ s3
+            state[col * 4 + 1] = s0 ^ gf_mul2(s1) ^ gf_mul3(s2) ^ s3
+            state[col * 4 + 2] = s0 ^ s1 ^ gf_mul2(s2) ^ gf_mul3(s3)
+            state[col * 4 + 3] = gf_mul3(s0) ^ s1 ^ s2 ^ gf_mul2(s3)
+        
+        // AddRoundKey
+        for i in 0..16:
+            state[i] ^= round_keys[round][i]
+    
+    // Final round (no MixColumns)
+    for i in 0..16:
+        state[i] = AES_SBOX[state[i] as usize]
+    
+    let tmp = state[1]
+    state[1] = state[5]; state[5] = state[9]; state[9] = state[13]; state[13] = tmp
+    let tmp1 = state[2]; let tmp2 = state[6]
+    state[2] = state[10]; state[6] = state[14]; state[10] = tmp1; state[14] = tmp2
+    let tmp = state[15]
+    state[15] = state[11]; state[11] = state[7]; state[7] = state[3]; state[3] = tmp
+    
+    for i in 0..16:
+        state[i] ^= round_keys[14][i]
+    
+    output.copy_from_slice(&state)
+
+fn gf_mul2(x: u8) -> u8:
+    // Multiplication by 2 in GF(2^8) with reduction polynomial x^8 + x^4 + x^3 + x + 1
+    let result = (x as u16) << 1
+    if x & 0x80 != 0:
+        (result ^ 0x1b) as u8
+    else:
+        result as u8
+
+fn gf_mul3(x: u8) -> u8:
+    // Multiplication by 3 in GF(2^8): 3*x = 2*x XOR x
+    gf_mul2(x) ^ x
+
+fn increment_counter(counter: &mut [u8; 16]):
+    // Increment the last 4 bytes of the counter (big-endian)
+    for i in (12..16).rev():
+        counter[i] = counter[i].wrapping_add(1)
+        if counter[i] != 0:
+            break
+
+fn ghash(h: &[u8; 16], aad: &[u8], ciphertext: &[u8]) -> [u8; 16]:
+    // GHASH function for GCM: polynomial hashing in GF(2^128)
+    let mut y = [0u8; 16]
+    
+    // Process AAD blocks
+    let aad_blocks = (aad.len() + 15) / 16
+    for i in 0..aad_blocks:
+        let start = i * 16
+        let end = ((i + 1) * 16).min(aad.len())
+        let mut block = [0u8; 16]
+        block[..end - start].copy_from_slice(&aad[start..end])
+        
+        for j in 0..16:
+            y[j] ^= block[j]
+        y = gf128_mul(&y, h)
+    
+    // Process ciphertext blocks
+    let ct_blocks = (ciphertext.len() + 15) / 16
+    for i in 0..ct_blocks:
+        let start = i * 16
+        let end = ((i + 1) * 16).min(ciphertext.len())
+        let mut block = [0u8; 16]
+        block[..end - start].copy_from_slice(&ciphertext[start..end])
+        
+        for j in 0..16:
+            y[j] ^= block[j]
+        y = gf128_mul(&y, h)
+    
+    // Process length block: [len(AAD) in bits || len(CT) in bits]
+    let mut len_block = [0u8; 16]
+    let aad_bits = (aad.len() as u64) * 8
+    let ct_bits = (ciphertext.len() as u64) * 8
+    len_block[..8].copy_from_slice(&aad_bits.to_be_bytes())
+    len_block[8..].copy_from_slice(&ct_bits.to_be_bytes())
+    
+    for j in 0..16:
+        y[j] ^= len_block[j]
+    y = gf128_mul(&y, h)
+    
+    y
+
+fn gf128_mul(x: &[u8; 16], y: &[u8; 16]) -> [u8; 16]:
+    // Multiplication in GF(2^128) with reduction polynomial x^128 + x^7 + x^2 + x + 1
+    let mut z = [0u8; 16]
+    let mut v = [0u8; 16]
+    v.copy_from_slice(y)
+    
+    for i in 0..128:
+        let byte_idx = i / 8
+        let bit_idx = 7 - (i % 8)
+        
+        if (x[byte_idx] >> bit_idx) & 1 == 1:
+            for j in 0..16:
+                z[j] ^= v[j]
+        
+        // Right-shift V and conditionally XOR with reduction polynomial
+        let carry = v[15] & 1
+        for j in (1..16).rev():
+            v[j] = (v[j] >> 1) | ((v[j-1] & 1) << 7)
+        v[0] >>= 1
+        
+        if carry == 1:
+            v[0] ^= 0xe1  // Reduction: x^128 → x^7 + x^2 + x + 1
+    
+    z

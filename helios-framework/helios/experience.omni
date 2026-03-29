@@ -1,0 +1,387 @@
+# Helios Experience Log
+# Records EVERYTHING that happens - full recall capability
+# NOT training data - exact records of interactions
+
+module helios::experience
+
+import core::collections::HashMap
+import core::fs
+import core::io
+import core::serialize
+
+# The Experience Log - records all interactions for exact recall
+struct ExperienceLog:
+    # All experiences by ID
+    experiences: Vec<Experience>
+    
+    # Indices for fast lookup
+    by_session: HashMap<u64, Vec<usize>>
+    by_type: HashMap<ExperienceType, Vec<usize>>
+    by_time: Vec<(u64, usize)>  # Sorted by timestamp
+    
+    # Persistence
+    storage_path: String
+    current_session: Option<u64>
+    dirty: bool
+    
+    fn new(path: &str) -> own ExperienceLog:
+        fs::create_dir_all(path)
+        
+        ExperienceLog:
+            experiences: Vec::new(),
+            by_session: HashMap::new(),
+            by_type: HashMap::new(),
+            by_time: Vec::new(),
+            storage_path: path.to_string(),
+            current_session: None,
+            dirty: false
+    
+    fn open(path: &str) -> Result<own ExperienceLog, IoError>:
+        let data_path = format("{}/experiences.json", path)
+        
+        if !fs::exists(&data_path):
+            return Err(IoError::NotFound(data_path))
+        
+        let data = fs::read_string(&data_path)?
+        let mut log: ExperienceLog = serialize::from_json(&data)?
+        log.storage_path = path.to_string()
+        log.rebuild_indices()
+        
+        Ok(log)
+    
+    # Record an experience
+    fn record(&mut self, experience: Experience) -> u64:
+        let idx = self.experiences.len()
+        let id = idx as u64
+        let timestamp = experience.timestamp()
+        let session = experience.session()
+        let exp_type = experience.experience_type()
+        
+        # Add to main storage
+        self.experiences.push(experience)
+        
+        # Update indices
+        if let Some(session_id) = session:
+            self.by_session.entry(session_id)
+                .or_default()
+                .push(idx)
+        
+        self.by_type.entry(exp_type)
+            .or_default()
+            .push(idx)
+        
+        # Keep time index sorted
+        let insert_pos = self.by_time.binary_search_by(|(t, _)| t.cmp(&timestamp))
+            .unwrap_or_else(|p| p)
+        self.by_time.insert(insert_pos, (timestamp, idx))
+        
+        self.dirty = true
+        id
+    
+    # Query experiences by criteria
+    fn query(&self, criteria: ExperienceCriteria) -> Vec<Experience>:
+        let candidate_indices = match criteria:
+            ExperienceCriteria::BySession(session_id):
+                self.by_session.get(&session_id)
+                    .cloned()
+                    .unwrap_or_default()
+            
+            ExperienceCriteria::ByType(exp_type):
+                self.by_type.get(&exp_type)
+                    .cloned()
+                    .unwrap_or_default()
+            
+            ExperienceCriteria::ByContent(text):
+                self.search_content(&text)
+            
+            ExperienceCriteria::Last(n):
+                let len = self.experiences.len()
+                if n >= len:
+                    (0..len).collect()
+                else:
+                    ((len - n)..len).collect()
+            
+            ExperienceCriteria::All:
+                (0..self.experiences.len()).collect()
+        
+        candidate_indices.iter()
+            .filter_map(|idx| self.experiences.get(*idx))
+            .cloned()
+            .collect()
+    
+    # Query by time range
+    fn query_time_range(&self, start: u64, end: u64) -> Vec<Experience>:
+        let start_pos = self.by_time.binary_search_by(|(t, _)| t.cmp(&start))
+            .unwrap_or_else(|p| p)
+        let end_pos = self.by_time.binary_search_by(|(t, _)| t.cmp(&end))
+            .unwrap_or_else(|p| p)
+        
+        self.by_time[start_pos..end_pos]
+            .iter()
+            .filter_map(|(_, idx)| self.experiences.get(*idx))
+            .cloned()
+            .collect()
+    
+    # Query by session
+    fn query_session(&self, session_id: u64) -> Vec<Experience>:
+        self.by_session.get(&session_id)
+            .map(|indices| {
+                indices.iter()
+                    .filter_map(|idx| self.experiences.get(*idx))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    
+    # Get all experiences
+    fn all(&self) -> Vec<Experience>:
+        self.experiences.clone()
+    
+    # Total count
+    fn total_count(&self) -> usize:
+        self.experiences.len()
+    
+    # Count for current session
+    fn session_count(&self, session_id: u64) -> usize:
+        self.by_session.get(&session_id)
+            .map(|v| v.len())
+            .unwrap_or(0)
+    
+    # Search content (full-text)
+    fn search_content(&self, query: &str) -> Vec<usize>:
+        let query_lower = query.to_lower()
+        let mut results = Vec::new()
+        
+        for (idx, exp) in self.experiences.iter().enumerate():
+            if exp.content_contains(&query_lower):
+                results.push(idx)
+        
+        results
+    
+    # Flush to disk
+    fn flush(&mut self):
+        if !self.dirty:
+            return
+        
+        let data_path = format("{}/experiences.json", self.storage_path)
+        let data = serialize::to_json(self)
+        
+        match fs::write_string(&data_path, &data):
+            Ok(_): self.dirty = false
+            Err(e): io::eprintln("Failed to save experience log: {}", e)
+    
+    # Rebuild indices after load
+    fn rebuild_indices(&mut self):
+        self.by_session.clear()
+        self.by_type.clear()
+        self.by_time.clear()
+        
+        for (idx, exp) in self.experiences.iter().enumerate():
+            if let Some(session_id) = exp.session():
+                self.by_session.entry(session_id)
+                    .or_default()
+                    .push(idx)
+            
+            self.by_type.entry(exp.experience_type())
+                .or_default()
+                .push(idx)
+            
+            self.by_time.push((exp.timestamp(), idx))
+        
+        # Sort time index
+        self.by_time.sort_by(|(a, _), (b, _)| a.cmp(b))
+
+
+# An experience - a recorded event
+enum Experience:
+    # User provided input
+    UserInput:
+        input: Input
+        timestamp: u64
+        session: u64
+    
+    # Helios generated a response
+    HeliosResponse:
+        response: Response
+        in_response_to: u64
+        timestamp: u64
+    
+    # System event
+    SystemEvent:
+        event: String
+        timestamp: u64
+    
+    # Learning event (new information acquired)
+    LearningEvent:
+        what_learned: String
+        source: String
+        information_ids: Vec<u64>
+        timestamp: u64
+    
+    # Error occurred
+    ErrorEvent:
+        error: String
+        context: String
+        timestamp: u64
+    
+    # User feedback
+    UserFeedback:
+        feedback_type: FeedbackType
+        about: u64  # Experience ID this feedback is about
+        details: String
+        timestamp: u64
+    
+    # Capability used
+    CapabilityUsed:
+        capability_name: String
+        parameters: String
+        result: String
+        success: bool
+        timestamp: u64
+    
+    # Self-modification (with user approval)
+    SelfModification:
+        modification_type: String
+        details: String
+        approved_by_user: bool
+        timestamp: u64
+    
+    fn timestamp(&self) -> u64:
+        match self:
+            Experience::UserInput { timestamp, .. }: *timestamp
+            Experience::HeliosResponse { timestamp, .. }: *timestamp
+            Experience::SystemEvent { timestamp, .. }: *timestamp
+            Experience::LearningEvent { timestamp, .. }: *timestamp
+            Experience::ErrorEvent { timestamp, .. }: *timestamp
+            Experience::UserFeedback { timestamp, .. }: *timestamp
+            Experience::CapabilityUsed { timestamp, .. }: *timestamp
+            Experience::SelfModification { timestamp, .. }: *timestamp
+    
+    fn session(&self) -> Option<u64>:
+        match self:
+            Experience::UserInput { session, .. }: Some(*session)
+            _: None
+    
+    fn experience_type(&self) -> ExperienceType:
+        match self:
+            Experience::UserInput { .. }: ExperienceType::Input
+            Experience::HeliosResponse { .. }: ExperienceType::Response
+            Experience::SystemEvent { .. }: ExperienceType::System
+            Experience::LearningEvent { .. }: ExperienceType::Learning
+            Experience::ErrorEvent { .. }: ExperienceType::Error
+            Experience::UserFeedback { .. }: ExperienceType::Feedback
+            Experience::CapabilityUsed { .. }: ExperienceType::Capability
+            Experience::SelfModification { .. }: ExperienceType::Modification
+    
+    fn content_contains(&self, query: &str) -> bool:
+        match self:
+            Experience::UserInput { input, .. }:
+                input.to_string().to_lower().contains(query)
+            Experience::HeliosResponse { response, .. }:
+                response.to_string().to_lower().contains(query)
+            Experience::SystemEvent { event, .. }:
+                event.to_lower().contains(query)
+            Experience::LearningEvent { what_learned, .. }:
+                what_learned.to_lower().contains(query)
+            Experience::ErrorEvent { error, context, .. }:
+                error.to_lower().contains(query) || context.to_lower().contains(query)
+            Experience::UserFeedback { details, .. }:
+                details.to_lower().contains(query)
+            Experience::CapabilityUsed { capability_name, result, .. }:
+                capability_name.to_lower().contains(query) || result.to_lower().contains(query)
+            Experience::SelfModification { details, .. }:
+                details.to_lower().contains(query)
+    
+    fn format(&self) -> String:
+        match self:
+            Experience::UserInput { input, timestamp, session }:
+                format("[{}] Session {} - User: {}", 
+                    time::format(*timestamp), session, input)
+            
+            Experience::HeliosResponse { response, timestamp, in_response_to }:
+                format("[{}] Helios (re: #{}): {}", 
+                    time::format(*timestamp), in_response_to, response)
+            
+            Experience::SystemEvent { event, timestamp }:
+                format("[{}] System: {}", time::format(*timestamp), event)
+            
+            Experience::LearningEvent { what_learned, source, timestamp, .. }:
+                format("[{}] Learned from {}: {}", 
+                    time::format(*timestamp), source, what_learned)
+            
+            Experience::ErrorEvent { error, timestamp, .. }:
+                format("[{}] Error: {}", time::format(*timestamp), error)
+            
+            Experience::UserFeedback { feedback_type, details, timestamp, .. }:
+                format("[{}] Feedback ({:?}): {}", 
+                    time::format(*timestamp), feedback_type, details)
+            
+            Experience::CapabilityUsed { capability_name, success, timestamp, .. }:
+                format("[{}] Used '{}' - {}", 
+                    time::format(*timestamp), capability_name, 
+                    if *success { "Success" } else { "Failed" })
+            
+            Experience::SelfModification { modification_type, approved_by_user, timestamp, .. }:
+                format("[{}] Self-modified ({}) - Approved: {}", 
+                    time::format(*timestamp), modification_type, approved_by_user)
+
+
+# Experience type for indexing
+enum ExperienceType:
+    Input
+    Response
+    System
+    Learning
+    Error
+    Feedback
+    Capability
+    Modification
+
+
+# Query criteria
+enum ExperienceCriteria:
+    BySession(u64)
+    ByType(ExperienceType)
+    ByContent(String)
+    Last(usize)
+    All
+
+
+# Feedback types
+enum FeedbackType:
+    Correct       # Response was correct
+    Incorrect     # Response was incorrect
+    Helpful       # Response was helpful
+    NotHelpful    # Response was not helpful
+    TooVerbose    # Response was too long
+    TooTerse      # Response was too short
+    Clarification # User clarified something
+
+
+# Recall query types (for user commands)
+enum RecallQuery:
+    Information(String)              # Recall information about topic
+    Experience(ExperienceCriteria)   # Recall specific experiences
+    TimeRange(u64, u64)              # Recall by time range
+    Session(u64)                     # Recall entire session
+    All                              # Recall everything
+
+
+# Session tracking
+struct Session:
+    id: u64
+    started_at: u64
+    last_activity: u64
+    interaction_count: u64
+    
+    fn new() -> Session:
+        let now = time::now()
+        Session:
+            id: uuid::generate_u64(),
+            started_at: now,
+            last_activity: now,
+            interaction_count: 0
+    
+    fn record_activity(&mut self):
+        self.last_activity = time::now()
+        self.interaction_count += 1

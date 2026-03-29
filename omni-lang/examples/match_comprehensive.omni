@@ -1,0 +1,82 @@
+// Match Comprehensive Test
+
+fn test_literal_match():
+    let x = 42
+    match x:
+        1:
+            println("FAIL: matched 1")
+        42:
+            println("[PASS] literal int match")
+        _:
+            println("FAIL: fell through to wildcard")
+
+fn test_wildcard_match():
+    let x = "anything"
+    match x:
+        "specific":
+            println("FAIL: matched specific")
+        _:
+            println("[PASS] wildcard match")
+
+fn test_binding_match():
+    let x = 99
+    match x:
+        val:
+            println("[PASS] binding match, val = " + format(val))
+
+fn test_string_match():
+    let cmd = "quit"
+    match cmd:
+        "help":
+            println("FAIL: matched help")
+        "quit":
+            println("[PASS] string match")
+        _:
+            println("FAIL: wildcard")
+
+fn test_bool_match():
+    let flag = true
+    match flag:
+        false:
+            println("FAIL: matched false")
+        true:
+            println("[PASS] bool match")
+
+fn test_nested_match():
+    let x = 2
+    var result = "unknown"
+    match x:
+        1:
+            result = "one"
+        2:
+            result = "two"
+        3:
+            result = "three"
+        _:
+            result = "other"
+    println("[PASS] nested match result = " + result)
+
+fn test_match_in_function():
+    let grade = classify(85)
+    println("[PASS] match in function: " + grade)
+
+fn classify(score: Int) -> String:
+    if score >= 90:
+        return "A"
+    elif score >= 80:
+        return "B"
+    elif score >= 70:
+        return "C"
+    else:
+        return "F"
+
+fn main():
+    println("=== Match Comprehensive Test ===")
+    test_literal_match()
+    test_wildcard_match()
+    test_binding_match()
+    test_string_match()
+    test_bool_match()
+    test_nested_match()
+    test_match_in_function()
+    println("=== All Match Tests Complete ===")

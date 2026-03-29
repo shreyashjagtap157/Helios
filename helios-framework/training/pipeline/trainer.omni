@@ -1,0 +1,310 @@
+
+# HELIOS Cognitive Training Pipeline
+# Cognitive, knowledge-graph-based, memory-efficient (max 8GB) training
+
+module CognitiveTraining
+
+import system::fs
+import system::time
+import core::json
+import core::logging as log
+import brain::knowledge_graph
+import brain::adaptive_learning
+import brain::tokenizer
+import training::pipeline::data_loader
+
+# Config for cognitive training (no ML/gradient/quantization)
+struct CognitiveTrainingConfig:
+    max_memory_gb: usize  # Maximum memory use (default: 8)
+    checkpoint_interval: usize
+    checkpoint_dir: &str
+    resume_from: Option<&str>
+
+    fn default() -> own CognitiveTrainingConfig:
+        return CognitiveTrainingConfig {
+            max_memory_gb: 8,
+            checkpoint_interval: 1000,
+            checkpoint_dir: "training/checkpoints",
+            resume_from: None
+        }
+
+# Main training loop: grows knowledge graph, prunes low-confidence nodes, consolidates memory
+fn run_training(config: CognitiveTrainingConfig):
+    log::info("Starting cognitive training (max memory: {} GB)", config.max_memory_gb)
+    let kg = knowledge_graph::load_or_init()
+    let mut steps = 0
+    while true:
+        # Simulate observation/learning
+        let new_facts = adaptive_learning::observe()
+        for fact in new_facts:
+            kg.add_fact(fact)
+        # Prune if memory exceeds limit
+        if kg.memory_usage_gb() > config.max_memory_gb:
+            kg.prune_low_confidence()
+        steps += 1
+        if steps % config.checkpoint_interval == 0:
+            kg.save(config.checkpoint_dir)
+        # ...additional logic as needed...
+
+
+# Serializable state for pause/resume
+struct TrainingState:
+    current_step: usize
+    current_epoch: usize
+    total_tokens: usize
+    best_loss: f32
+    last_checkpoint: &str
+    
+    fn new() -> own TrainingState:
+        return TrainingState {
+            current_step: 0,
+            current_epoch: 0,
+            total_tokens: 0,
+            best_loss: f32::MAX,
+            last_checkpoint: ""
+        }
+    
+    fn save(&self, path: &str) -> Result<(), Error>:
+        log::info("Saving training state to {}", path)
+        let data = json::serialize(self)
+        fs::write(path, data)
+        return Ok(())
+    
+    fn load(path: &str) -> Result<own TrainingState, Error>:
+        log::info("Loading training state from {}", path)
+        let data = fs::read_string(path)?
+        return json::deserialize(data)
+
+
+struct TrainingPipeline:
+    config: TrainingConfig
+    state: TrainingState
+    paused: bool
+    knowledge_graph: knowledge_graph::KnowledgeGraph
+    data_loader: Option<data_loader::StreamingKnowledgeLoader>
+    
+    fn new(config: TrainingConfig, kg: knowledge_graph::KnowledgeGraph) -> own TrainingPipeline:
+        log::info("Initializing knowledge ingestion pipeline")
+        log::info("Config: chunk_size={}, consolidation_rate={}", 
+            config.ingestion_chunk_size, config.consolidation_rate)
+        
+        # Setup signal handlers for graceful pause
+        signal::on_interrupt(Self::handle_interrupt)
+        
+        return TrainingPipeline {
+            config,
+            state: TrainingState::new(),
+            paused: false,
+            knowledge_graph: kg,
+            data_loader: None
+        }
+    
+    fn handle_interrupt(&mut self):
+        log::warn("Interrupt received, saving checkpoint...")
+        self.save_checkpoint("interrupted")
+        log::info("Checkpoint saved. Resume with --resume flag")
+    
+    fn save_checkpoint(&mut self, name: &str):
+        let path = format!("{}/checkpoint_{}", self.config.checkpoint_dir, name)
+        fs::create_dir_all(&path)
+        
+        self.state.last_checkpoint = time::now_iso()
+        self.state.save(&format!("{}/state.json", path))
+        
+        # Save knowledge graph state here
+        log::info("Checkpoint saved: {}", path)
+    
+    fn load_checkpoint(&mut self, path: &str):
+        log::info("Resuming from checkpoint: {}", path)
+        self.state = TrainingState::load(&format!("{}/state.json", path))?
+        log::info("Resumed at step {}", self.state.current_step)
+    
+    fn pause(&mut self):
+        log::info("Knowledge ingestion paused")
+        self.paused = true
+        self.save_checkpoint("paused")
+    
+    fn resume(&mut self):
+        log::info("Knowledge ingestion resumed")
+        self.paused = false
+    
+    fn ingest_step(&mut self, chunk: &KnowledgeChunk) -> f32:
+        let step = self.state.current_step
+        
+        # Ingest knowledge items into the graph
+        let items_ingested = self.ingest_knowledge(chunk)
+        
+        # Consolidate and prune periodically
+        let confidence = self.consolidate_knowledge()
+        
+        # Log metrics
+        if step % 10 == 0:
+            log::info("Step {} | Items: {} | Avg confidence: {:.4}", 
+                step, items_ingested, confidence)
+        
+        # Update state
+        self.state.current_step += 1
+        self.state.total_tokens += items_ingested
+        
+        if confidence > 0.0 && confidence < self.state.best_loss:
+            self.state.best_loss = confidence  # Reusing field for best confidence
+        
+        # Auto-checkpoint
+        if step > 0 && step % self.config.checkpoint_interval == 0:
+            self.save_checkpoint(&format!("step_{}", step))
+        
+        return confidence
+    
+    fn run(&mut self):
+        log::info("Starting knowledge ingestion...")
+        
+        # Check for resume
+        if let Some(path) = self.config.resume_from:
+            self.load_checkpoint(path)
+        
+        loop:
+            if self.paused:
+                time::sleep_ms(1000)
+                continue
+            
+            # Check max steps
+            if let Some(max) = self.config.max_steps:
+                if self.state.current_step >= max:
+                    log::info("Reached max steps, stopping")
+                    break
+            
+            # Get next knowledge chunk from data loader
+            let chunk = self.get_next_chunk()
+            
+            # Ingest step
+            let confidence = self.ingest_step(&chunk)
+        
+    
+    fn ingest_knowledge(&mut self, chunk: &KnowledgeChunk) -> usize:
+        # Add knowledge items from chunk to the knowledge graph
+        let mut count = 0
+        
+        for item in &chunk.items:
+            # Add entities as nodes
+            for entity in &item.entities:
+                let node_id = self.knowledge_graph.find_or_create_node(
+                    knowledge_graph::NodeType::Entity,
+                    entity
+                )
+                
+                # Set metadata
+                self.knowledge_graph.set_node_property(
+                    node_id,
+                    "source",
+                    knowledge_graph::Value::String(item.source.clone())
+                )
+                self.knowledge_graph.set_node_property(
+                    node_id,
+                    "confidence",
+                    knowledge_graph::Value::Float(item.confidence)
+                )
+                self.knowledge_graph.set_node_property(
+                    node_id,
+                    "text",
+                    knowledge_graph::Value::String(item.text.clone())
+                )
+                
+                count += 1
+            
+            # Add relations as edges
+            for (subject, predicate, object) in &item.relations:
+                let subj_id = self.knowledge_graph.find_or_create_node(
+                    knowledge_graph::NodeType::Entity,
+                    subject
+                )
+                let obj_id = self.knowledge_graph.find_or_create_node(
+                    knowledge_graph::NodeType::Entity,
+                    object
+                )
+                
+                # Determine edge type from predicate
+                let edge_type = match predicate.as_str():
+                    "is" | "is_a" => knowledge_graph::EdgeType::IsA
+                    "has" | "has_a" => knowledge_graph::EdgeType::HasProperty
+                    "contains" => knowledge_graph::EdgeType::Contains
+                    "produces" => knowledge_graph::EdgeType::Causes
+                    "requires" => knowledge_graph::EdgeType::Requires
+                    _ => knowledge_graph::EdgeType::RelatedTo
+                
+                self.knowledge_graph.add_edge(
+                    subj_id,
+                    obj_id,
+                    edge_type,
+                    item.confidence
+                )
+        
+        return count
+    
+    fn consolidate_knowledge(&mut self) -> f32:
+        # Consolidate knowledge graph: merge duplicates, prune low-confidence, compute metrics
+        let mut total_confidence = 0.0
+        let mut node_count = 0
+        
+        # Compute average confidence across all nodes
+        for node in self.knowledge_graph.get_all_nodes():
+            if let Some(conf_val) = node.get_property("confidence"):
+                if let knowledge_graph::Value::Float(conf) = conf_val:
+                    total_confidence += conf
+                    node_count += 1
+        
+        let avg_confidence = if node_count > 0:
+            total_confidence / node_count as f64
+        else:
+            0.0
+        
+        # Periodic consolidation based on config interval
+        if self.state.current_step % self.config.knowledge_consolidation_interval == 0:
+            log::info("Running full knowledge consolidation...")
+            
+            # Merge duplicate nodes with similar names
+            self.knowledge_graph.merge_similar_nodes(0.85)
+            
+            # Prune low-confidence nodes below threshold
+            let pruned = self.knowledge_graph.prune_by_confidence(
+                self.config.min_confidence
+            )
+            log::debug("Pruned {} low-confidence nodes", pruned)
+            
+            # Decay stale knowledge (older than 30 days)
+            let max_age_hours = 30 * 24
+            self.knowledge_graph.decay_old_nodes(max_age_hours, 0.9)
+        
+        return avg_confidence as f32
+    
+    fn get_next_chunk(&mut self) -> KnowledgeChunk:
+        # Initialize data loader if not already created
+        if self.data_loader.is_none():
+            let tokenizer = brain::tokenizer::LexicalTokenizer::new()
+            let loader_config = data_loader::IngestionConfig {
+                data_path: self.config.data_path.clone(),
+                chunk_size: self.config.ingestion_chunk_size,
+                max_text_length: 8192,
+                buffer_size: 10000,
+                num_workers: 4,
+                prefetch_chunks: 2,
+                cache_dir: "cache/knowledge".to_string()
+            }
+            
+            self.data_loader = Some(data_loader::StreamingKnowledgeLoader::new(
+                loader_config,
+                &tokenizer,
+                true  # is_incremental
+            ))
+        
+        # Get next chunk from loader
+        if let Some(loader) = &mut self.data_loader:
+            if let Some(chunk) = loader.next_chunk():
+                return chunk
+        
+        # If no more data, return empty chunk
+        return KnowledgeChunk {
+            items: Vec::new(),
+            source_files: Vec::new()
+        }
+        self.save_checkpoint("final")
+        log::info("Knowledge ingestion complete!")

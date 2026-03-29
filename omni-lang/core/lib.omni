@@ -1,0 +1,239 @@
+// HELIOS Standard Library - Core Module
+// Written in Omni
+
+module core
+
+// Re-export common modules
+pub use logging
+pub use json
+pub use math
+
+// Basic traits
+trait Display:
+    fn to_string(&self) -> String
+
+trait Debug:
+    fn debug_string(&self) -> String
+
+trait Clone:
+    fn clone(&self) -> own Self
+
+trait Default:
+    fn default() -> own Self
+
+trait Eq:
+    fn eq(&self, other: &Self) -> bool
+    fn ne(&self, other: &Self) -> bool:
+        return !self.eq(other)
+
+trait Ord:
+    fn cmp(&self, other: &Self) -> Ordering
+    fn lt(&self, other: &Self) -> bool
+    fn gt(&self, other: &Self) -> bool
+    fn le(&self, other: &Self) -> bool
+    fn ge(&self, other: &Self) -> bool
+
+enum Ordering:
+    Less
+    Equal
+    Greater
+
+// Option type
+enum Option<T>:
+    Some(value: T)
+    None
+    
+    fn is_some(&self) -> bool:
+        match self:
+            Some(_): true
+            None: false
+    
+    fn is_none(&self) -> bool:
+        return !self.is_some()
+    
+    fn unwrap(&self) -> &T:
+        match self:
+            Some(v): v
+            None: panic("unwrap on None")
+    
+    fn unwrap_or(&self, default: T) -> T:
+        match self:
+            Some(v): v
+            None: default
+    
+    fn map<U>(&self, f: fn(&T) -> U) -> Option<U>:
+        match self:
+            Some(v): Some(f(v))
+            None: None
+
+// Result type for error handling
+enum Result<T, E>:
+    Ok(value: T)
+    Err(error: E)
+    
+    fn is_ok(&self) -> bool:
+        match self:
+            Ok(_): true
+            Err(_): false
+    
+    fn is_err(&self) -> bool:
+        return !self.is_ok()
+    
+    fn unwrap(&self) -> &T:
+        match self:
+            Ok(v): v
+            Err(e): panic("unwrap on Err: {:?}", e)
+    
+    fn unwrap_err(&self) -> &E:
+        match self:
+            Ok(_): panic("unwrap_err on Ok")
+            Err(e): e
+    
+    fn map<U>(&self, f: fn(&T) -> U) -> Result<U, E>:
+        match self:
+            Ok(v): Ok(f(v))
+            Err(e): Err(e)
+    
+    fn map_err<F>(&self, f: fn(&E) -> F) -> Result<T, F>:
+        match self:
+            Ok(v): Ok(v)
+            Err(e): Err(f(e))
+
+// String operations
+impl String:
+    fn len(&self) -> usize:
+        // Native implementation
+        ...
+    
+    fn is_empty(&self) -> bool:
+        return self.len() == 0
+    
+    fn contains(&self, pattern: &str) -> bool:
+        ...
+    
+    fn starts_with(&self, prefix: &str) -> bool:
+        ...
+    
+    fn ends_with(&self, suffix: &str) -> bool:
+        ...
+    
+    fn split(&self, delim: &str) -> Vec<&str>:
+        ...
+    
+    fn trim(&self) -> &str:
+        ...
+    
+    fn to_lower(&self) -> String:
+        ...
+    
+    fn to_upper(&self) -> String:
+        ...
+
+// Vector (dynamic array)
+struct Vec<T>:
+    data: own [T]
+    len: usize
+    capacity: usize
+    
+    fn new() -> own Vec<T>:
+        return Vec { data: [], len: 0, capacity: 0 }
+    
+    fn with_capacity(cap: usize) -> own Vec<T>:
+        return Vec { data: alloc(cap), len: 0, capacity: cap }
+    
+    fn push(&mut self, item: T):
+        if self.len >= self.capacity:
+            self.grow()
+        self.data[self.len] = item
+        self.len += 1
+    
+    fn pop(&mut self) -> Option<T>:
+        if self.len == 0:
+            return None
+        self.len -= 1
+        return Some(self.data[self.len])
+    
+    fn get(&self, index: usize) -> Option<&T>:
+        if index >= self.len:
+            return None
+        return Some(&self.data[index])
+    
+    fn len(&self) -> usize:
+        return self.len
+    
+    fn is_empty(&self) -> bool:
+        return self.len == 0
+    
+    fn iter(&self) -> impl Iterator<&T>:
+        return VecIterator { vec: self, index: 0 }
+
+// HashMap
+struct HashMap<K, V>:
+    buckets: Vec<Vec<(K, V)>>
+    len: usize
+    
+    fn new() -> own HashMap<K, V>:
+        let buckets = Vec::with_capacity(16)
+        for _ in 0..16:
+            buckets.push(Vec::new())
+        return HashMap { buckets, len: 0 }
+    
+    fn insert(&mut self, key: K, value: V) -> Option<V>:
+        let hash = key.hash() % self.buckets.len()
+        let bucket = &mut self.buckets[hash]
+        
+        for (k, v) in bucket.iter_mut():
+            if k == &key:
+                let old = *v
+                *v = value
+                return Some(old)
+        
+        bucket.push((key, value))
+        self.len += 1
+        return None
+    
+    fn get(&self, key: &K) -> Option<&V>:
+        let hash = key.hash() % self.buckets.len()
+        let bucket = &self.buckets[hash]
+        
+        for (k, v) in bucket.iter():
+            if k == key:
+                return Some(v)
+        return None
+    
+    fn contains_key(&self, key: &K) -> bool:
+        return self.get(key).is_some()
+    
+    fn len(&self) -> usize:
+        return self.len
+
+// HashSet
+struct HashSet<T>:
+    map: HashMap<T, ()>
+    
+    fn new() -> own HashSet<T>:
+        return HashSet { map: HashMap::new() }
+    
+    fn insert(&mut self, value: T) -> bool:
+        return self.map.insert(value, ()).is_none()
+    
+    fn contains(&self, value: &T) -> bool:
+        return self.map.contains_key(value)
+    
+    fn len(&self) -> usize:
+        return self.map.len()
+
+// Formatting
+fn format(template: &str, args: ...) -> String:
+    // Format string with arguments
+    ...
+
+fn println(msg: &str):
+    system::stdout::write_line(msg)
+
+fn print(msg: &str):
+    system::stdout::write(msg)
+
+fn panic(msg: &str):
+    system::stderr::write_line(&format!("PANIC: {}", msg))
+    system::exit(1)

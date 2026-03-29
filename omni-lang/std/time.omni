@@ -1,0 +1,850 @@
+// Omni Standard Library: Time
+// Time measurement, duration, and date/time handling
+//
+// WARNING: This file uses brace-delimited syntax (Rust-style { }) in extern
+// declarations. Omni uses indentation-based (colon-delimited) syntax. This
+// file is an aspirational spec and cannot be parsed by the current compiler
+// until rewritten. See ISSUES.md O-078.
+
+module std::time
+
+import std::core
+
+// ============================================
+// Platform FFI
+// ============================================
+
+extern "C" {
+    // Unix/POSIX
+    fn clock_gettime(clk_id: i32, ts: *Timespec) -> i32
+    fn gettimeofday(tv: *Timeval, tz: *u8) -> i32
+    fn nanosleep(req: *Timespec, rem: *Timespec) -> i32
+    fn time(t: *i64) -> i64
+    fn localtime_r(timep: *i64, result: *Tm) -> *Tm
+    fn gmtime_r(timep: *i64, result: *Tm) -> *Tm
+    fn mktime(tm: *Tm) -> i64
+    fn strftime(s: *u8, max: usize, format: *u8, tm: *Tm) -> usize
+    
+    // Windows
+    fn QueryPerformanceCounter(counter: *i64) -> i32
+    fn QueryPerformanceFrequency(freq: *i64) -> i32
+    fn GetSystemTimeAsFileTime(lpSystemTimeAsFileTime: *u64)
+    fn GetLocalTime(lpSystemTime: *SystemTimeW)
+    fn Sleep(dwMilliseconds: u32)
+}
+
+// C structures
+struct Timespec:
+    tv_sec: i64
+    tv_nsec: i64
+
+struct Timeval:
+    tv_sec: i64
+    tv_usec: i64
+
+struct Tm:
+    tm_sec: i32
+    tm_min: i32
+    tm_hour: i32
+    tm_mday: i32
+    tm_mon: i32
+    tm_year: i32
+    tm_wday: i32
+    tm_yday: i32
+    tm_isdst: i32
+
+struct SystemTimeW:
+    wYear: u16
+    wMonth: u16
+    wDayOfWeek: u16
+    wDay: u16
+    wHour: u16
+    wMinute: u16
+    wSecond: u16
+    wMilliseconds: u16
+
+// Constants
+const CLOCK_REALTIME: i32 = 0
+const CLOCK_MONOTONIC: i32 = 1
+const CLOCK_PROCESS_CPUTIME_ID: i32 = 2
+const CLOCK_THREAD_CPUTIME_ID: i32 = 3
+
+const NANOS_PER_SEC: u64 = 1_000_000_000
+const NANOS_PER_MILLI: u64 = 1_000_000
+const NANOS_PER_MICRO: u64 = 1_000
+const MICROS_PER_SEC: u64 = 1_000_000
+const MILLIS_PER_SEC: u64 = 1_000
+
+// Unix epoch: 1970-01-01T00:00:00Z
+const UNIX_EPOCH_SECS: i64 = 0
+
+// Windows FILETIME epoch: 1601-01-01T00:00:00Z
+// Difference in 100ns intervals from Windows to Unix epoch
+const WINDOWS_EPOCH_DIFF: u64 = 116444736000000000
+
+// ============================================
+// Duration
+// ============================================
+
+struct Duration:
+    secs: u64
+    nanos: u32  // Always less than 1 billion
+    
+    fn zero() -> Duration:
+        Duration { secs: 0, nanos: 0 }
+    
+    fn new(secs: u64, nanos: u32) -> Duration:
+        Duration {
+            secs: secs + (nanos / NANOS_PER_SEC as u32) as u64,
+            nanos: nanos % NANOS_PER_SEC as u32
+        }
+    
+    fn from_secs(secs: u64) -> Duration:
+        Duration { secs, nanos: 0 }
+    
+    fn from_millis(millis: u64) -> Duration:
+        Duration {
+            secs: millis / MILLIS_PER_SEC,
+            nanos: ((millis % MILLIS_PER_SEC) * NANOS_PER_MILLI) as u32
+        }
+    
+    fn from_micros(micros: u64) -> Duration:
+        Duration {
+            secs: micros / MICROS_PER_SEC,
+            nanos: ((micros % MICROS_PER_SEC) * NANOS_PER_MICRO) as u32
+        }
+    
+    fn from_nanos(nanos: u64) -> Duration:
+        Duration {
+            secs: nanos / NANOS_PER_SEC,
+            nanos: (nanos % NANOS_PER_SEC) as u32
+        }
+    
+    fn from_secs_f64(secs: f64) -> Duration:
+        let whole_secs = secs as u64
+        let nanos = ((secs - whole_secs as f64) * NANOS_PER_SEC as f64) as u32
+        Duration { secs: whole_secs, nanos }
+    
+    fn as_secs(&self) -> u64:
+        self.secs
+    
+    fn as_millis(&self) -> u128:
+        (self.secs as u128) * (MILLIS_PER_SEC as u128) + (self.nanos / NANOS_PER_MILLI as u32) as u128
+    
+    fn as_micros(&self) -> u128:
+        (self.secs as u128) * (MICROS_PER_SEC as u128) + (self.nanos / NANOS_PER_MICRO as u32) as u128
+    
+    fn as_nanos(&self) -> u128:
+        (self.secs as u128) * (NANOS_PER_SEC as u128) + (self.nanos as u128)
+    
+    fn as_secs_f64(&self) -> f64:
+        (self.secs as f64) + (self.nanos as f64) / (NANOS_PER_SEC as f64)
+    
+    fn subsec_millis(&self) -> u32:
+        self.nanos / NANOS_PER_MILLI as u32
+    
+    fn subsec_micros(&self) -> u32:
+        self.nanos / NANOS_PER_MICRO as u32
+    
+    fn subsec_nanos(&self) -> u32:
+        self.nanos
+    
+    fn is_zero(&self) -> bool:
+        self.secs == 0 and self.nanos == 0
+    
+    fn checked_add(&self, other: &Duration) -> Option<Duration>:
+        let mut nanos = self.nanos + other.nanos
+        let mut secs = self.secs
+        
+        if nanos >= NANOS_PER_SEC as u32:
+            nanos = nanos - NANOS_PER_SEC as u32
+            secs = secs + 1
+        
+        match secs.checked_add(other.secs):
+            Some(s) => Some(Duration { secs: s, nanos })
+            None => None
+    
+    fn checked_sub(&self, other: &Duration) -> Option<Duration>:
+        if other.secs > self.secs:
+            return None
+        if other.secs == self.secs and other.nanos > self.nanos:
+            return None
+        
+        var nanos = self.nanos
+        var secs = self.secs - other.secs
+        
+        if other.nanos > self.nanos:
+            secs = secs - 1
+            nanos = nanos + NANOS_PER_SEC as u32 - other.nanos
+        else:
+            nanos = nanos - other.nanos
+        
+        Some(Duration { secs, nanos })
+    
+    fn saturating_add(&self, other: &Duration) -> Duration:
+        self.checked_add(other).unwrap_or(Duration { secs: u64::MAX, nanos: NANOS_PER_SEC as u32 - 1 })
+    
+    fn saturating_sub(&self, other: &Duration) -> Duration:
+        self.checked_sub(other).unwrap_or(Duration::zero())
+    
+    fn mul(&self, factor: u32) -> Duration:
+        let total_nanos = (self.nanos as u64) * (factor as u64)
+        let extra_secs = total_nanos / NANOS_PER_SEC
+        let nanos = (total_nanos % NANOS_PER_SEC) as u32
+        let secs = self.secs * (factor as u64) + extra_secs
+        Duration { secs, nanos }
+    
+    fn div(&self, divisor: u32) -> Duration:
+        if divisor == 0:
+            return Duration { secs: u64::MAX, nanos: NANOS_PER_SEC as u32 - 1 }
+        
+        let total_nanos = self.as_nanos()
+        let result_nanos = total_nanos / (divisor as u128)
+        
+        Duration {
+            secs: (result_nanos / NANOS_PER_SEC as u128) as u64,
+            nanos: (result_nanos % NANOS_PER_SEC as u128) as u32
+        }
+
+// ============================================
+// Instant (Monotonic Clock)
+// ============================================
+
+struct Instant:
+    secs: u64
+    nanos: u32
+    
+    fn now() -> Instant:
+        // Platform-specific monotonic clock
+        @cfg(unix):
+            var ts = Timespec { tv_sec: 0, tv_nsec: 0 }
+            clock_gettime(CLOCK_MONOTONIC, &ts)
+            Instant {
+                secs: ts.tv_sec as u64,
+                nanos: ts.tv_nsec as u32
+            }
+        
+        @cfg(windows):
+            var counter: i64 = 0
+            var freq: i64 = 0
+            QueryPerformanceCounter(&counter)
+            QueryPerformanceFrequency(&freq)
+            
+            let secs = (counter / freq) as u64
+            let nanos = ((counter % freq) * NANOS_PER_SEC as i64 / freq) as u32
+            Instant { secs, nanos }
+    
+    fn elapsed(&self) -> Duration:
+        Instant::now().duration_since(self)
+    
+    fn duration_since(&self, earlier: &Instant) -> Duration:
+        var secs = self.secs - earlier.secs
+        var nanos: i64 = self.nanos as i64 - earlier.nanos as i64
+        
+        if nanos < 0:
+            secs = secs - 1
+            nanos = nanos + NANOS_PER_SEC as i64
+        
+        Duration { secs, nanos: nanos as u32 }
+    
+    fn checked_duration_since(&self, earlier: &Instant) -> Option<Duration>:
+        if self.secs < earlier.secs:
+            return None
+        if self.secs == earlier.secs and self.nanos < earlier.nanos:
+            return None
+        Some(self.duration_since(earlier))
+    
+    fn saturating_duration_since(&self, earlier: &Instant) -> Duration:
+        self.checked_duration_since(earlier).unwrap_or(Duration::zero())
+    
+    fn checked_add(&self, duration: &Duration) -> Option<Instant>:
+        let mut nanos = self.nanos + duration.nanos
+        let mut secs = self.secs
+        
+        if nanos >= NANOS_PER_SEC as u32:
+            nanos = nanos - NANOS_PER_SEC as u32
+            secs = secs + 1
+        
+        match secs.checked_add(duration.secs):
+            Some(s) => Some(Instant { secs: s, nanos })
+            None => None
+    
+    fn checked_sub(&self, duration: &Duration) -> Option<Instant>:
+        if duration.secs > self.secs:
+            return None
+        
+        var nanos = self.nanos
+        var secs = self.secs - duration.secs
+        
+        if duration.nanos > self.nanos:
+            if secs == 0:
+                return None
+            secs = secs - 1
+            nanos = nanos + NANOS_PER_SEC as u32 - duration.nanos
+        else:
+            nanos = nanos - duration.nanos
+        
+        Some(Instant { secs, nanos })
+
+// ============================================
+// SystemTime (Wall Clock)
+// ============================================
+
+struct SystemTime:
+    secs: i64  // Seconds since Unix epoch
+    nanos: u32
+    
+    const UNIX_EPOCH: SystemTime = SystemTime { secs: 0, nanos: 0 }
+    
+    fn now() -> SystemTime:
+        @cfg(unix):
+            var ts = Timespec { tv_sec: 0, tv_nsec: 0 }
+            clock_gettime(CLOCK_REALTIME, &ts)
+            SystemTime {
+                secs: ts.tv_sec,
+                nanos: ts.tv_nsec as u32
+            }
+        
+        @cfg(windows):
+            var ft: u64 = 0
+            GetSystemTimeAsFileTime(&ft)
+            
+            // Convert from Windows FILETIME (100ns since 1601) to Unix
+            let unix_100ns = ft - WINDOWS_EPOCH_DIFF
+            let secs = (unix_100ns / 10_000_000) as i64
+            let nanos = ((unix_100ns % 10_000_000) * 100) as u32
+            
+            SystemTime { secs, nanos }
+    
+    fn duration_since(&self, earlier: &SystemTime) -> Result<Duration, SystemTimeError>:
+        if self.secs < earlier.secs or (self.secs == earlier.secs and self.nanos < earlier.nanos):
+            return Err(SystemTimeError::TimeWentBackwards {
+                duration: earlier.duration_since_unchecked(self)
+            })
+        
+        Ok(self.duration_since_unchecked(earlier))
+    
+    fn duration_since_unchecked(&self, earlier: &SystemTime) -> Duration:
+        var secs = (self.secs - earlier.secs) as u64
+        var nanos: i64 = self.nanos as i64 - earlier.nanos as i64
+        
+        if nanos < 0:
+            secs = secs - 1
+            nanos = nanos + NANOS_PER_SEC as i64
+        
+        Duration { secs, nanos: nanos as u32 }
+    
+    fn elapsed(&self) -> Result<Duration, SystemTimeError>:
+        SystemTime::now().duration_since(self)
+    
+    fn checked_add(&self, duration: &Duration) -> Option<SystemTime>:
+        let mut nanos = self.nanos + duration.nanos
+        let mut secs = self.secs
+        
+        if nanos >= NANOS_PER_SEC as u32:
+            nanos = nanos - NANOS_PER_SEC as u32
+            secs = secs + 1
+        
+        match secs.checked_add(duration.secs as i64):
+            Some(s) => Some(SystemTime { secs: s, nanos })
+            None => None
+    
+    fn checked_sub(&self, duration: &Duration) -> Option<SystemTime>:
+        var nanos = self.nanos
+        var secs = self.secs - duration.secs as i64
+        
+        if duration.nanos > self.nanos:
+            secs = secs - 1
+            nanos = nanos + NANOS_PER_SEC as u32 - duration.nanos
+        else:
+            nanos = nanos - duration.nanos
+        
+        Some(SystemTime { secs, nanos })
+    
+    fn to_unix_timestamp(&self) -> i64:
+        self.secs
+    
+    fn from_unix_timestamp(secs: i64) -> SystemTime:
+        SystemTime { secs, nanos: 0 }
+    
+    fn from_unix_timestamp_nanos(nanos: i128) -> SystemTime:
+        let secs = (nanos / NANOS_PER_SEC as i128) as i64
+        let remaining_nanos = (nanos % NANOS_PER_SEC as i128) as u32
+        SystemTime { secs, nanos: remaining_nanos }
+
+enum SystemTimeError:
+    TimeWentBackwards { duration: Duration }
+
+// ============================================
+// DateTime (Calendar-aware)
+// ============================================
+
+struct DateTime:
+    year: i32
+    month: u8     // 1-12
+    day: u8       // 1-31
+    hour: u8      // 0-23
+    minute: u8    // 0-59
+    second: u8    // 0-59
+    nanosecond: u32
+    offset_seconds: i32  // UTC offset in seconds
+    
+    fn now_utc() -> DateTime:
+        let st = SystemTime::now()
+        DateTime::from_timestamp_utc(st.secs, st.nanos)
+    
+    fn now_local() -> DateTime:
+        let st = SystemTime::now()
+        DateTime::from_timestamp_local(st.secs, st.nanos)
+    
+    fn from_timestamp_utc(secs: i64, nanos: u32) -> DateTime:
+        @cfg(unix):
+            var tm = Tm { tm_sec: 0, tm_min: 0, tm_hour: 0, tm_mday: 0, tm_mon: 0, tm_year: 0, tm_wday: 0, tm_yday: 0, tm_isdst: 0 }
+            gmtime_r(&secs, &tm)
+            DateTime {
+                year: tm.tm_year + 1900,
+                month: (tm.tm_mon + 1) as u8,
+                day: tm.tm_mday as u8,
+                hour: tm.tm_hour as u8,
+                minute: tm.tm_min as u8,
+                second: tm.tm_sec as u8,
+                nanosecond: nanos,
+                offset_seconds: 0
+            }
+        
+        @cfg(windows):
+            // Use manual calculation for UTC
+            DateTime::from_unix_manual(secs, nanos, 0)
+    
+    fn from_timestamp_local(secs: i64, nanos: u32) -> DateTime:
+        @cfg(unix):
+            var tm = Tm { tm_sec: 0, tm_min: 0, tm_hour: 0, tm_mday: 0, tm_mon: 0, tm_year: 0, tm_wday: 0, tm_yday: 0, tm_isdst: 0 }
+            localtime_r(&secs, &tm)
+            
+            // Calculate UTC offset
+            var utc_tm = Tm { tm_sec: 0, tm_min: 0, tm_hour: 0, tm_mday: 0, tm_mon: 0, tm_year: 0, tm_wday: 0, tm_yday: 0, tm_isdst: 0 }
+            gmtime_r(&secs, &utc_tm)
+            let utc_secs = mktime(&utc_tm)
+            let local_secs = mktime(&tm)
+            let offset = (local_secs - utc_secs) as i32
+            
+            DateTime {
+                year: tm.tm_year + 1900,
+                month: (tm.tm_mon + 1) as u8,
+                day: tm.tm_mday as u8,
+                hour: tm.tm_hour as u8,
+                minute: tm.tm_min as u8,
+                second: tm.tm_sec as u8,
+                nanosecond: nanos,
+                offset_seconds: offset
+            }
+        
+        @cfg(windows):
+            var st: SystemTimeW
+            GetLocalTime(&st)
+            DateTime {
+                year: st.wYear as i32,
+                month: st.wMonth as u8,
+                day: st.wDay as u8,
+                hour: st.wHour as u8,
+                minute: st.wMinute as u8,
+                second: st.wSecond as u8,
+                nanosecond: (st.wMilliseconds as u32) * 1_000_000,
+                offset_seconds: 0  // Would need GetTimeZoneInformation
+            }
+    
+    fn from_unix_manual(secs: i64, nanos: u32, offset: i32) -> DateTime:
+        // Manual epoch calculation (for UTC)
+        var days = secs / 86400
+        var remaining = secs % 86400
+        
+        if remaining < 0:
+            days = days - 1
+            remaining = remaining + 86400
+        
+        let hour = (remaining / 3600) as u8
+        remaining = remaining % 3600
+        let minute = (remaining / 60) as u8
+        let second = (remaining % 60) as u8
+        
+        // Days since 1970-01-01
+        // Using algorithm from Howard Hinnant
+        days = days + 719468  // Days from year 0 to 1970
+        
+        let era = (if days >= 0: days else: days - 146096) / 146097
+        let doe = days - era * 146097  // Day of era [0, 146096]
+        let yoe = (doe - doe/1460 + doe/36524 - doe/146096) / 365  // Year of era [0, 399]
+        let y = yoe + era * 400
+        let doy = doe - (365*yoe + yoe/4 - yoe/100)  // Day of year [0, 365]
+        let mp = (5*doy + 2) / 153  // Month proxy [0, 11]
+        let day = (doy - (153*mp + 2)/5 + 1) as u8
+        let month = (mp + (if mp < 10: 3 else: -9)) as u8
+        let year = (y + (if month <= 2: 1 else: 0)) as i32
+        
+        DateTime { year, month, day, hour, minute, second, nanosecond: nanos, offset_seconds: offset }
+    
+    fn to_timestamp(&self) -> i64:
+        // Convert back to Unix timestamp
+        let y = self.year - (if self.month <= 2: 1 else: 0)
+        let era = (if y >= 0: y else: y - 399) / 400
+        let yoe = y - era * 400
+        let m = self.month as i32
+        let doy = (153 * (m + (if m > 2: -3 else: 9)) + 2) / 5 + self.day as i32 - 1
+        let doe = yoe * 365 + yoe/4 - yoe/100 + doy
+        let days = era * 146097 + doe - 719468
+        
+        days as i64 * 86400 + self.hour as i64 * 3600 + self.minute as i64 * 60 + self.second as i64 - self.offset_seconds as i64
+    
+    fn weekday(&self) -> Weekday:
+        let days = self.to_timestamp() / 86400
+        // 1970-01-01 was Thursday (4)
+        let dow = ((days % 7 + 4) % 7) as u8
+        match dow:
+            0 => Weekday::Sunday
+            1 => Weekday::Monday
+            2 => Weekday::Tuesday
+            3 => Weekday::Wednesday
+            4 => Weekday::Thursday
+            5 => Weekday::Friday
+            6 => Weekday::Saturday
+            _ => Weekday::Sunday  // Shouldn't happen
+    
+    fn day_of_year(&self) -> u16:
+        let days_before_month = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
+        let mut doy = days_before_month[(self.month - 1) as usize] + self.day as u16
+        
+        // Add leap day if after February and leap year
+        if self.month > 2 and is_leap_year(self.year):
+            doy = doy + 1
+        
+        doy
+    
+    fn is_leap_year(&self) -> bool:
+        is_leap_year(self.year)
+    
+    fn format(&self, fmt: &str) -> String:
+        var result = String::new()
+        var chars = fmt.chars().peekable()
+        
+        while chars.peek().is_some():
+            let c = chars.next().unwrap()
+            
+            if c == '%':
+                match chars.next():
+                    Some('Y') => result.push_str(&format_padded(self.year as i64, 4))
+                    Some('m') => result.push_str(&format_padded(self.month as i64, 2))
+                    Some('d') => result.push_str(&format_padded(self.day as i64, 2))
+                    Some('H') => result.push_str(&format_padded(self.hour as i64, 2))
+                    Some('M') => result.push_str(&format_padded(self.minute as i64, 2))
+                    Some('S') => result.push_str(&format_padded(self.second as i64, 2))
+                    Some('f') => result.push_str(&format_padded(self.nanosecond as i64 / 1000, 6))
+                    Some('z') => result.push_str(&format_offset(self.offset_seconds))
+                    Some('a') => result.push_str(self.weekday().short_name())
+                    Some('A') => result.push_str(self.weekday().name())
+                    Some('b') => result.push_str(month_short_name(self.month))
+                    Some('B') => result.push_str(month_name(self.month))
+                    Some('j') => result.push_str(&format_padded(self.day_of_year() as i64, 3))
+                    Some('%') => result.push('%')
+                    Some(other) => 
+                        result.push('%')
+                        result.push(other)
+                    None => result.push('%')
+            else:
+                result.push(c)
+        
+        result
+    
+    fn iso8601(&self) -> String:
+        self.format("%Y-%m-%dT%H:%M:%S%z")
+
+fn format_padded(val: i64, width: usize) -> String:
+    var s = val.abs().to_string()
+    while s.len() < width:
+        s = "0" + s
+    if val < 0:
+        "-" + s
+    else:
+        s
+
+fn format_offset(offset_seconds: i32) -> String:
+    if offset_seconds == 0:
+        return "Z"
+    
+    let sign = if offset_seconds >= 0: '+' else: '-'
+    let abs_offset = offset_seconds.abs()
+    let hours = abs_offset / 3600
+    let minutes = (abs_offset % 3600) / 60
+    
+    sign.to_string() + &format_padded(hours as i64, 2) + ":" + &format_padded(minutes as i64, 2)
+
+fn is_leap_year(year: i32) -> bool:
+    (year % 4 == 0 and year % 100 != 0) or year % 400 == 0
+
+fn month_name(month: u8) -> &str:
+    match month:
+        1 => "January"
+        2 => "February"
+        3 => "March"
+        4 => "April"
+        5 => "May"
+        6 => "June"
+        7 => "July"
+        8 => "August"
+        9 => "September"
+        10 => "October"
+        11 => "November"
+        12 => "December"
+        _ => "Unknown"
+
+fn month_short_name(month: u8) -> &str:
+    match month:
+        1 => "Jan"
+        2 => "Feb"
+        3 => "Mar"
+        4 => "Apr"
+        5 => "May"
+        6 => "Jun"
+        7 => "Jul"
+        8 => "Aug"
+        9 => "Sep"
+        10 => "Oct"
+        11 => "Nov"
+        12 => "Dec"
+        _ => "???"
+
+enum Weekday:
+    Monday
+    Tuesday
+    Wednesday
+    Thursday
+    Friday
+    Saturday
+    Sunday
+    
+    fn name(&self) -> &str:
+        match self:
+            Weekday::Monday => "Monday"
+            Weekday::Tuesday => "Tuesday"
+            Weekday::Wednesday => "Wednesday"
+            Weekday::Thursday => "Thursday"
+            Weekday::Friday => "Friday"
+            Weekday::Saturday => "Saturday"
+            Weekday::Sunday => "Sunday"
+    
+    fn short_name(&self) -> &str:
+        match self:
+            Weekday::Monday => "Mon"
+            Weekday::Tuesday => "Tue"
+            Weekday::Wednesday => "Wed"
+            Weekday::Thursday => "Thu"
+            Weekday::Friday => "Fri"
+            Weekday::Saturday => "Sat"
+            Weekday::Sunday => "Sun"
+    
+    fn number(&self) -> u8:
+        match self:
+            Weekday::Monday => 1
+            Weekday::Tuesday => 2
+            Weekday::Wednesday => 3
+            Weekday::Thursday => 4
+            Weekday::Friday => 5
+            Weekday::Saturday => 6
+            Weekday::Sunday => 7
+    
+    fn iso_number(&self) -> u8:
+        self.number()
+    
+    fn from_number(n: u8) -> Option<Weekday>:
+        match n:
+            1 => Some(Weekday::Monday)
+            2 => Some(Weekday::Tuesday)
+            3 => Some(Weekday::Wednesday)
+            4 => Some(Weekday::Thursday)
+            5 => Some(Weekday::Friday)
+            6 => Some(Weekday::Saturday)
+            7 => Some(Weekday::Sunday)
+            _ => None
+
+// ============================================
+// Stopwatch / Profiling
+// ============================================
+
+struct Stopwatch:
+    start: Instant
+    laps: Vec<Duration>
+    running: bool
+    accumulated: Duration
+    
+    fn new() -> Stopwatch:
+        Stopwatch {
+            start: Instant::now(),
+            laps: Vec::new(),
+            running: true,
+            accumulated: Duration::zero()
+        }
+    
+    fn start(&mut self):
+        if not self.running:
+            self.start = Instant::now()
+            self.running = true
+    
+    fn stop(&mut self) -> Duration:
+        if self.running:
+            self.accumulated = self.accumulated.saturating_add(&self.start.elapsed())
+            self.running = false
+        self.accumulated
+    
+    fn lap(&mut self) -> Duration:
+        let elapsed = self.elapsed()
+        self.laps.push(elapsed)
+        self.start = Instant::now()
+        elapsed
+    
+    fn reset(&mut self):
+        self.start = Instant::now()
+        self.laps.clear()
+        self.accumulated = Duration::zero()
+        self.running = true
+    
+    fn elapsed(&self) -> Duration:
+        if self.running:
+            self.accumulated.saturating_add(&self.start.elapsed())
+        else:
+            self.accumulated
+    
+    fn laps(&self) -> &Vec<Duration>:
+        &self.laps
+    
+    fn average_lap(&self) -> Option<Duration>:
+        if self.laps.is_empty():
+            None
+        else:
+            var total = Duration::zero()
+            for lap in &self.laps:
+                total = total.saturating_add(lap)
+            Some(total.div(self.laps.len() as u32))
+
+// ============================================
+// Sleep Functions
+// ============================================
+
+fn sleep(duration: &Duration):
+    @cfg(unix):
+        var req = Timespec {
+            tv_sec: duration.secs as i64,
+            tv_nsec: duration.nanos as i64
+        }
+        var rem = Timespec { tv_sec: 0, tv_nsec: 0 }
+        
+        while nanosleep(&req, &rem) == -1:
+            req = rem
+    
+    @cfg(windows):
+        let millis = duration.as_millis() as u32
+        Sleep(millis)
+
+fn sleep_ms(millis: u64):
+    sleep(&Duration::from_millis(millis))
+
+fn sleep_secs(secs: u64):
+    sleep(&Duration::from_secs(secs))
+
+async fn sleep_async(duration: &Duration):
+    // Async sleep using the runtime's timer driver
+    // Delegates to the executor's async sleep which registers with TimerDriver
+    async::sleep(*duration).await
+
+// ============================================
+// Timing Utilities
+// ============================================
+
+fn measure<F, T>(f: F) -> (T, Duration) where F: FnOnce() -> T:
+    let start = Instant::now()
+    let result = f()
+    let elapsed = start.elapsed()
+    (result, elapsed)
+
+fn benchmark<F>(iterations: usize, f: F) -> BenchmarkResult where F: Fn():
+    var times = Vec::with_capacity(iterations)
+    
+    for _ in 0..iterations:
+        let start = Instant::now()
+        f()
+        times.push(start.elapsed())
+    
+    // Sort for percentile calculations
+    times.sort_by(|a, b| a.as_nanos().cmp(&b.as_nanos()))
+    
+    var total = Duration::zero()
+    for t in &times:
+        total = total.saturating_add(t)
+    
+    BenchmarkResult {
+        iterations,
+        total,
+        min: times[0],
+        max: times[iterations - 1],
+        mean: total.div(iterations as u32),
+        median: times[iterations / 2],
+        p95: times[(iterations * 95) / 100],
+        p99: times[(iterations * 99) / 100]
+    }
+
+struct BenchmarkResult:
+    iterations: usize
+    total: Duration
+    min: Duration
+    max: Duration
+    mean: Duration
+    median: Duration
+    p95: Duration
+    p99: Duration
+    
+    fn ops_per_second(&self) -> f64:
+        if self.total.is_zero():
+            return 0.0
+        (self.iterations as f64) / self.total.as_secs_f64()
+    
+    fn format(&self) -> String:
+        "Benchmark Results:\n" +
+        "  Iterations: " + self.iterations.to_string() + "\n" +
+        "  Total time: " + format_duration(&self.total) + "\n" +
+        "  Min: " + format_duration(&self.min) + "\n" +
+        "  Max: " + format_duration(&self.max) + "\n" +
+        "  Mean: " + format_duration(&self.mean) + "\n" +
+        "  Median: " + format_duration(&self.median) + "\n" +
+        "  95th percentile: " + format_duration(&self.p95) + "\n" +
+        "  99th percentile: " + format_duration(&self.p99) + "\n" +
+        "  Throughput: " + self.ops_per_second().to_string() + " ops/sec"
+
+fn format_duration(d: &Duration) -> String:
+    let nanos = d.as_nanos()
+    
+    if nanos < 1_000:
+        nanos.to_string() + "ns"
+    elif nanos < 1_000_000:
+        ((nanos as f64) / 1_000.0).to_string() + "µs"
+    elif nanos < 1_000_000_000:
+        ((nanos as f64) / 1_000_000.0).to_string() + "ms"
+    else:
+        d.as_secs_f64().to_string() + "s"
+
+// ============================================
+// Timeout
+// ============================================
+
+enum Timeout<T>:
+    Completed(T)
+    TimedOut
+
+async fn with_timeout<T, F>(duration: &Duration, f: F) -> Timeout<T> where F: Future<Output = T>:
+    select:
+        result = f.await =>
+            Timeout::Completed(result)
+        _ = sleep_async(duration).await =>
+            Timeout::TimedOut
+
+fn with_timeout_blocking<T, F>(duration: &Duration, f: F) -> Timeout<T> where F: FnOnce() -> T:
+    // This requires threading support
+    // Simplified: just run the function without timeout
+    Timeout::Completed(f())

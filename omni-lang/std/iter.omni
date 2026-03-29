@@ -1,0 +1,30 @@
+// Omni Standard Library: Iterators
+// Iterator protocol stub (planned — deferred until trait system is stable)
+
+module std::iter
+
+import std::core
+
+// Planned Iterator trait:
+//   trait Iterator:
+//       type Item
+//       fn next(&mut self) -> Option<Item>
+//
+// Planned adapter methods (on Iterator implementors):
+//   fn filter(self, predicate: fn(&Item) -> bool) -> Filter<Self>
+//   fn map(self, f: fn(Item) -> U) -> Map<Self, U>
+//   fn collect(self) -> Vec<Item>
+//   fn fold(self, init: Acc, f: fn(Acc, Item) -> Acc) -> Acc
+//   fn for_each(self, f: fn(Item))
+//   fn take(self, n: usize) -> Take<Self>
+//   fn skip(self, n: usize) -> Skip<Self>
+//   fn zip(self, other: impl Iterator) -> Zip<Self, Other>
+//   fn enumerate(self) -> Enumerate<Self>
+//   fn any(self, predicate: fn(&Item) -> bool) -> bool
+//   fn all(self, predicate: fn(&Item) -> bool) -> bool
+//   fn count(self) -> usize
+//   fn sum(self) -> Item where Item: Add
+//
+// Status: Deferred until O-031 is addressed.
+// The trait system (generic bounds, associated types) must be stable first.
+// See omni-lang/ISSUES.md O-031 for details.
