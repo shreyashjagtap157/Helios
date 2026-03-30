@@ -1,0 +1,107 @@
+# Label definitions for GitHub Issues
+# Applied via: github-label-sync or .github/labels.yml
+
+# --- Priority ---
+- name: "priority: critical"
+  color: "b60205"
+  description: "Blocks core functionality or self-hosting"
+
+- name: "priority: high"
+  color: "d93f0b"
+  description: "Should be addressed soon"
+
+- name: "priority: medium"
+  color: "fbca04"
+  description: "Important but not urgent"
+
+- name: "priority: low"
+  color: "0e8a16"
+  description: "Nice to have"
+
+# --- Type ---
+- name: bug
+  color: "d73a4a"
+  description: "Something isn't working"
+
+- name: enhancement
+  color: "a2eeef"
+  description: "Improvement to existing functionality"
+
+- name: feature
+  color: "0075ca"
+  description: "New functionality or capability"
+
+- name: documentation
+  color: "0075ca"
+  description: "Documentation updates needed"
+
+- name: question
+  color: "d876e3"
+  description: "Further information is requested"
+
+# --- Status ---
+- name: "needs-triage"
+  color: "ededed"
+  description: "Needs review and categorization"
+
+- name: "good first issue"
+  color: "7057ff"
+  description: "Good for newcomers — well-scoped, beginner-friendly"
+
+- name: "help wanted"
+  color: "008672"
+  description: "Extra attention or community help needed"
+
+- name: "status: blocked"
+  color: "b60205"
+  description: "Blocked by another issue or dependency"
+
+- name: "status: in progress"
+  color: "fbca04"
+  description: "Someone is working on this"
+
+# --- Component ---
+- name: "component: compiler"
+  color: "c5def5"
+  description: "Omni compiler (omnc)"
+
+- name: "component: stdlib"
+  color: "c5def5"
+  description: "Standard library"
+
+- name: "component: self-hosting"
+  color: "c5def5"
+  description: "Self-hosted Omni compiler"
+
+- name: "component: helios"
+  color: "c5def5"
+  description: "Helios cognitive framework"
+
+- name: "component: tooling"
+  color: "c5def5"
+  description: "LSP, DAP, formatter, package manager"
+
+- name: "component: ci"
+  color: "c5def5"
+  description: "CI/CD pipeline"
+
+# --- Area ---
+- name: "area: parser"
+  color: "bfd4f2"
+  description: "Parser and AST construction"
+
+- name: "area: semantic"
+  color: "bfd4f2"
+  description: "Type checking, inference, borrow checking"
+
+- name: "area: codegen"
+  color: "bfd4f2"
+  description: "Code generation backends"
+
+- name: "area: runtime"
+  color: "bfd4f2"
+  description: "Interpreter and bytecode VM"
+
+- name: "area: examples"
+  color: "bfd4f2"
+  description: "Example programs and tutorials"
