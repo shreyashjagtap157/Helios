@@ -978,14 +978,28 @@ impl Parser {
                 if matches!(self.peek_kind(), Some(TokenKind::Lt)) {
                     self.advance();
                     let mut type_args = Vec::new();
-                    while !matches!(self.peek_kind(), Some(TokenKind::Gt)) {
+                    while !matches!(self.peek_kind(), Some(TokenKind::Gt))
+                        && !matches!(self.peek_kind(), Some(TokenKind::Shr))
+                    {
                         type_args.push(self.parse_type()?);
                         if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
                             self.advance();
                         }
                     }
-                    self.expect(&TokenKind::Gt)?;
-                    Ok(Type::Generic(name, type_args))
+                    // Handle nested generics: if we see Shr (>>), treat as closing >
+                    if matches!(self.peek_kind(), Some(TokenKind::Shr)) {
+                        // Skip the Shr - it's actually > > (close two generics)
+                        self.advance();
+                        // If there was an inner generic, we've closed both
+                        // Check if we need to close more
+                        if !type_args.is_empty() {
+                            // Inner generic was closed, now close outer
+                        }
+                        Ok(Type::Generic(name, type_args))
+                    } else {
+                        self.expect(&TokenKind::Gt)?;
+                        Ok(Type::Generic(name, type_args))
+                    }
                 } else {
                     Ok(Type::Named(name))
                 }

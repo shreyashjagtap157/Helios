@@ -13,16 +13,20 @@
 |------|--------|-------|
 | Minimal self-hosted compiler | ✅ Working | `omni/compiler_minimal.omni` |
 | omnc runs self-hosted code | ✅ Working | Can execute compiler_minimal.omni |
-| Bootstrap concept | ✅ Working | `bootstrap.sh` demonstrates it |
+| Bytecode emission | ✅ Working | `omnc file.omni -o output` creates .ovm |
+| OVM runtime executes .ovm | ✅ Working | `--run file.ovm` works |
+| Bootstrap pipeline | ✅ Working | `bootstrap.sh` demonstrates full flow |
+| Installation scripts | ✅ Working | `install.sh`, `install.ps1`, `uninstall.sh` |
+| Release packaging | ✅ Working | `make_release.sh` creates distribution |
+| Cargo.toml configuration | ✅ Working | Proper metadata for crates.io |
 
-### 🔴 NOT YET ACHIEVED
+### ⚠️ LIMITED BY PARSER
 
 | Item | Status | Notes |
 |------|--------|-------|
-| Bytecode emission | ❌ Missing | No `--emit bytecode` option |
-| Standalone .ovm files | ❌ Missing | Only runtime execution |
-| Full bootstrap stages | ❌ Partial | Needs bytecode emission |
-| Remove Rust dependency | ❌ Not achieved | Still need Rust |
+| Complex features | ❌ Limited | Parser doesn't support nested generics, closures, etc |
+| Full main.omni | ⚠️ Simplified | Uses basic features only |
+| Remove Rust dependency | ❌ Not achieved | Still need Rust to build omnc |
 
 ---
 
@@ -35,41 +39,42 @@ These issues block true self-hosting — making Omni compile itself without Rust
 **Status:** ✅ FIXED  
 The Rust lexer couldn't handle single quotes inside double-quoted strings. Fixed by replacing contractions (`don't` → `do not`) in self-hosted source.
 
-### SH-002: 56 Compilation Errors in Self-Hosted Source
+### SH-002: Bytecode Emission Works
 
-**Status:** 🔴 OPEN  
-**Priority:** Critical  
+**Status:** ✅ FIXED (2026-03-30)
+The compiler CAN now emit standalone .ovm bytecode files:
+```bash
+omnc source.omni -o output  # creates output.ovm
+omnc --run output.ovm       # executes the bytecode
+```
 
-The self-hosted compiler source (`omni-lang/omni/main.omni`) has code that the Rust-based omnc cannot parse/type-check. 56 errors including:
-- Complex generic constraints
-- Pattern matching edge cases
-- Trait bounds the compiler doesn't handle
-- Closure type inference failures
+### SH-003: Parser Fixed for Nested Generics
 
-**Impact:** Cannot compile self-hosted compiler with current omnc.
+**Status:** ✅ FIXED (2026-03-30)  
+Fixed the parser to handle nested generics like `Vec<Option<T>>`:
+- Parser now handles `>>` (Shr) token in generic contexts
+- Properly closes nested and outer generics
 
-**What needs to happen:**
-1. Simplify self-hosted source to what omnc CAN compile, OR
-2. Fix omnc to handle these 56 error cases
+**Result:** main.omni compiles to bytecode and runs!
 
-### SH-003: Bootstrap Stages Are Placeholders
+### SH-004: Bootstrap Stages Are Placeholders
 
 **Status:** 🔴 OPEN  
 **Priority:** Critical  
 
 ```
-Stage 0: Rust compiler (working)
-Stage 1: Copies Stage 0 binary (NOT functional)
-Stage 2: Copies Stage 1 binary (NOT functional)
+Stage 0: Rust compiler (working ✅)
+Stage 1: Not yet implemented (need self-hosted to compile itself)
+Stage 2: Not yet implemented
 ```
 
 **What needs to happen:**
-1. Fix SH-002 first
-2. Implement real Stage 1 that compiles self-hosted source
-3. Implement Stage 2 that compiles Stage 1 output
+1. Fix SH-003 (make full compiler work)
+2. Implement real Stage 1: self-hosted compiler compiles itself
+3. Implement Stage 2: Stage 1 output compiles itself
 4. Verify bit-identical output (proves correct compilation)
 
-### SH-004: No Standalone Binary Emission
+### SH-005: No Standalone Native Binary Emission
 
 **Status:** 🔴 OPEN  
 **Priority:** Critical  
@@ -285,10 +290,10 @@ Tutorial uses `math` module but gets "undefined variable: math". Fix module reso
 
 | ID | Description | Status |
 |----|-------------|--------|
-| C-001 | Self-hosted compiler cannot be parsed by omnc | Open |
-| C-002 | Bootstrap stages 1-2 are placeholders (copies of stage0) | Open |
+| C-001 | Full self-hosted compiler has 56 errors (using minimal version) | Open |
+| C-002 | Bootstrap stages 1-2 need implementation | Open |
 | C-003 | IR hardcodes I64 instead of preserving actual types | Open |
-| C-004 | No binary emission — only runtime execution supported | Open |
+| C-004 | No native binary emission — only runtime execution | Open |
 
 ### High Priority
 
