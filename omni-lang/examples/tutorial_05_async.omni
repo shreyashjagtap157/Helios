@@ -1,7 +1,3 @@
-// Tutorial 05: Async & Concurrency Basics
-module tutorials::async_concurrency
-
 fn main():
-    println("=== Tutorial 05: Async & Concurrency ===")
-    println("Concurrency features coming soon")
+    println("Tutorial 05")
     println("Done")

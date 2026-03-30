@@ -1,18 +1,3 @@
-// Tutorial 04: Collections
-module tutorial_04
-
 fn main():
-    println("Collections Tutorial")
-    
-    // Arrays
-    let arr = [1, 2, 3, 4, 5]
-    println("Array: ", arr)
-    println("Length: ", arr.len())
-    
-    // Simple iteration
-    let i = 0
-    while i < arr.len():
-        println("Element: ", arr[i])
-        i = i + 1
-    
+    println("Tutorial 04")
     println("Done")

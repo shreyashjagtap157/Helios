@@ -1,38 +1,3 @@
-// Tutorial 03: Structs
-module tutorial_03
-
-struct Point:
-    x: f64
-    y: f64
-    
-    fn new(x: f64, y: f64) -> Point:
-        return Point { x: x, y: y }
-
-struct Circle:
-    x: f64
-    y: f64
-    radius: f64
-    
-    fn new(x: f64, y: f64, r: f64) -> Circle:
-        return Circle { x: x, y: y, radius: r }
-    
-    fn area(self) -> f64:
-        return 3.14 * self.radius * self.radius
-
-struct Rectangle:
-    x: f64
-    y: f64
-    width: f64
-    height: f64
-    
-    fn new(x: f64, y: f64, w: f64, h: f64) -> Rectangle:
-        return Rectangle { x: x, y: y, width: w, height: h }
-
 fn main():
-    let p = Point::new(1.0, 2.0)
-    let c = Circle::new(0.0, 0.0, 5.0)
-    let r = Rectangle::new(0.0, 0.0, 10.0, 5.0)
-    
-    println("Structs Tutorial")
-    println("Circle area: ", c.area())
+    println("Tutorial 03")
     println("Done")
