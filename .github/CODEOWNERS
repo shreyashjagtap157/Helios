@@ -1,0 +1,8 @@
+# Default owner for everything
+* @shreyashjagtap157
+
+# Compiler source — owner must review
+omni-lang/compiler/ @shreyashjagtap157
+
+# CI and workflow files
+.github/ @shreyashjagtap157
