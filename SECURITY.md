@@ -13,7 +13,7 @@
 
 Instead, report them privately:
 
-1. **Email:** shreyash.jagtap@example.com
+1. **Email:** ssjagtap2016@gmail.com
 2. **Subject:** `[SECURITY] Helios/Omni — <brief description>`
 
 ### What to Include

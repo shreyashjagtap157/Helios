@@ -60,7 +60,7 @@ representative at an online or offline event.
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
 reported to the community leaders responsible for enforcement at
-shreyash.jagtap@example.com.
+ssjagtap2016@gmail.com.
 
 All complaints will be reviewed and investigated promptly and fairly.
 
@@ -188,7 +188,7 @@ Users are expected to:
 
 If you experience or witness unacceptable behavior, please report it by:
 
-1. **Email**: shreyash.jagtap@example.com
+1. **Email**: ssjagtap2016@gmail.com
 2. **GitHub Issues**: Create a new issue with the label "code-of-conduct"
 3. **Direct Message**: Contact a maintainer directly
 
