@@ -1326,7 +1326,9 @@ impl Parser {
                 // We need to "put back" the elif and call ourselves, but since we can't
                 // unadvance, we build the chain manually
                 let mut inner = self.parse_elif_chain()?;
-                Some(Block { statements: vec![inner] })
+                Some(Block {
+                    statements: vec![inner],
+                })
             } else if matches!(self.peek_kind(), Some(TokenKind::Else)) {
                 self.advance();
                 self.expect(&TokenKind::Colon)?;
@@ -1369,7 +1371,9 @@ impl Parser {
 
         let else_block = if matches!(self.peek_kind(), Some(TokenKind::Elif)) {
             let inner = self.parse_elif_chain()?;
-            Some(Block { statements: vec![inner] })
+            Some(Block {
+                statements: vec![inner],
+            })
         } else if matches!(self.peek_kind(), Some(TokenKind::Else)) {
             self.advance();
             self.expect(&TokenKind::Colon)?;

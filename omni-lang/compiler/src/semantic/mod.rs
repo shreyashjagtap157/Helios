@@ -640,10 +640,7 @@ impl Analyzer {
             // Debug
             (
                 "dbg",
-                Type::Function(
-                    vec![Type::Any],
-                    Some(Box::new(Type::Any)),
-                ),
+                Type::Function(vec![Type::Any], Some(Box::new(Type::Any))),
                 false,
             ),
         ];
@@ -2565,7 +2562,8 @@ impl Analyzer {
             BinaryOp::Range => Ok(Type::Named("Range".into())),
             _ => {
                 // O-001: String + anything → String (concatenation)
-                if *op == BinaryOp::Add && (matches!(left, Type::Str) || matches!(right, Type::Str)) {
+                if *op == BinaryOp::Add && (matches!(left, Type::Str) || matches!(right, Type::Str))
+                {
                     return Ok(Type::Str);
                 }
                 // For arithmetic ops, return the "wider" type
