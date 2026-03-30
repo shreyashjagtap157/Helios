@@ -24,23 +24,10 @@ out/
 *.ovm
 *.ovm.hints
 
-# --- Obsidian Vault (Memory vault - personal notes, not project code) ---
-Memory/
-
-# --- Legacy Archives ---
-legacy/
-legacy-deprecated/
-
-# --- GitNexus Index ---
+# --- GitNexus / Claude / Memory ---
 .gitnexus/
-
-# --- Temporary Build Directories ---
-.tmp-*/
-tmp/
-.tmp/
-*.tmp
-*.bak
-*.log
+.claude/
+Memory/
 
 # --- IDE / Editor ---
 .vscode/
@@ -56,44 +43,30 @@ Thumbs.db
 .DS_Store
 desktop.ini
 
+# --- Temporary ---
+tmp/
+.tmp/
+*.tmp
+*.bak
+*.log
+
 # --- Python ---
 __pycache__/
 *.py[cod]
-*.egg-info/
-.env
-venv/
 
 # --- Node/npm (for vscode-omni tool) ---
 node_modules/
 package-lock.json
 
-# --- Test Outputs & Reports ---
-test_output/
-test_results/
-coverage/
-.coverage
-*.profdata
-check_output*.txt
-test_report.html
-
 # --- Deployment Scripts ---
 *.ps1
 
-# --- Old wrapper binary ---
-helios-wrapper/
-
 # --- Claude Local Overrides ---
 CLAUDE.local.md
-
-# --- Old docs removed in cleanup ---
-AGENTS.md
-CHANGELOG.md
-CONTRIBUTING.md
-ISSUES.md
-nul
+CLAUDE.md
 
 # =============================================================================
-# Un-ignore specific tracked files
+# Un-ignore project source (force-track these)
 # =============================================================================
 !omni-lang/**/*.rs
 !omni-lang/**/*.toml
@@ -101,14 +74,9 @@ nul
 !omni-lang/**/*.bnf
 !helios-framework/**/*
 !examples/**/*
-!config/**/*
-
-!docs/**/*.md
-!docs/**/*.bnf
+!.github/**/*
 !README.md
-!CLAUDE.md
-!AUDIT.md
-
-!.claude/
-!.claude/**
-.claude/settings.local.json
+!LICENSE
+!CONTRIBUTING.md
+!CODE_OF_CONDUCT.md
+!ISSUES.md
