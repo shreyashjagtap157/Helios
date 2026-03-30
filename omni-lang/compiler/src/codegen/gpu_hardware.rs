@@ -232,10 +232,10 @@ impl CudaRuntime {
     /// Launch kernel
     pub fn launch_kernel(
         &self,
-        kernel: &CudaKernel,
+        _kernel: &CudaKernel,
         grid_dim: (u32, u32, u32),
         block_dim: (u32, u32, u32),
-        args: &[CudaDeviceMemory],
+        _args: &[CudaDeviceMemory],
     ) -> Result<(), String> {
         // Validate dimensions
         if grid_dim.0 == 0 || block_dim.0 == 0 {
@@ -334,7 +334,7 @@ impl VulkanRuntime {
     pub fn dispatch_compute(
         &self,
         work_group_count: (u32, u32, u32),
-        buffers: &[&VulkanBuffer],
+        _buffers: &[&VulkanBuffer],
     ) -> Result<(), String> {
         if work_group_count.0 == 0 || work_group_count.1 == 0 || work_group_count.2 == 0 {
             return Err("Work group count must be > 0".to_string());

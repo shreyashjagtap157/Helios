@@ -22,7 +22,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use super::bytecode::{CompiledFunction, OpCode, OvmModule, Value};
+use super::bytecode::{OpCode, OvmModule, Value};
 
 // ---------------------------------------------------------------------------
 // VmValue – extended runtime values

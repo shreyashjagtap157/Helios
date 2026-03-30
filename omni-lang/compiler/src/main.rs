@@ -27,7 +27,6 @@ mod parser;
 mod resolver;
 mod runtime;
 mod semantic;
-use std::fs::File;
 use sysinfo::{ProcessExt, System, SystemExt};
 // `pprof` is only available on Unix targets (native signal-based sampling).
 #[cfg(unix)]
@@ -46,8 +45,7 @@ pub enum Target {
     Ovm, // OVM bytecode for managed execution
     #[cfg(feature = "llvm")]
     Hybrid, // Both native and managed
-    #[cfg(feature = "llvm")]
-    Native, // Direct native code (no runtime)
+    Native, // Direct native code via built-in codegen (no LLVM required)
 }
 
 impl From<Target> for codegen::CodegenTarget {
@@ -58,7 +56,6 @@ impl From<Target> for codegen::CodegenTarget {
             Target::Ovm => codegen::CodegenTarget::Ovm,
             #[cfg(feature = "llvm")]
             Target::Hybrid => codegen::CodegenTarget::Hybrid,
-            #[cfg(feature = "llvm")]
             Target::Native => codegen::CodegenTarget::Native,
         }
     }
@@ -172,7 +169,7 @@ fn main() -> Result<()> {
             #[cfg(unix)]
             let guard = ProfilerGuard::new(100).ok();
             #[cfg(not(unix))]
-            let guard: Option<()> = None; // profiler not available on non-unix targets
+            let _guard: Option<()> = None; // profiler not available on non-unix targets
             let mut sys = System::new_all();
             let pid = sysinfo::get_current_pid().unwrap_or_else(|_| sysinfo::Pid::from(0));
             let mut prev_tokens = 0usize;
@@ -341,7 +338,7 @@ fn compile(source: &str, args: &Args) -> Result<()> {
         .map_err(|e: String| anyhow::anyhow!("{}", e))?;
 
     // Run module checker
-    let mut checker = modes::ModuleChecker::new(module_mode);
+    let _checker = modes::ModuleChecker::new(module_mode);
     // TODO: detect actual feature usage from AST and check against mode
 
     // Phase 0: Resolver engines
@@ -394,6 +391,10 @@ fn compile(source: &str, args: &Args) -> Result<()> {
     // Phase 2.0: Import resolution
     log::debug!("Phase 2.0: Import resolution");
     let ast = resolve_imports(ast, &args.input)?;
+
+    // Phase 2.0.1: Conditional compilation (#[cfg(...)] filtering)
+    log::debug!("Phase 2.0.1: Conditional compilation (cfg filtering)");
+    let ast = apply_cfg_attributes(ast);
 
     // --emit-ast: dump parsed AST and exit
     if args.emit_ast {
@@ -630,6 +631,184 @@ fn resolve_imports(
     Ok(Module {
         items: resolved_items,
     })
+}
+
+/// Apply `#[cfg(...)]` conditional compilation attributes.
+///
+/// Walks the top-level items in a module and removes any item whose `#[cfg(...)]`
+/// attribute does not match the current compilation target. Also normalizes the
+/// `@cfg(...)` decorator syntax (used in `std/time.omni`) to `#[cfg(...)]`.
+///
+/// Supported conditions:
+///   - `#[cfg(unix)]`                     — matches when OS family is unix
+///   - `#[cfg(windows)]`                  — matches when OS family is windows
+///   - `#[cfg(target_os = "<os>")]`       — matches a specific OS (linux, macos, windows)
+///
+/// Items without any `#[cfg(...)]` attribute are always retained.
+fn apply_cfg_attributes(module: parser::ast::Module) -> parser::ast::Module {
+    let os = std::env::consts::OS; // "linux", "macos", "windows", etc.
+    let family = std::env::consts::FAMILY; // "unix" or "windows"
+
+    let items = module
+        .items
+        .into_iter()
+        .filter(|item| {
+            let attrs = item_attributes(item);
+            cfg_attrs_match(attrs, os, family)
+        })
+        .map(|item| apply_cfg_to_inner_items(item, os, family))
+        .collect();
+
+    parser::ast::Module { items }
+}
+
+/// Extract the attributes slice from an item, if it carries attributes.
+fn item_attributes(item: &parser::ast::Item) -> &[String] {
+    match item {
+        parser::ast::Item::Function(f) => &f.attributes,
+        parser::ast::Item::Struct(s) => &s.attributes,
+        parser::ast::Item::Enum(e) => &e.attributes,
+        parser::ast::Item::Module(m) => &m.attributes,
+        parser::ast::Item::Trait(t) => &t.attributes,
+        parser::ast::Item::Impl(i) => &i.attributes,
+        parser::ast::Item::Const(c) => &c.attributes,
+        // Items that don't carry attributes are always retained
+        parser::ast::Item::Import(_)
+        | parser::ast::Item::TypeAlias(_)
+        | parser::ast::Item::Extern(_)
+        | parser::ast::Item::Comptime(_)
+        | parser::ast::Item::Macro(_) => &[],
+    }
+}
+
+/// Recursively apply cfg filtering to nested items (e.g. methods inside
+/// impl blocks, functions inside modules).
+fn apply_cfg_to_inner_items(item: parser::ast::Item, os: &str, family: &str) -> parser::ast::Item {
+    match item {
+        parser::ast::Item::Module(mut m) => {
+            m.items = m
+                .items
+                .into_iter()
+                .filter(|i| cfg_attrs_match(item_attributes(i), os, family))
+                .map(|i| apply_cfg_to_inner_items(i, os, family))
+                .collect();
+            parser::ast::Item::Module(m)
+        }
+        parser::ast::Item::Impl(mut imp) => {
+            imp.methods = imp
+                .methods
+                .into_iter()
+                .filter(|f| cfg_attrs_match(&f.attributes, os, family))
+                .collect();
+            parser::ast::Item::Impl(imp)
+        }
+        parser::ast::Item::Trait(mut t) => {
+            t.methods = t
+                .methods
+                .into_iter()
+                .filter(|f| cfg_attrs_match(&f.attributes, os, family))
+                .collect();
+            parser::ast::Item::Trait(t)
+        }
+        parser::ast::Item::Struct(mut s) => {
+            s.methods = s
+                .methods
+                .into_iter()
+                .filter(|f| cfg_attrs_match(&f.attributes, os, family))
+                .collect();
+            parser::ast::Item::Struct(s)
+        }
+        parser::ast::Item::Extern(mut e) => {
+            e.functions = e
+                .functions
+                .into_iter()
+                .filter(|f| cfg_attrs_match(&f.attributes, os, family))
+                .collect();
+            parser::ast::Item::Extern(e)
+        }
+        other => other,
+    }
+}
+
+/// Return `true` if all `#[cfg(...)]` attributes on an item match the current platform.
+/// If there are no cfg attributes, the item is unconditionally included.
+///
+/// Also recognizes the `@cfg(...)` decorator syntax and normalizes it to `#[cfg(...)]`.
+fn cfg_attrs_match(attrs: &[String], os: &str, family: &str) -> bool {
+    for attr in attrs {
+        // Normalize @cfg(...) → #[cfg(...)] for matching purposes
+        let normalized = if attr.starts_with("@cfg(") {
+            format!("#[cfg({})]", &attr[5..attr.len().saturating_sub(1)])
+        } else {
+            attr.clone()
+        };
+
+        if let Some(condition) = extract_cfg_condition(&normalized) {
+            if !evaluate_cfg_condition(condition, os, family) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Extract the inner condition string from a `#[cfg(...)]` attribute.
+/// Returns `None` if the attribute is not a cfg attribute.
+///
+/// Examples:
+///   `#[cfg(unix)]`                          → Some("unix")
+///   `#[cfg(target_os, =, "linux")]`         → Some("target_os, =, \"linux\"")
+///   `#[cfg(windows)]`                       → Some("windows")
+///   `#[inline]`                             → None
+fn extract_cfg_condition(attr: &str) -> Option<&str> {
+    let trimmed = attr.trim();
+    if trimmed.starts_with("#[cfg(") && trimmed.ends_with(")]") {
+        // Strip "#[cfg(" from front and ")]" from back
+        Some(&trimmed[6..trimmed.len() - 2])
+    } else {
+        None
+    }
+}
+
+/// Evaluate a cfg condition against the current platform.
+///
+/// The condition string comes from the parsed attribute. Due to how the parser
+/// joins tokens, `target_os = "linux"` is stored as `target_os, =, "linux"`.
+fn evaluate_cfg_condition(condition: &str, os: &str, family: &str) -> bool {
+    let cond = condition.trim();
+
+    // Simple platform family: cfg(unix), cfg(windows)
+    match cond {
+        "unix" => return family == "unix",
+        "windows" => return family == "windows",
+        _ => {}
+    }
+
+    // target_os = "value" — stored as "target_os, =, \"value\"" by the parser
+    if cond.starts_with("target_os") {
+        // Try parsing "target_os, =, \"<os_name>\""
+        let parts: Vec<&str> = cond.splitn(3, ", ").collect();
+        if parts.len() == 3 && parts[0] == "target_os" && parts[1] == "=" {
+            let value = parts[2].trim_matches('"');
+            return os == value;
+        }
+        // Also handle the direct form "target_os = \"<os_name>\"" (in case
+        // attributes are synthesized without the parser's comma separation)
+        if let Some(rest) = cond.strip_prefix("target_os") {
+            let rest = rest.trim();
+            if let Some(rest) = rest.strip_prefix('=') {
+                let value = rest.trim().trim_matches('"');
+                return os == value;
+            }
+        }
+    }
+
+    // Unknown cfg condition — conservatively include the item
+    log::warn!(
+        "Unknown #[cfg({})] condition; including item by default",
+        cond
+    );
+    true
 }
 
 /// Determine whether a type error is a "hard" (fatal) error.

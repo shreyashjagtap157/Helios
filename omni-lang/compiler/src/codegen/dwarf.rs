@@ -119,7 +119,7 @@ impl DwarfEmitter {
         buffer
     }
 
-    fn emit_abbrev_table(&mut self, funcs: &[IrFunction]) -> Vec<u8> {
+    fn emit_abbrev_table(&mut self, _funcs: &[IrFunction]) -> Vec<u8> {
         let mut buf = Vec::new();
 
         // Abbrev 1: DW_TAG_compile_unit
@@ -250,14 +250,14 @@ impl DwarfEmitter {
             Self::write_u32(&mut buf, func_size); // high_pc (offset from low_pc)
 
             // Parameters (abbrev 3)
-            for (name, ty) in &func.params {
+            for (name, _ty) in &func.params {
                 Self::write_uleb128(&mut buf, 3);
                 Self::write_string(&mut buf, name);
                 Self::write_u32(&mut buf, base_type_offset); // type reference
             }
 
             // Local variables (abbrev 4)
-            for (name, ty) in &func.locals {
+            for (name, _ty) in &func.locals {
                 Self::write_uleb128(&mut buf, 4);
                 Self::write_string(&mut buf, name);
                 Self::write_u32(&mut buf, base_type_offset); // type reference
@@ -317,7 +317,7 @@ impl DwarfEmitter {
 
         // Line number program body
         let mut address: u64 = 0;
-        let mut line: u32 = 1;
+        let line: u32 = 1;
 
         for func in funcs {
             // Set address to function start
@@ -327,7 +327,7 @@ impl DwarfEmitter {
             Self::write_u64(&mut buf, address);
 
             // Advance line for each block
-            for (bi, block) in func.blocks.iter().enumerate() {
+            for (_bi, block) in func.blocks.iter().enumerate() {
                 let num_instructions = block.instructions.len() as u32;
 
                 // Special opcode to advance address and line simultaneously

@@ -55,6 +55,12 @@ impl PartialOrd for DijkstraState {
     }
 }
 
+impl Default for KnowledgeGraph {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl KnowledgeGraph {
     /// Create an empty knowledge graph.
     pub fn new() -> Self {

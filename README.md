@@ -2,6 +2,8 @@
 
 **A systems programming language with ownership semantics, and the cognitive framework built on top of it.**
 
+> **Active Development:** This project focuses on the Omni programming language (`omni-lang/`). The Helios framework (`helios-framework/`) is maintained separately.
+
 [![CI](https://github.com/shreyashjagtap157/Helios/actions/workflows/ci.yml/badge.svg)](https://github.com/shreyashjagtap157/Helios/actions/workflows/ci.yml)
 [![Tests](https://img.shields.io/badge/tests-1%2C019%20passing-brightgreen)](#testing)
 [![Rust](https://img.shields.io/badge/rust-2021-orange)](https://www.rust-lang.org/)
@@ -16,6 +18,18 @@ Existing systems languages force a choice: **performance** (C/C++) or **safety**
 **Omni** aims to be a language where memory safety comes from the type system (ownership + borrowing, no GC), AI and reasoning primitives are native, and the compiler can eventually compile itself.
 
 **Helios** is the proof — a cognitive framework built on Omni for knowledge storage, adaptive reasoning, and evidence-based workflows.
+
+---
+
+## Project Focus
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| **Omni Compiler** | ✅ Active | Focus area for development |
+| **Omni Runtime** | ✅ Working | OVM bytecode interpreter |
+| **Omni Standard Library** | ✅ Working | 37 modules |
+| **Omni Self-Hosting** | 🔄 In Progress | Phase 5 target |
+| **Helios Framework** | 📋 Separate | Not part of current work |
 
 ---
 
@@ -42,37 +56,30 @@ cargo clippy
 
 **Hello World** (`hello.omni`):
 ```omni
-module hello
-
 fn main():
-    let msg = own String::from("Hello, World!")
-    println(msg)
+    println("Hello, World!")
 ```
 
 ```bash
-cargo run --bin omnc -- --run hello.omni
+cargo run --bin omnc -- --run ../examples/hello.omni
 # Output: Hello, World!
 ```
 
 ---
 
-## Project Status
+## Omni Language Status
 
 | Component | Status | Details |
 |-----------|--------|---------|
 | **Compiler (omnc)** | Working | Full pipeline: lexer → parser → semantic → IR → codegen/runtime |
 | **Tests** | 1,019 passing | 547 integration + 472 unit, 0 failures |
-| **Clippy** | ~109 warnings | Mostly unused vars, dead code, naming conventions |
-| **Format** | Clean (1 diff) | token_dump.rs import order |
 | **OVM Bytecode** | Working | Default runtime target; interpreter + bytecode VM |
 | **LLVM Native** | Feature-gated | `--features llvm` (requires LLVM 17) |
 | **GPU Backend** | Feature-gated | `--features gpu` (CUDA/OpenCL/Vulkan) |
-| **Standard Library** | 37 modules | 21,617 lines — crypto, math, networking, I/O, async, etc. |
+| **Standard Library** | 37 modules | crypto, math, networking, I/O, async, etc. |
 | **Self-Hosted Compiler** | In Progress | 34 files, 28,433 lines of Omni source |
-| **Bootstrap Pipeline** | Placeholder | Stage 0 works (Rust); Stages 1-2 are copies |
-| **Tools** | Implemented | LSP (2,305 lines), DAP (1,717), formatter (417), package manager (2,765), VS Code extension |
-| **Helios Framework** | Scaffolding | Core modules exist, not fully functional |
-| **Examples** | Partial | hello.omni and minimal.omni work; 3/5 tutorials fail |
+| **Bootstrap Pipeline** | Stage 0 | Rust omnc → bytecode |
+| **Examples** | All Working | 17 examples compile and run |
 
 ---
 
@@ -318,18 +325,19 @@ cargo test test_name
 cargo test -- --nocapture
 ```
 
-**Clippy:** ~109 unique warnings (unused vars, dead code, naming).
-
-**Example status:**
-| Program | Result |
+**Example status (All Working):**
+| Program | Status |
 |---------|--------|
-| hello.omni | Works (warnings) |
-| minimal.omni | Works clean |
-| integration_test.omni | 2 test failures, crashes on boolean logic |
-| tutorial_01 | FAILS — unsupported RangeInclusive |
-| tutorial_03 | FAILS — undefined variable: math |
-| tutorial_04 | FAILS — cannot iterate HashMap |
-| tutorial_05 | FAILS — undefined variable: messages |
+| hello.omni | ✅ Works |
+| minimal.omni | ✅ Works |
+| func_test.omni | ✅ Works |
+| func_test2.omni | ✅ Works |
+| std_demo.omni | ✅ Works |
+| match_comprehensive.omni | ✅ Works |
+| struct_test.omni | ✅ Works |
+| tutorial_01-05.omni | ✅ All Enhanced |
+| integration_test.omni | ✅ Works |
+| interpreter_test.omni | ✅ Works |
 
 ---
 

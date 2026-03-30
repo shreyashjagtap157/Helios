@@ -212,6 +212,7 @@ pub enum Type {
     Tuple(Vec<Type>),          // (T1, T2, ...)
     Nullable(Box<Type>),       // T?
     Any,                       // Accepts any type (for builtins like println)
+    Infer,                     // Type to be inferred
 }
 
 impl PartialEq for Type {

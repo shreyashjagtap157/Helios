@@ -61,8 +61,7 @@ pub enum CodegenTarget {
     Llvm, // LLVM IR -> native code
     #[cfg(feature = "llvm")]
     Hybrid, // Both native and managed
-    #[cfg(feature = "llvm")]
-    Native, // Direct native code (no runtime)
+    Native, // Direct native code via built-in codegen (no LLVM required)
 }
 
 /// Generate code from IR with target selection
@@ -82,8 +81,99 @@ pub fn generate_with_target(
             ovm::generate_ovm(ir.clone(), &output.with_extension("ovm"))?;
             llvm_backend::generate_llvm(&ir, output, opt_level)
         }
-        #[cfg(feature = "llvm")]
-        CodegenTarget::Native => llvm_backend::generate_llvm(&ir, output, opt_level),
+        CodegenTarget::Native => generate_native(&ir, output, opt_level),
+    }
+}
+
+/// Native code generation pipeline: IR → NativeCodegen → machine code → Linker → executable.
+///
+/// Uses the built-in `native_codegen` module (x86-64 / ARM64 / WASM emitters) and the
+/// `linker` module (ELF / PE / Mach-O) to produce executables without requiring LLVM.
+fn generate_native(ir: &IrModule, output: &Path, opt_level: u8) -> Result<(), String> {
+    info!("Native codegen pipeline: IR → machine code → linker → executable");
+
+    // 1. Detect host target triple
+    let target_triple = native_codegen::TargetTriple::host();
+    info!(
+        "Target: {} / {:?} / {:?}",
+        target_triple.arch, target_triple.os, target_triple.format
+    );
+
+    // 2. Compile IR → machine code via NativeCodegen
+    let mut codegen = native_codegen::NativeCodegen::new(target_triple);
+    codegen.set_opt_level(opt_level as u32);
+    let native_output = codegen
+        .compile_module(ir)
+        .map_err(|e| format!("Native codegen failed: {}", e))?;
+
+    info!(
+        "Native codegen produced {} bytes ({} symbols)",
+        native_output.binary.len(),
+        native_output.symbols.len()
+    );
+
+    // 3. Link machine code into a final executable via the built-in linker
+    let platform = linker::TargetPlatform::host()
+        .map_err(|e| format!("Failed to detect host platform: {}", e))?;
+
+    let mut link = linker::Linker::new(platform);
+
+    // Add the machine code as a .text section
+    link.add_text(native_output.binary);
+
+    // Register symbols from native codegen output
+    let entry_name = find_entry_symbol(&native_output.symbols);
+    for sym in &native_output.symbols {
+        link.add_symbol(linker::LinkerSymbol {
+            name: sym.name.clone(),
+            offset: sym.offset as u64,
+            size: sym.size as u64,
+            section: Some(".text".to_string()),
+            binding: linker::SymbolBinding::Global,
+            kind: linker::SymbolKind::Function,
+        });
+    }
+
+    link.set_entry_point(&entry_name);
+
+    // Choose the output path with appropriate extension
+    let output_path = if cfg!(target_os = "windows") {
+        output.with_extension("exe")
+    } else {
+        output.to_path_buf()
+    };
+
+    link.set_output_path(&output_path);
+    link.link_to_file()
+        .map_err(|e| format!("Linking failed: {}", e))?;
+
+    info!("Linked native executable: {:?}", output_path);
+    Ok(())
+}
+
+/// Pick the best entry-point symbol from the native codegen output.
+/// Prefers "main", then "_start", then falls back to the first symbol.
+fn find_entry_symbol(symbols: &[native_codegen::NativeSymbol]) -> String {
+    // Prefer "main" as entry (the linker on Windows will map it to mainCRTStartup)
+    for sym in symbols {
+        if sym.name == "main" {
+            return "main".to_string();
+        }
+    }
+    for sym in symbols {
+        if sym.name == "_start" {
+            return "_start".to_string();
+        }
+    }
+    // Fall back to the first symbol if any exist
+    if let Some(sym) = symbols.first() {
+        return sym.name.clone();
+    }
+    // Ultimate fallback
+    if cfg!(target_os = "windows") {
+        "mainCRTStartup".to_string()
+    } else {
+        "_start".to_string()
     }
 }
 

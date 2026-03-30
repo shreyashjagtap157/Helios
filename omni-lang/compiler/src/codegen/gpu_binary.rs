@@ -148,7 +148,7 @@ impl PtxCompiler {
             for inst in &block.instructions {
                 match inst {
                     IrInstruction::BinOp {
-                        dest,
+                        dest: _,
                         op,
                         left,
                         right,
@@ -162,7 +162,7 @@ impl PtxCompiler {
                         ));
                         reg_counter += 1;
                     }
-                    IrInstruction::Load { dest, ptr, ty } => {
+                    IrInstruction::Load { dest: _, ptr, ty } => {
                         let width = self.ir_type_to_ptx(ty);
                         ptx.push_str(&format!(
                             "    ld.global{} %rd{}, [%rd{}];\n",

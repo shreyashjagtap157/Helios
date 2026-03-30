@@ -420,7 +420,7 @@ fn compile_stmt(codegen: &mut OvmCodegen, stmt: &TypedStatement) -> Result<(), S
             codegen.emit_u16(match_val);
 
             let mut arm_exit_jumps = Vec::new();
-            for (i, (pattern, body)) in arms.iter().enumerate() {
+            for (_i, (pattern, body)) in arms.iter().enumerate() {
                 // Load match value for pattern test
                 codegen.emit(OvmOpcode::LoadLoc);
                 codegen.emit_u16(match_val);

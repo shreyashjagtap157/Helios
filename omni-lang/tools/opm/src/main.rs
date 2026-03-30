@@ -280,6 +280,56 @@ fn cmd_search(query: &str) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_manifest() {
+        let toml_content = r#"
+[package]
+name = "test-pkg"
+version = "0.1.0"
+authors = ["Test Author"]
+description = "A test package"
+edition = "2021"
+"#;
+        let manifest: OmniManifest = toml::from_str(toml_content).unwrap();
+        assert_eq!(manifest.package.name, "test-pkg");
+        assert_eq!(manifest.package.version, "0.1.0");
+    }
+
+    #[test]
+    fn test_version_comparison() {
+        let v1 = Version::parse("1.0.0").unwrap();
+        let v2 = Version::parse("2.0.0").unwrap();
+        assert!(v1 < v2);
+    }
+
+    #[test]
+    fn test_semver_parse() {
+        assert!(Version::parse("1.2.3").is_ok());
+        assert!(Version::parse("0.1.0-alpha").is_ok());
+        assert!(Version::parse("invalid").is_err());
+    }
+
+    #[test]
+    fn test_manifest_default_values() {
+        let toml_content = r#"
+[package]
+name = "minimal"
+version = "0.1.0"
+"#;
+        let manifest: OmniManifest = toml::from_str(toml_content).unwrap();
+        assert_eq!(manifest.package.name, "minimal");
+        assert!(manifest.package.description.is_none());
+        assert!(manifest.dependencies.is_empty());
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 #[tokio::main]

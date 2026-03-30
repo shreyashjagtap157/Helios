@@ -4,7 +4,7 @@
 //! protocol with Content-Length framing.  Connects to the omnc OVM runtime
 //! to provide breakpoint / stepping support (stubs for now).
 
-use log::{info, debug, warn, error};
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -63,6 +63,20 @@ impl DebugSession {
         self.seq += 1;
         s
     }
+
+    #[allow(dead_code)]
+    fn set_breakpoint(&mut self, file: String, line: u32) {
+        let breaks = self.breakpoints.entry(file).or_insert_with(Vec::new);
+        if !breaks.contains(&line) {
+            breaks.push(line);
+            breaks.sort();
+        }
+    }
+
+    #[allow(dead_code)]
+    fn clear_breakpoints(&mut self, file: &str) {
+        self.breakpoints.remove(file);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -97,8 +111,8 @@ fn read_message(reader: &mut impl BufRead) -> io::Result<Option<DapMessage>> {
 
     let mut body = vec![0u8; content_length];
     reader.read_exact(&mut body)?;
-    let msg: DapMessage = serde_json::from_slice(&body)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let msg: DapMessage =
+        serde_json::from_slice(&body).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     Ok(Some(msg))
 }
 
@@ -139,11 +153,7 @@ fn make_event(session: &mut DebugSession, event: &str, body: Value) -> DapMessag
     }
 }
 
-fn make_error_response(
-    session: &mut DebugSession,
-    request: &DapMessage,
-    msg: &str,
-) -> DapMessage {
+fn make_error_response(session: &mut DebugSession, request: &DapMessage, msg: &str) -> DapMessage {
     DapMessage {
         seq: session.next_seq(),
         msg_type: "response".into(),
@@ -285,11 +295,7 @@ fn handle_scopes(session: &mut DebugSession, req: &DapMessage) -> Vec<DapMessage
 
 fn handle_variables(session: &mut DebugSession, req: &DapMessage) -> Vec<DapMessage> {
     // Stub: return empty variable list
-    vec![make_response(
-        session,
-        req,
-        json!({ "variables": [] }),
-    )]
+    vec![make_response(session, req, json!({ "variables": [] }))]
 }
 
 fn handle_continue(session: &mut DebugSession, req: &DapMessage) -> Vec<DapMessage> {
@@ -297,11 +303,7 @@ fn handle_continue(session: &mut DebugSession, req: &DapMessage) -> Vec<DapMessa
     // In a real implementation we'd resume the OVM interpreter here.
     // For now, simulate hitting the next breakpoint or terminating.
     let resp = make_response(session, req, json!({ "allThreadsContinued": true }));
-    let evt = make_event(
-        session,
-        "terminated",
-        json!({}),
-    );
+    let evt = make_event(session, "terminated", json!({}));
     vec![resp, evt]
 }
 
@@ -413,5 +415,69 @@ fn main() {
                 return;
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_debug_session_new() {
+        let session = DebugSession::new();
+        assert_eq!(session.seq, 1);
+        assert!(!session.launched);
+        assert!(!session.stopped);
+        assert_eq!(session.breakpoints.len(), 0);
+    }
+
+    #[test]
+    fn test_set_breakpoint() {
+        let mut session = DebugSession::new();
+        session.set_breakpoint("test.omni".to_string(), 10);
+        assert!(session.breakpoints.contains_key("test.omni"));
+        assert_eq!(session.breakpoints["test.omni"], vec![10]);
+    }
+
+    #[test]
+    fn test_multiple_breakpoints() {
+        let mut session = DebugSession::new();
+        session.set_breakpoint("test.omni".to_string(), 10);
+        session.set_breakpoint("test.omni".to_string(), 20);
+        session.set_breakpoint("test.omni".to_string(), 5);
+
+        let breaks = &session.breakpoints["test.omni"];
+        assert_eq!(breaks.len(), 3);
+        assert_eq!(breaks, &vec![5, 10, 20]); // should be sorted
+    }
+
+    #[test]
+    fn test_clear_breakpoints() {
+        let mut session = DebugSession::new();
+        session.set_breakpoint("test.omni".to_string(), 10);
+        session.clear_breakpoints("test.omni");
+        assert!(!session.breakpoints.contains_key("test.omni"));
+    }
+
+    #[test]
+    fn test_dap_message_serialization() {
+        let msg = DapMessage {
+            seq: 1,
+            msg_type: "request".to_string(),
+            command: Some("initialize".to_string()),
+            event: None,
+            arguments: None,
+            body: None,
+            request_seq: None,
+            success: None,
+            message: None,
+        };
+
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"seq\":1"));
+        assert!(json.contains("\"type\":\"request\""));
     }
 }

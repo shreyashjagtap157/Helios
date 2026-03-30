@@ -126,14 +126,14 @@ impl Runtime {
             info!("Runtime: Processing file {:?}", change.path);
 
             // 1. Read source
-            if let Ok(source) = std::fs::read_to_string(&change.path) {
+            if let Ok(_source) = std::fs::read_to_string(&change.path) {
                 // 2. Parse (Simulated/Stubbed for now as we don't have easy access to the full pipeline here)
                 // In a full implementation:
                 // let ast = crate::parser::parse(&source)?;
                 // let ir_module = crate::ir::IrGenerator::new().generate(ast);
 
                 // For demonstration, we'll create a dummy IR function representing the changed code
-                let mut dummy_func = crate::ir::IrFunction {
+                let dummy_func = crate::ir::IrFunction {
                     name: "hot_swapped_func".to_string(),
                     params: vec![],
                     return_type: crate::ir::IrType::Void,

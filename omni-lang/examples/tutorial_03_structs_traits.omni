@@ -1,3 +1,17 @@
+// Tutorial 03: Structs and Traits
+// This demonstrates Omni's struct and trait system
+
+struct Point:
+    x: int
+    y: int
+
+struct Circle:
+    radius: int
+
 fn main():
-    println("Tutorial 03")
-    println("Done")
+    let p = Point { x: 10, y: 20 }
+    println("Created struct Point")
+    
+    let c = Circle { radius: 5 }
+    println("Created struct Circle")
+    println("Structs group related data together")

@@ -10,7 +10,6 @@
 
 use crate::ir::{IrBlock, IrFunction, IrInstruction, IrTerminator, IrType};
 use log::{debug, info};
-use std::collections::HashMap;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DWARF CFI (Call Frame Information) Constants

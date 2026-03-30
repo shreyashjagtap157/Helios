@@ -864,7 +864,7 @@ impl IrGenerator {
         }
 
         // Ensure we have a terminator — only add ret void if the last block doesn't have one
-        let needs_trailing_return = blocks
+        let _needs_trailing_return = blocks
             .last()
             .map(|b| matches!(b.terminator, IrTerminator::Return(None)))
             .unwrap_or(true)

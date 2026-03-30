@@ -25,10 +25,9 @@
 //! - Deterministic under --deterministic flag
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::Path;
 
-use crate::modes::{Feature, ModuleMode};
+use crate::modes::ModuleMode;
 
 /// Execution strategy chosen by the ESR.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,6 +112,7 @@ impl std::fmt::Display for ConcurrencyStrategy {
 
 /// Annotations that override resolver decisions.
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
 pub struct Annotations {
     pub aot: bool,
     pub jit: bool,
@@ -124,6 +124,7 @@ pub struct Annotations {
 
 /// Context provided to resolvers for decision making.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ResolverContext {
     pub module_name: String,
     pub mode: ModuleMode,
@@ -136,6 +137,7 @@ pub struct ResolverContext {
 
 /// Hotness data from profiling (used by ESR heuristics).
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct HotnessData {
     pub hot_functions: Vec<String>,
     pub hot_loops: Vec<String>,

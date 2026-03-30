@@ -2614,7 +2614,7 @@ impl Analyzer {
     /// Validates that concrete types satisfy trait bounds on generic parameters
     fn check_generic_trait_bounds(
         &mut self,
-        type_param: &str,
+        _type_param: &str,
         bounds: &[String],
         concrete_type: &Type,
     ) -> Result<(), SemanticError> {
@@ -2673,7 +2673,7 @@ impl Analyzer {
     fn check_move_with_enforcement(&mut self, name: &str) -> Result<(), SemanticError> {
         self.borrow_checker
             .move_var(name)
-            .map_err(|e| SemanticError::MoveError {
+            .map_err(|_e| SemanticError::MoveError {
                 name: name.to_string(),
             })?;
         Ok(())
@@ -2702,7 +2702,7 @@ impl Analyzer {
 
         // Collect all trait bounds to check
         let bounds_to_check: Vec<(String, String, Type)> =
-            if let Some(bounds) = self.generic_bounds.get(func_name) {
+            if let Some(_bounds) = self.generic_bounds.get(func_name) {
                 let type_param_names: Vec<String> =
                     (0..type_args.len()).map(|i| format!("T{}", i)).collect();
 
@@ -2753,7 +2753,7 @@ impl Analyzer {
             .statements
             .iter()
             .filter_map(|stmt| {
-                let mut substitutor = StatementSubstitutor::new(subst.clone());
+                let substitutor = StatementSubstitutor::new(subst.clone());
                 let transformed = substitutor.transform_statement(stmt);
                 self.statement_to_typed(&transformed).ok()
             })
@@ -2795,7 +2795,7 @@ impl Analyzer {
                     value: typed_value,
                 })
             }
-            Statement::Var { name, ty, value } => {
+            Statement::Var { name: _, ty, value } => {
                 let typed_value = value
                     .as_ref()
                     .map(|v| self.analyze_expression(v))

@@ -65,6 +65,12 @@ pub struct PatternRecognizer {
     confidence_threshold: f64,
 }
 
+impl Default for PatternRecognizer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PatternRecognizer {
     pub fn new() -> Self {
         Self {

@@ -3,10 +3,6 @@
 
 module main
 
-import ovm::runtime
-import core::system
-import core::io
-
 struct Helios:
     config: HeliosConfig
     running: bool
@@ -14,12 +10,12 @@ struct Helios:
     session_id: usize
     
     fn new() -> Helios:
-        io::println("Initializing Helios...")
+        println("Initializing Helios...")
         
         let config = HeliosConfig::default()
-        let session_id = 0
+        let session_id: usize = 0
         
-        io::println("Helios initialized")
+        println("Helios initialized")
         
         return Helios {
             config: config,
@@ -31,20 +27,20 @@ struct Helios:
     fn start(&mut self):
         self.running = true
         self.session_id = self.session_id + 1
-        io::println("Helios started")
+        println("Helios started")
     
     fn run(&mut self):
         self.start()
-        io::println("Running...")
+        println("Running...")
         self.stop()
     
     fn stop(&mut self):
-        io::println("Helios stopped")
+        println("Helios stopped")
         self.running = false
 
 struct HeliosConfig:
-    name: string
-    version: string
+    name: str
+    version: str
     
     fn default() -> HeliosConfig:
         return HeliosConfig {
@@ -52,8 +48,12 @@ struct HeliosConfig:
             version: "0.1.0"
         }
 
+fn println(msg: str):
+    // Basic println implementation for bootstrap
+    pass
+
 fn main():
-    io::println("Starting Helios...")
+    println("Starting Helios...")
     let helios = Helios::new()
     helios.run()
-    io::println("Done")
+    println("Done")

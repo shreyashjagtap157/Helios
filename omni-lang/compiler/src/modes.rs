@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![allow(dead_code)]
 //! Module Mode System for Omni
 //!
 //! Implements the three mutually exclusive per-module profiles from the master canvas:

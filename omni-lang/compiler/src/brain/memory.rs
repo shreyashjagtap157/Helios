@@ -38,6 +38,12 @@ pub struct MemorySystem {
     consolidation_threshold: f64,
 }
 
+impl Default for MemorySystem {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MemorySystem {
     pub fn new() -> Self {
         MemorySystem {

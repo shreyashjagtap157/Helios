@@ -464,7 +464,6 @@ impl BorrowChecker {
         let state = match self.variables.get(var_name) {
             Some(s) => s.clone(),
             None => {
-                // Undeclared - skip (may be a global / external).
                 return;
             }
         };
@@ -478,7 +477,6 @@ impl BorrowChecker {
                 });
             }
             OwnershipKind::Shared => {
-                // Shared (RC) values are cloned on move - no error.
                 return;
             }
             _ => {
@@ -721,9 +719,7 @@ impl BorrowChecker {
                 ty,
                 value: Some(value),
             } => {
-                // Evaluate the RHS first (may move values).
                 self.check_expression(value);
-                // Check if the value is an identifier being moved.
                 if let ast::Expression::Identifier(ref src) = value {
                     self.mark_moved(src);
                 }
@@ -745,7 +741,7 @@ impl BorrowChecker {
                         self.mark_moved(src);
                     }
                 }
-                self.declare_variable(name, true); // `var` is always mutable
+                self.declare_variable(name, true);
             }
             ast::Statement::Assignment {
                 target,
@@ -1038,7 +1034,6 @@ impl BorrowChecker {
         match arg {
             ast::Expression::Identifier(ref name) => {
                 self.check_use(name);
-                // Passing by value moves the argument.
                 self.mark_moved(name);
             }
             ast::Expression::Borrow {

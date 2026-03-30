@@ -1,3 +1,16 @@
+// Tutorial 04: Collections
+// This demonstrates Omni's collection types
+
 fn main():
-    println("Tutorial 04")
-    println("Done")
+    // Arrays/Lists
+    let numbers = [1, 2, 3, 4, 5]
+    println("Created an array with 5 elements")
+    
+    // Range
+    let r = 0..5
+    println("Created a range from 0 to 5")
+    
+    // Tuples
+    let pair = (10, "hello")
+    println("Created a tuple")
+    println("Collections help organize data")

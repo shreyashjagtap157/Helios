@@ -169,6 +169,12 @@ pub struct ConstraintSolver {
     lifetime_graph: HashMap<LifetimeVar, Vec<LifetimeVar>>,     // outlives relationships
 }
 
+impl Default for ConstraintSolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ConstraintSolver {
     pub fn new() -> Self {
         Self {
@@ -218,7 +224,7 @@ impl ConstraintSolver {
     /// Resolve associated type: <T as Trait>::Type
     pub fn resolve_assoc_type(
         &self,
-        base_type: &InferenceType,
+        _base_type: &InferenceType,
         trait_name: &str,
         type_name: &str,
     ) -> Option<InferenceType> {
@@ -286,7 +292,7 @@ impl ConstraintSolver {
                     }
                 }
 
-                Constraint::TraitBound(ty, trait_name) => {
+                Constraint::TraitBound(ty, _trait_name) => {
                     let ty = subst.apply(&ty);
                     // TODO: Validate trait bound against type
                     // For now, just check if it's a variable or concrete type

@@ -31,6 +31,12 @@ pub struct AdaptiveReasoner {
     strategy_scores: HashMap<String, f64>,
 }
 
+impl Default for AdaptiveReasoner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AdaptiveReasoner {
     pub fn new() -> Self {
         let mut scores = HashMap::new();

@@ -1,26 +1,44 @@
 # Omni Programming Language
 
 <!-- Badges -->
-![Version](https://img.shields.io/badge/version-1.0.0-blue)
+![Version](https://img.shields.io/badge/version-2.0.0-blue)
 ![Build](https://img.shields.io/badge/build-passing-brightgreen)
-![License](https://img.shields.io/badge/license-proprietary-lightgrey)
-![Tests](https://img.shields.io/badge/tests-674%20passing-brightgreen)
+![License](https://img.shields.io/badge/license-Apache%202.0-green)
+![Tests](https://img.shields.io/badge/tests-1019%20passing-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-windows%20%7C%20linux%20%7C%20macos-lightgrey)
 
 ---
 
 ## Overview
 
-**Omni** is a modern systems programming language designed for building safe, performant software with first-class support for AI workloads. It combines the safety guarantees of Rust-style ownership with Python-like readability through indentation-based syntax.
+**Omni** is an experimental, next-generation programming language designed to be:
+- **Self-hosting**: Capable of compiling and evolving itself
+- **Universal**: Applicable across domains (systems, web, AI, distributed systems, embedded)
+- **Multi-paradigm**: Supports procedural, object-oriented, functional, and data-oriented styles
+- **Layered**: Provides multiple levels of abstraction
+
+### Current Status
+
+Omni is in **Phase 2: Core Functionality**. The language has:
+- ✅ Working compiler (Rust-based)
+- ✅ Bytecode emission and OVM runtime
+- ✅ Self-hosted compiler (minimal)
+- ✅ Bootstrap pipeline (Stage 0)
+- ✅ Type system with inference
+- ✅ Ownership and borrowing
 
 ### Key Design Principles
 
-- **Memory safety without garbage collection** — ownership system with `own`, `shared`, `&`, and `&mut` semantics
-- **Expressive and readable** — indentation-based blocks, no braces or semicolons
-- **Trait-based generics** — zero-cost abstractions through monomorphization
-- **Built-in concurrency** — `async`/`await`, threads, channels, and an executor runtime
-- **Comprehensive standard library** — networking, crypto, filesystem, collections, math, and more
-- **Multiple backends** — tree-walking interpreter, OVM bytecode, and native code generation
+- **Memory safety** — ownership system with `own`, `shared`, `&`, and `&mut` semantics
+- **Expressive syntax** — indentation-based, Python-like readability
+- **Trait-based generics** — zero-cost abstractions
+- **Multiple backends** — interpreter, OVM bytecode, native code (via LLVM)
+
+---
+
+## Project Focus
+
+> **Note:** This project (`omni-lang/`) focuses exclusively on the Omni programming language compiler and runtime. The Helios framework (`helios-framework/`) is a separate project and is not part of this work.
 
 ---
 
@@ -44,8 +62,6 @@ cargo build --release
 Create a file called `hello.omni`:
 
 ```omni
-module hello
-
 fn main():
     println("Hello, World!")
 ```
@@ -53,15 +69,15 @@ fn main():
 ### Running
 
 ```bash
-# Interpret directly
-omnc run hello.omni
+# Run directly (interpreted)
+cargo run --bin omnc -- ../examples/hello.omni --run
 
 # Compile to OVM bytecode
-omnc build hello.omni -o hello.ovm
-omnc run hello.ovm
+cargo run --bin omnc -- ../examples/hello.omni -o hello.ovm
+cargo run --bin omnc -- hello.ovm --run
 
-# Compile to native binary (requires LLVM feature)
-omnc build hello.omni --target native -o hello
+# Compile to native binary
+cargo run --bin omnc -- ../examples/hello.omni --emit native -o hello
 ```
 
 ---
@@ -70,32 +86,41 @@ omnc build hello.omni --target native -o hello
 
 ### Ownership & Borrowing
 
-Omni enforces memory safety at compile time through an ownership system inspired by Rust, with four ownership modes:
+Omni enforces memory safety at compile time through an ownership system:
 
 ```omni
 fn ownership_demo():
-    let owned = own String::from("hello")   // Unique ownership
-    let shared_ref = shared owned            // Shared (read-only) reference
-    let borrow = &owned                      // Immutable borrow
-    let mut_borrow = &mut owned              // Mutable borrow (exclusive)
+    let owned = "hello"          // Owned string
+    let borrowed = &owned       // Immutable borrow
+    let mut_borrow = &mut owned  // Mutable borrow
+```
+
+### Type Inference
+
+Parameters and return types can be inferred:
+
+```omni
+fn add(a, b):              // Types inferred from usage
+    return a + b           // a, b inferred as int
+
+fn main():
+    let x = add(1, 2)     // x is inferred as int
+    println(x)             // Prints: 3
 ```
 
 ### Traits and Generics
 
 ```omni
 trait Printable:
-    fn display(&self) -> String
+    fn display(self) -> string
 
 struct Point:
-    x: f64
-    y: f64
+    x: int
+    y: int
 
 impl Printable for Point:
-    fn display(&self) -> String:
+    fn display(self) -> string:
         return format("({}, {})", self.x, self.y)
-
-fn print_item<T: Printable>(item: &T):
-    println(item.display())
 ```
 
 ### Async / Await

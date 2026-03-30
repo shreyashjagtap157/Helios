@@ -1,30 +1,130 @@
-// Omni Standard Library: Iterators
-// Iterator protocol stub (planned — deferred until trait system is stable)
+# Omni Standard Library - Iterator
+# Provides the Iterator trait and common adapters
 
-module std::iter
+trait Iterator:
+    type Item
+    fn next(&mut self) -> Option<Item>
+    
+    fn map(&self, f: fn(Item) -> T) -> MapIterator<Item, T>:
+        return MapIterator { iter: self, func: f }
+    
+    fn filter(&self, pred: fn(&Item) -> bool) -> FilterIterator<Item>:
+        return FilterIterator { iter: self, predicate: pred }
+    
+    fn collect(&mut self) -> Vector<Item>:
+        let result = Vector::new()
+        loop:
+            match self.next():
+                Some(item) => result.push(item)
+                None => break
+        return result
+    
+    fn count(&mut self) -> int:
+        let n = 0
+        loop:
+            match self.next():
+                Some(_) => n = n + 1
+                None => break
+        return n
+    
+    fn for_each(&mut self, f: fn(Item)):
+        loop:
+            match self.next():
+                Some(item) => f(item)
+                None => break
+    
+    fn enumerate(&mut self) -> EnumerateIterator<Item>:
+        return EnumerateIterator { iter: self, index: 0 }
+    
+    fn take(&mut self, n: int) -> TakeIterator<Item>:
+        return TakeIterator { iter: self, remaining: n }
+    
+    fn skip(&mut self, n: int) -> SkipIterator<Item>:
+        return SkipIterator { iter: self, remaining: n }
+    
+    fn zip(&mut self, other: &mut Iterator) -> ZipIterator<Item>:
+        return ZipIterator { a: self, b: other }
+    
+    fn fold(&mut self, init: T, f: fn(T, Item) -> T) -> T:
+        let acc = init
+        loop:
+            match self.next():
+                Some(item) => acc = f(acc, item)
+                None => break
+        return acc
+    
+    fn any(&mut self, pred: fn(&Item) -> bool) -> bool:
+        loop:
+            match self.next():
+                Some(item):
+                    if pred(&item):
+                        return true
+                None => break
+        return false
+    
+    fn all(&mut self, pred: fn(&Item) -> bool) -> bool:
+        loop:
+            match self.next():
+                Some(item):
+                    if not pred(&item):
+                        return false
+                None => break
+        return true
+    
+    fn find(&mut self, pred: fn(&Item) -> bool) -> Option<Item>:
+        loop:
+            match self.next():
+                Some(item):
+                    if pred(&item):
+                        return Some(item)
+                None => break
+        return None
+    
+    fn sum(&mut self) -> Item:
+        return self.fold(0, |acc, x| acc + x)
+    
+    fn min(&mut self) -> Option<Item>:
+        let result = None
+        loop:
+            match self.next():
+                Some(item):
+                    match result:
+                        None => result = Some(item)
+                        Some(current):
+                            if item < current:
+                                result = Some(item)
+                None => break
+        return result
+    
+    fn max(&mut self) -> Option<Item>:
+        let result = None
+        loop:
+            match self.next():
+                Some(item):
+                    match result:
+                        None => result = Some(item)
+                        Some(current):
+                            if item > current:
+                                result = Some(item)
+                None => break
+        return result
 
-import std::core
+struct RangeIterator:
+    current: int
+    end: int
+    step: int
 
-// Planned Iterator trait:
-//   trait Iterator:
-//       type Item
-//       fn next(&mut self) -> Option<Item>
-//
-// Planned adapter methods (on Iterator implementors):
-//   fn filter(self, predicate: fn(&Item) -> bool) -> Filter<Self>
-//   fn map(self, f: fn(Item) -> U) -> Map<Self, U>
-//   fn collect(self) -> Vec<Item>
-//   fn fold(self, init: Acc, f: fn(Acc, Item) -> Acc) -> Acc
-//   fn for_each(self, f: fn(Item))
-//   fn take(self, n: usize) -> Take<Self>
-//   fn skip(self, n: usize) -> Skip<Self>
-//   fn zip(self, other: impl Iterator) -> Zip<Self, Other>
-//   fn enumerate(self) -> Enumerate<Self>
-//   fn any(self, predicate: fn(&Item) -> bool) -> bool
-//   fn all(self, predicate: fn(&Item) -> bool) -> bool
-//   fn count(self) -> usize
-//   fn sum(self) -> Item where Item: Add
-//
-// Status: Deferred until O-031 is addressed.
-// The trait system (generic bounds, associated types) must be stable first.
-// See omni-lang/ISSUES.md O-031 for details.
+impl Iterator for RangeIterator:
+    type Item = int
+    fn next(&mut self) -> Option<int>:
+        if self.current < self.end:
+            let val = self.current
+            self.current = self.current + self.step
+            return Some(val)
+        return None
+
+fn range(start: int, end: int) -> RangeIterator:
+    return RangeIterator { current: start, end: end, step: 1 }
+
+fn range_step(start: int, end: int, step: int) -> RangeIterator:
+    return RangeIterator { current: start, end: end, step: step }

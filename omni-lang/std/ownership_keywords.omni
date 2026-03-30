@@ -1,17 +1,90 @@
 // Omni Language Specification: Ownership Keywords
 //
-// The keywords `own` and `shared` are recognized by the parser but currently
-// have NO runtime effect. They are syntactic placeholders for future ownership
-// semantics (similar to Rust's ownership model).
+// The keywords `own`, `shared`, `ref`, and `mut` control how values are
+// owned, borrowed, and mutated in Omni.
+
+module std::ownership_keywords
+
+import std::core
+
+// ============================================
+// Ownership Model
+// ============================================
+
+// `own` — Exclusive ownership. The value has exactly one owner.
+// When the owner goes out of scope the value is dropped.
 //
-// Current status (v1):
-//   - `own` in return position (e.g., `fn foo() -> own Self`) is parsed and
-//     silently ignored by codegen. The OVM treats it as a no-op.
-//   - `shared` is not used in the stdlib currently.
+// Example:
+//   fn create_buffer() -> own Buffer:
+//       let buf = Buffer::new(1024)
+//       return buf   // Ownership transferred to caller
 //
-// Future (post-v1, when trait system is stable):
-//   - `own T` will mean exclusive ownership (like Rust's owned values)
-//   - `shared T` will mean shared/immutable reference (like Arc<T>)
-//   - Move semantics and borrow checking will be enforced
+//   fn main():
+//       let b = create_buffer()   // b owns the Buffer
+//       process(b)                // Ownership moved into process()
+//       // b is no longer valid here
+
+// `shared` — Shared (reference-counted) ownership. Multiple owners
+// may hold the value; it is dropped when the last owner releases it.
 //
-// Until then, these keywords serve as documentation only.
+// Example:
+//   fn share_config() -> shared Config:
+//       let cfg = Config::load("app.toml")
+//       return shared cfg         // Reference count starts at 1
+//
+//   fn main():
+//       let c1 = share_config()   // refcount = 1
+//       let c2 = c1               // refcount = 2  (implicit clone of shared)
+//       // Both c1 and c2 see the same Config
+
+// `ref` — Immutable borrow. The borrower may read but not modify the value.
+// The original owner retains ownership.
+//
+// Example:
+//   fn print_name(name: &str):
+//       println(name)
+//
+//   fn main():
+//       let s = "hello"
+//       print_name(&s)     // Borrow s immutably
+//       println(s)         // s is still valid
+
+// `mut` — Mutable borrow. Exactly one mutable borrow may exist at a time.
+// No other borrows (mutable or immutable) may coexist.
+//
+// Example:
+//   fn push_item(v: &mut Vec<i32>, item: i32):
+//       v.push(item)
+//
+//   fn main():
+//       let mut nums = Vec::new()
+//       push_item(&mut nums, 42)
+//       println(nums.len())   // 1
+
+// ============================================
+// Current Compiler Status (v1)
+// ============================================
+
+// In the current v1 compiler:
+//   - `own` in return position is parsed and silently ignored by codegen.
+//     The OVM treats it as a no-op.
+//   - `shared` is parsed but has no runtime effect.
+//   - `&` (immutable ref) and `&mut` (mutable ref) are parsed and
+//     forwarded to codegen, but borrow-checking is NOT enforced.
+//
+// These keywords exist today so that:
+//   1. Code written now will be forward-compatible when full ownership
+//      semantics land (post-v1).
+//   2. They serve as documentation of intended ownership contracts.
+
+// ============================================
+// Ownership Rules (planned, post-v1)
+// ============================================
+
+// 1. Each value has exactly one owner at any time.
+// 2. When the owner goes out of scope, the value is dropped.
+// 3. Ownership can be transferred (moved) via assignment or function call.
+// 4. Immutable borrows (&T) allow multiple simultaneous readers.
+// 5. Mutable borrows (&mut T) are exclusive — no other borrows may exist.
+// 6. Borrows must not outlive the owner.
+// 7. `shared T` uses atomic reference counting for thread-safe sharing.

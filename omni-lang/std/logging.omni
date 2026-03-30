@@ -1,18 +1,128 @@
 // Omni Standard Library: Logging
-// Basic logging functions (stubs — wraps println with level prefixes)
+// Structured logging with levels, formatting, and timestamps
 
 module std::logging
 
 import std::core
+import std::time::{Instant, DateTime}
 
-fn log_info(msg: &str):
-    println("[INFO] " + msg)
+// ============================================
+// Log Levels
+// ============================================
 
-fn log_warn(msg: &str):
-    println("[WARN] " + msg)
+enum LogLevel:
+    Trace
+    Debug
+    Info
+    Warn
+    Error
+    Fatal
 
-fn log_error(msg: &str):
-    println("[ERROR] " + msg)
+    fn name(&self) -> &str:
+        match self:
+            LogLevel::Trace => "TRACE"
+            LogLevel::Debug => "DEBUG"
+            LogLevel::Info  => "INFO"
+            LogLevel::Warn  => "WARN"
+            LogLevel::Error => "ERROR"
+            LogLevel::Fatal => "FATAL"
 
-fn log_debug(msg: &str):
-    println("[DEBUG] " + msg)
+    fn severity(&self) -> u8:
+        match self:
+            LogLevel::Trace => 0
+            LogLevel::Debug => 1
+            LogLevel::Info  => 2
+            LogLevel::Warn  => 3
+            LogLevel::Error => 4
+            LogLevel::Fatal => 5
+
+// ============================================
+// Logger Configuration
+// ============================================
+
+struct LoggerConfig:
+    min_level: LogLevel
+    show_timestamp: bool
+    show_source: bool
+    output: LogOutput
+
+enum LogOutput:
+    Stdout
+    Stderr
+    File(String)
+
+// ============================================
+// Logger
+// ============================================
+
+var _global_config: LoggerConfig = LoggerConfig {
+    min_level: LogLevel::Info,
+    show_timestamp: true,
+    show_source: false,
+    output: LogOutput::Stderr,
+}
+
+fn set_level(level: LogLevel):
+    _global_config.min_level = level
+
+fn set_show_timestamp(show: bool):
+    _global_config.show_timestamp = show
+
+fn set_show_source(show: bool):
+    _global_config.show_source = show
+
+fn set_output(output: LogOutput):
+    _global_config.output = output
+
+fn _format_message(level: LogLevel, msg: &str, file: &str, line: u32) -> String:
+    var parts = String::new()
+
+    if _global_config.show_timestamp:
+        let now = DateTime::now_utc()
+        parts = parts + now.format("%Y-%m-%d %H:%M:%S") + " "
+
+    parts = parts + "[" + level.name() + "] "
+
+    if _global_config.show_source:
+        parts = parts + file + ":" + line.to_string() + " "
+
+    parts = parts + msg
+    return parts
+
+fn _should_log(level: LogLevel) -> bool:
+    return level.severity() >= _global_config.min_level.severity()
+
+fn _emit(msg: &str):
+    match _global_config.output:
+        LogOutput::Stdout => println(msg)
+        LogOutput::Stderr => eprintln(msg)
+        LogOutput::File(path) => file_append(&path, msg + "\n")
+
+// ============================================
+// Public logging functions
+// ============================================
+
+fn trace(msg: &str):
+    if _should_log(LogLevel::Trace):
+        _emit(&_format_message(LogLevel::Trace, msg, "", 0))
+
+fn debug(msg: &str):
+    if _should_log(LogLevel::Debug):
+        _emit(&_format_message(LogLevel::Debug, msg, "", 0))
+
+fn info(msg: &str):
+    if _should_log(LogLevel::Info):
+        _emit(&_format_message(LogLevel::Info, msg, "", 0))
+
+fn warn(msg: &str):
+    if _should_log(LogLevel::Warn):
+        _emit(&_format_message(LogLevel::Warn, msg, "", 0))
+
+fn error(msg: &str):
+    if _should_log(LogLevel::Error):
+        _emit(&_format_message(LogLevel::Error, msg, "", 0))
+
+fn fatal(msg: &str):
+    if _should_log(LogLevel::Fatal):
+        _emit(&_format_message(LogLevel::Fatal, msg, "", 0))
+        panic(msg)

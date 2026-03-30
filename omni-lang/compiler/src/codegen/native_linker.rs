@@ -874,25 +874,17 @@ impl NativeLinker {
         sections: &HashMap<String, Vec<u8>>,
         _symbol_addresses: &HashMap<String, u64>,
     ) -> Result<Vec<u8>, String> {
-        let mut executable = Vec::new();
-
-        match self.config.target_triple.as_str() {
-            t if t.contains("x86_64-unknown-linux") => {
-                executable = self.generate_elf64_executable(sections)?;
-            }
-            t if t.contains("x86_64-pc-windows") => {
-                executable = self.generate_pe_executable(sections)?;
-            }
-            t if t.contains("x86_64-apple") => {
-                executable = self.generate_macho_executable(sections)?;
-            }
+        let executable = match self.config.target_triple.as_str() {
+            t if t.contains("x86_64-unknown-linux") => self.generate_elf64_executable(sections)?,
+            t if t.contains("x86_64-pc-windows") => self.generate_pe_executable(sections)?,
+            t if t.contains("x86_64-apple") => self.generate_macho_executable(sections)?,
             _ => {
                 return Err(format!(
                     "Unsupported target triple: {}",
                     self.config.target_triple
                 ));
             }
-        }
+        };
 
         Ok(executable)
     }

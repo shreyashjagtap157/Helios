@@ -8,7 +8,6 @@
 //! - Linker integration for external linking
 
 use crate::codegen::native_codegen::{AluOp, MachineInst};
-use crate::ir::{IrFunction, IrInstruction, IrTerminator, IrType, IrValue};
 use log::info;
 use std::collections::HashMap;
 
@@ -769,7 +768,7 @@ impl RiscvEmitter {
             MachineInst::Nop => {
                 self.nop();
             }
-            MachineInst::Call { target } => {
+            MachineInst::Call { target: _ } => {
                 // JAL ra, target (offset will need fixup)
                 self.jal(RvReg::Ra, 0); // Placeholder, needs linker fixup for target
             }

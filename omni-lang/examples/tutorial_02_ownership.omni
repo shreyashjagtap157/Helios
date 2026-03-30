@@ -1,3 +1,12 @@
+// Tutorial 02: Ownership and Borrowing
+// This demonstrates Omni's ownership and borrowing features
+
 fn main():
-    println("Tutorial 02")
-    println("Done")
+    // Ownership example
+    let name = "Alice"
+    let greeting = concat("Hello, ", name)
+    println(greeting)
+    println("Strings are moved by default")
+
+fn concat(a, b) -> string:
+    return a + b

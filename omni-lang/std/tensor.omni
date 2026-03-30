@@ -262,12 +262,6 @@ trait Numeric:
     fn (-)(self, other: Self) -> Self
     fn (/)(self, other: Self) -> Self
 
-        i -= 1
-        strides.push(acc)
-        acc *= shape.get(i).unwrap()
-    strides.reverse()
-    return strides
-
 // ============================================
 // Native Backend Binding
 // ============================================

@@ -344,14 +344,34 @@ fn sequence<Y, R>(
 
 // Select: Resume first coroutine that yields
 fn select<Y, R>(
-    first: Box<dyn Coroutine<Yield=Y, Return=R>>,
-    second: Box<dyn Coroutine<Yield=Y, Return=R>>,
+    mut first: Box<dyn Coroutine<Yield=Y, Return=R>>,
+    mut second: Box<dyn Coroutine<Yield=Y, Return=R>>,
 ) -> Box<dyn Coroutine<Yield=Y, Return=(usize, Y)>>:
     // Return a new coroutine that races both
-    // Returns (index, yielded_value) for whichever completes first
+    // Returns (index, yielded_value) for whichever yields/completes first
+    var first_done = false
+    var second_done = false
+
     Box::new(SimpleCoroutine {
-        inner: Box::new(|| {
-            CoroutineState::Complete((0, todo!()))
+        inner: Box::new(move || {
+            // Try first coroutine
+            if not first_done:
+                match first.resume():
+                    CoroutineState::Yielded(value) =>
+                        return CoroutineState::Yielded((0, value))
+                    CoroutineState::Complete(_) =>
+                        first_done = true
+
+            // Try second coroutine
+            if not second_done:
+                match second.resume():
+                    CoroutineState::Yielded(value) =>
+                        return CoroutineState::Yielded((1, value))
+                    CoroutineState::Complete(_) =>
+                        second_done = true
+
+            // Both completed without yielding
+            CoroutineState::Complete((0, unreachable("select: both coroutines completed without yielding")))
         }),
     })
 
