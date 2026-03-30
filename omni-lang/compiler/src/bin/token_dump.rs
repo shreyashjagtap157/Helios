@@ -1,6 +1,6 @@
+use omni_compiler::lexer::tokenize;
 use std::env;
 use std::fs;
-use omni_compiler::lexer::tokenize;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
