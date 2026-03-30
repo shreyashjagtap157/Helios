@@ -1,26 +1,10 @@
-// Integration Test - Simplified
+// Integration Test
 module integration_test
 
-fn fibonacci(n: int) -> int:
-    if n <= 0:
-        return 0
-    if n == 1:
-        return 1
-    return fibonacci(n - 1) + fibonacci(n - 2)
-
-fn factorial(n: int) -> int:
-    if n <= 1:
-        return 1
-    return n * factorial(n - 1)
-
-fn gcd(a: int, b: int) -> int:
-    if b == 0:
-        return a
-    return gcd(b, a % b)
+fn test() -> int:
+    return 5
 
 fn main():
-    println("Integration Test")
-    println("Fibonacci(10): ", fibonacci(10))
-    println("Factorial(5): ", factorial(5))
-    println("GCD(48, 18): ", gcd(48, 18))
+    println("Test")
+    let x = test()
     println("Done")

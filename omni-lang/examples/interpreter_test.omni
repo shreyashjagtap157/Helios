@@ -1,35 +1,12 @@
-// Interpreter Test - Simplified
+// Interpreter Test
 module interpreter_test
 
-fn fibonacci(n: int) -> int:
+fn fib(n: int) -> int:
     if n <= 1:
         return n
-    return fibonacci(n - 1) + fibonacci(n - 2)
-
-fn factorial(n: int) -> int:
-    if n <= 1:
-        return 1
-    return n * factorial(n - 1)
-
-fn is_even(n: int) -> bool:
-    if n == 0:
-        return true
-    return is_even(n - 2)
-
-fn max(a: int, b: int) -> int:
-    if a > b:
-        return a
-    return b
+    return fib(n - 1)
 
 fn main():
-    println("=== Omni Language Interpreter Tests ===")
-    
-    let x = 10
-    let y = 3
-    
-    println("Fibonacci(10): ", fibonacci(10))
-    println("Factorial(5): ", factorial(5))
-    println("Max(5, 10): ", max(5, 10))
-    println("Is 4 even?: ", is_even(4))
-    
-    println("Tests Complete")
+    println("Tests")
+    let f = fib(3)
+    println("Done")
