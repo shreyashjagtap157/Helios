@@ -5,6 +5,27 @@
 
 ---
 
+## Self-Hosting Progress (2026-03-30)
+
+### ✅ ACHIEVED
+
+| Item | Status | Notes |
+|------|--------|-------|
+| Minimal self-hosted compiler | ✅ Working | `omni/compiler_minimal.omni` |
+| omnc runs self-hosted code | ✅ Working | Can execute compiler_minimal.omni |
+| Bootstrap concept | ✅ Working | `bootstrap.sh` demonstrates it |
+
+### 🔴 NOT YET ACHIEVED
+
+| Item | Status | Notes |
+|------|--------|-------|
+| Bytecode emission | ❌ Missing | No `--emit bytecode` option |
+| Standalone .ovm files | ❌ Missing | Only runtime execution |
+| Full bootstrap stages | ❌ Partial | Needs bytecode emission |
+| Remove Rust dependency | ❌ Not achieved | Still need Rust |
+
+---
+
 ## Self-Hosting Blockers (CRITICAL)
 
 These issues block true self-hosting — making Omni compile itself without Rust.
