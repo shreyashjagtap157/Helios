@@ -183,9 +183,9 @@ struct Helios:
         let results = self.knowledge_store.query(query.clone())
         
         if results.is_empty():
-            // I don't know - be honest about it
+            // I do not know - be honest about it
             return Response::text(format(
-                "I don't have information about '{}'. Would you like to provide it, or should I note this as something to learn?",
+                "I do not have information about '{}'. Would you like to provide it, or should I note this as something to learn?",
                 query.subject
             ))
         
@@ -212,7 +212,7 @@ struct Helios:
                     return self.execute_capability(action)
                 else:
                     return Response::text(format(
-                        "I don't have the capability to '{}'. Would you like to teach me how?",
+                        "I do not have the capability to '{}'. Would you like to teach me how?",
                         action.capability_name
                     ))
             
@@ -227,7 +227,7 @@ struct Helios:
     // Handle unknown input - be honest
     fn handle_unknown(&self, what: String) -> Response:
         Response::text(format(
-            "I don't understand '{}'. Could you please rephrase or explain what you mean?",
+            "I do not understand '{}'. Could you please rephrase or explain what you mean?",
             what
         ))
     
@@ -360,7 +360,7 @@ Commands:
 
 I will:
 - Answer if I know (with source and confidence)
-- Say "I don't know" if I don't (NEVER make things up)
+- Say "I do not know" if I do not (NEVER make things up)
 - Learn new information you provide (exact storage, not training)
 - Ask for clarification when uncertain
 - Only modify myself with your explicit approval
@@ -422,7 +422,7 @@ Processor: {}
                 self.experience_log.all()
         
         if results.is_empty():
-            return Response::text("I don't have any matching records.")
+            return Response::text("I do not have any matching records.")
         
         let mut response = String::from("Recall results:\n\n")
         for result in results:

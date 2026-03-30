@@ -1,128 +1,104 @@
 # Omni Self-Hosting TODO List
 
-**Last Updated:** 2026-03-27
+**Last Updated:** 2026-03-30
 
 ---
 
-## Executive Summary
+## Honest Assessment
 
-**Goal:** Make Omni fully self-hosting and standalone (compile itself without external languages)
+**Current Status: NOT SELF-HOSTING**
 
-**Current Status:** ~70% complete
-
-| Phase | Status |
-|-------|--------|
-| Phase 1-2 (Bootstrap Infrastructure) | ✅ 100% |
-| Phase 3 (Self-Hosted Source) | ✅ 85% (inline if now works) |
-| Phase 4 (Bootstrap Pipeline) | ⚠️ Partial (simple code works) |
-| Phase 5 (Stdlib) | ⚠️ 65% (partial) |
-| Phase 6-7 (True Self-Hosting) | 🔴 30% |
+The goal is to make Omni compile itself WITHOUT Rust. This document tracks progress toward that goal.
 
 ---
 
-## Critical Path - Self-Hosting
+## The Reality
 
-### Phase 1-2: Bootstrap Infrastructure (COMPLETE ✅)
-- [x] 1.1 Build Rust compiler
-- [x] 1.2 Build Rust OVM runner
-- [x] 1.3 Test .omni → .ovm compilation
-- [x] 1.4 Test .ovm execution
-- [x] 1.5 Add --emit-exe flag for PE bundling
-- [x] 1.6 Test standalone .ove generation
-- [x] 1.7 Fix string concatenation in compiler
-
-### Phase 3: Self-Hosted Compiler Source
-- [x] 3.1 Self-hosted source exists (~20 files, ~8000 lines)
-- [x] 3.2 Simple code compiles and runs ✅
-- [x] 3.3 Stdlib modules compile ✅
-- [x] 3.4 Structs and basic types work ✅
-- [x] 3.5 Inline if-expressions work ✅ (if cond: expr1 else: expr2)
-
-### Phase 4: Bootstrap Pipeline (PARTIAL)
-- [x] 4.1 Stage 0 (Rust) - WORKING
-- [x] 4.2 Simple code compiles with Rust compiler
-- [x] 4.3 OVM generation works
-- [ ] 4.4 Full self-hosting - needs more work
-
-### Phase 5: True Self-Hosting (NEEDS WORK)
-- [ ] 5.1 Self-hosted compiler compiles itself
-- [ ] 5.2 Stage N bootstrap (compiler compiles next stage compiler)
-- [ ] 5.3 OVM implementation in Omni (instead of Rust)
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Rust compiler (omnc) | ✅ Works | Can compile simple Omni programs |
+| Self-hosted source | ✅ Exists | ~13,000 lines in `omni-lang/omni/compiler/` |
+| omnc → self-hosted compiler | ❌ FAILS | 56 errors - too complex for current omnc |
+| Bootstrap Stage 1 | ❌ Placeholder | Just copies Stage 0 |
+| Bootstrap Stage 2 | ❌ Placeholder | Just copies Stage 1 |
+| **True self-hosting** | ❌ NOT ACHIEVED | Must compile without Rust |
 
 ---
 
-## What's Working Now
+## What Works (Simple Programs)
 
+```omni
+✅ let x = 5
+✅ let z = x + y
+✅ if x > 5: ... else: ...
+✅ fn main(): ...
+✅ struct Point: x int, y int
+✅ enum Color: Red, Green, Blue
+✅ for i in range: ...
+✅ while cond: ...
+✅ match x: ...
+✅ println("hello")
 ```
-✅ Simple arithmetic: let z = x + y → 15
-✅ Variables: let x = 5
-✅ If statements: if x > 5: ... else: ...
-✅ Inline if: let x = if cond: 1 else: 0
-✅ Print: println("hello")
-✅ Functions: fn main(): ...
-✅ Structs: struct Point: x int, y int
-✅ Enum: enum Color: Red, Green, Blue
-✅ For loops: for i in range: ...
-✅ While loops: while cond: ...
-✅ Match: match x: ...
-✅ Unary ops: -x, not x
-✅ Comparisons: ==, !=, <, >, <=, >=
-✅ Logical: and, or
-✅ Method calls: obj.method()
-```
-
-## Remaining Work
-
-### High Priority
-1. **Expand mini_compiler.omni** - Handle more syntax, generate better code
-2. **True bootstrap loop** - Self-hosted compiler compiling next version
-3. **OVM in Omni** - Implement OVM runtime in Omni instead of Rust
-
-### Medium Priority
-4. **Stdlib completion** - More core types/traits
-5. **Error handling** - Better error messages
-6. **Pattern matching** - match expressions fully working
-
-### Lower Priority
-7. **Async/await** - Full async runtime
-8. **Macros** - Hygienic macro system
-9. **Foreign function interface**
 
 ---
 
-## Verification - Pipeline Works!
+## What Doesn't Work
 
-```
-Stage 0 (Rust):     omnc (Rust) → .ovm → ovm-runner ✅
-                    omnc --emit-exe → .ove (standalone) ✅
-                    
-Self-hosted test:  simple .omni → .ovm → runs ✅
-                    inline if works ✅
-                    structs work ✅
-                    arithmetic work ✅
-                    enums work ✅
-                    for/while loops work ✅
-```
+### Critical Blockers
 
-## Remaining Issues & Fixes Needed
+1. **Self-hosted compiler cannot be compiled**
+   - 56 errors when omnc tries to compile `omni/main.omni`
+   - Complex generic constraints unsupported
+   - Pattern matching edge cases fail
+   - Trait bounds incomplete
 
-### Critical Issues
-1. **For loops don't generate code** - Compiles but produces no output
-2. **Self-hosted OVM (stdlib/ovm.omni)** - 86 errors, too complex for current compiler
-3. **mini_compiler.omni** - Too slow/complex to compile itself
+2. **Bootstrap pipeline is non-functional**
+   - Stage 0: Rust omnc (works)
+   - Stage 1: Placeholder (copies Stage 0)
+   - Stage 2: Placeholder (copies Stage 1)
 
-### Working Features ✅
-- Arithmetic: `x + y * z`
-- Variables: `let x = 5`
-- If/else statements
-- Inline if: `if cond: a else: b`
-- While loops
-- Function definitions
-- Struct definitions  
-- Enum definitions
-- Print/println
+3. **No standalone binary emission**
+   - `omnc --emit native` doesn't produce working .exe
+   - Only runtime execution works
 
-### What Needs Fixing
-1. For loop code generation in IR
-2. Make simpler bootstrap compiler
-3. Continue expanding mini_compiler.omni
+---
+
+## Path to True Self-Hosting
+
+### Phase 1: Fix omnc to Compile Self-Hosted Source
+
+- [ ] Fix the 56 compilation errors
+- [ ] Simplify self-hosted source if needed
+- [ ] Test: `omnc --run omni/main.omni` works
+
+### Phase 2: Working Bootstrap Pipeline
+
+- [ ] Stage 0: Rust omnc compiles self-hosted source → binary
+- [ ] Stage 1: Use Stage 0 binary to compile self-hosted source
+- [ ] Stage 2: Use Stage 1 binary to compile again
+- [ ] Verify: Stage 1 and Stage 2 output is bit-identical
+
+### Phase 3: Remove Rust Dependency
+
+- [ ] OVM implementation in Omni (not Rust)
+- [ ] Standalone build system in Omni
+- [ ] Final: Omni compiles itself without any Rust
+
+---
+
+## Recent Fixes
+
+- **2026-03-30**: Fixed single quote parsing issue (replaced `don't` with `do not`)
+- **Result**: Parse error fixed, but 56 new errors surfaced
+
+---
+
+## Contributing
+
+This is the most critical work on the project. See [ISSUES.md](../ISSUES.md) for specific tasks.
+
+The path forward:
+1. Fix omnc to handle more language features
+2. Simplify self-hosted source to what omnc CAN compile
+3. Build the bootstrap pipeline
+4. Eventually replace Rust entirely

@@ -5,7 +5,58 @@
 
 ---
 
-## Good First Issues
+## Self-Hosting Blockers (CRITICAL)
+
+These issues block true self-hosting — making Omni compile itself without Rust.
+
+### SH-001: Parse Error - Single Quotes in Strings
+
+**Status:** ✅ FIXED  
+The Rust lexer couldn't handle single quotes inside double-quoted strings. Fixed by replacing contractions (`don't` → `do not`) in self-hosted source.
+
+### SH-002: 56 Compilation Errors in Self-Hosted Source
+
+**Status:** 🔴 OPEN  
+**Priority:** Critical  
+
+The self-hosted compiler source (`omni-lang/omni/main.omni`) has code that the Rust-based omnc cannot parse/type-check. 56 errors including:
+- Complex generic constraints
+- Pattern matching edge cases
+- Trait bounds the compiler doesn't handle
+- Closure type inference failures
+
+**Impact:** Cannot compile self-hosted compiler with current omnc.
+
+**What needs to happen:**
+1. Simplify self-hosted source to what omnc CAN compile, OR
+2. Fix omnc to handle these 56 error cases
+
+### SH-003: Bootstrap Stages Are Placeholders
+
+**Status:** 🔴 OPEN  
+**Priority:** Critical  
+
+```
+Stage 0: Rust compiler (working)
+Stage 1: Copies Stage 0 binary (NOT functional)
+Stage 2: Copies Stage 1 binary (NOT functional)
+```
+
+**What needs to happen:**
+1. Fix SH-002 first
+2. Implement real Stage 1 that compiles self-hosted source
+3. Implement Stage 2 that compiles Stage 1 output
+4. Verify bit-identical output (proves correct compilation)
+
+### SH-004: No Standalone Binary Emission
+
+**Status:** 🔴 OPEN  
+**Priority:** Critical  
+
+The `omnc --emit native` doesn't produce working executables. Only runtime execution works.
+
+**What needs to happen:**
+- Fix codegen to produce valid native binaries
 
 Well-scoped tasks for newcomers. Each touches a single area and has clear steps.
 
