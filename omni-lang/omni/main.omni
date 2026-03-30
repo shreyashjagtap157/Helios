@@ -50,7 +50,9 @@ struct OmniRuntime:
 
 fn println(msg: str):
     // Basic println implementation for bootstrap
-    pass
+    // Use core println implementation from std/core/lib.omni
+    // This file previously had a placeholder; defer to core implementation.
+    core::println(msg)
 
 fn main():
     println("Starting Omni runtime...")
