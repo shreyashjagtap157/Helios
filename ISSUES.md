@@ -5,93 +5,420 @@
 
 ---
 
-## Self-Hosting Progress (2026-03-30)
+## Executive Summary (2026-03-30)
 
-### ✅ ACHIEVED
+### What's Working ✅
 
-| Item | Status | Notes |
-|------|--------|-------|
-| Minimal self-hosted compiler | ✅ Working | `omni/compiler_minimal.omni` |
-| omnc runs self-hosted code | ✅ Working | Can execute compiler_minimal.omni |
-| Bytecode emission | ✅ Working | `omnc file.omni -o output` creates .ovm |
-| OVM runtime executes .ovm | ✅ Working | `--run file.ovm` works |
-| Bootstrap pipeline | ✅ Working | `bootstrap.sh` demonstrates full flow |
-| Installation scripts | ✅ Working | `install.sh`, `install.ps1`, `uninstall.sh` |
-| Release packaging | ✅ Working | `make_release.sh` creates distribution |
-| Cargo.toml configuration | ✅ Working | Proper metadata for crates.io |
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Rust-based Compiler (omnc) | ✅ Working | Compiles and runs Omni source code |
+| Bytecode Emission | ✅ Working | `omnc file.omni -o output.ovm` |
+| OVM Runtime | ✅ Working | `omnc --run file.ovm` executes bytecode |
+| Self-Hosted Compiler | ✅ Working | `compiler_minimal.omni` compiles and runs |
+| Bootstrap Pipeline | ✅ Working | `bootstrap.sh` demonstrates self-hosting |
+| Installation Scripts | ✅ Working | `install.sh`, `install.ps1`, `uninstall.sh` |
+| Examples | ✅ Working | All 15 examples compile successfully |
+| Cargo Tests | ✅ Working | 547+ tests passing |
 
-### ⚠️ LIMITED BY PARSER
+### What's Broken/Limited ❌
 
-| Item | Status | Notes |
-|------|--------|-------|
-| Complex features | ❌ Limited | Parser doesn't support nested generics, closures, etc |
-| Full main.omni | ⚠️ Simplified | Uses basic features only |
-| Remove Rust dependency | ❌ Not achieved | Still need Rust to build omnc |
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Type Inference | ⚠️ Limited | Fails on complex expressions, arithmetic in returns |
+| Function Parameters | ⚠️ Limited | Without explicit types, causes inference errors |
+| Full Self-Hosting | ❌ Not Achieved | Still need Rust to build omnc |
+| Native Binary Emission | ❌ Not Working | `--emit native` doesn't produce working binaries |
+| Bootstrap Stages 1-2 | ❌ Not Implemented | Only Stage 0 works |
+| Complex Language Features | ❌ Limited | Closures, advanced patterns, complex generics |
 
 ---
 
-## Self-Hosting Blockers (CRITICAL)
+## CRITICAL: Self-Hosting Blockers
 
-These issues block true self-hosting — making Omni compile itself without Rust.
+These issues prevent Omni from compiling itself without Rust.
 
-### SH-001: Parse Error - Single Quotes in Strings
-
-**Status:** ✅ FIXED  
-The Rust lexer couldn't handle single quotes inside double-quoted strings. Fixed by replacing contractions (`don't` → `do not`) in self-hosted source.
-
-### SH-002: Bytecode Emission Works
-
-**Status:** ✅ FIXED (2026-03-30)
-The compiler CAN now emit standalone .ovm bytecode files:
-```bash
-omnc source.omni -o output  # creates output.ovm
-omnc --run output.ovm       # executes the bytecode
-```
-
-### SH-003: Parser Fixed for Nested Generics
-
-**Status:** ✅ FIXED (2026-03-30)  
-Fixed the parser to handle nested generics like `Vec<Option<T>>`:
-- Parser now handles `>>` (Shr) token in generic contexts
-- Properly closes nested and outer generics
-
-**Result:** main.omni compiles to bytecode and runs!
-
-### SH-004: Bootstrap Stages Are Placeholders
+### SH-001: Type Inference Fails on Function Return Expressions
 
 **Status:** 🔴 OPEN  
-**Priority:** Critical  
+**Priority:** CRITICAL  
+**Component:** compiler, semantic analysis
 
+**Description:**
+The type inference system fails when functions return arithmetic expressions. This causes runtime errors like:
 ```
-Stage 0: Rust compiler (working ✅)
-Stage 1: Not yet implemented (need self-hosted to compile itself)
-Stage 2: Not yet implemented
+Error: Type mismatch for integer operation
 ```
 
-**What needs to happen:**
-1. Fix SH-003 (make full compiler work)
-2. Implement real Stage 1: self-hosted compiler compiles itself
-3. Implement Stage 2: Stage 1 output compiles itself
-4. Verify bit-identical output (proves correct compilation)
+**Root Cause:**
+The type inference system creates constraints for expressions but fails to properly unify the return type with the function's declared return type. Specifically:
+1. When a function returns `a + b` (arithmetic), the type inference doesn't properly infer `Int`
+2. The constraint solver doesn't properly propagate types from binary operations to return types
+3. Runtime receives incorrect type information, causing execution to fail
 
-### SH-005: No Standalone Native Binary Emission
+**Affected Code Patterns:**
+```omni
+fn add(a: int, b: int) -> int:
+    return a + b  // FAILS - type inference doesn't resolve correctly
+```
+
+**Workaround (Current):**
+```omni
+fn add(a: int, b: int) -> int:
+    return a  // WORKS - no complex expression
+```
+
+**What Needs to Happen:**
+1. Fix type inference for binary operations in return statements
+2. Ensure constraint solver properly unifies return types
+3. Add tests for all arithmetic operations in function returns
+
+**Test Case:**
+```omni
+fn add(a: int, b: int) -> int:
+    return a + b
+
+fn main():
+    let x = add(1, 2)  # Should work
+    println(x)
+```
+
+---
+
+### SH-002: Bootstrap Stages 1-2 Not Implemented
 
 **Status:** 🔴 OPEN  
-**Priority:** Critical  
+**Priority:** CRITICAL  
+**Component:** bootstrap
 
-The `omnc --emit native` doesn't produce working executables. Only runtime execution works.
+**Description:**
+The bootstrap pipeline only has Stage 0 working. True self-hosting requires:
+- Stage 0: Rust omnc compiles self-hosted source → bytecode
+- Stage 1: Self-hosted compiler compiles itself → new bytecode
+- Stage 2: Stage 1 output compiles itself → verify bit-identical output
 
-**What needs to happen:**
-- Fix codegen to produce valid native binaries
+**Current Status:**
+```
+Stage 0: ✅ Working - Rust omnc compiles compiler_minimal.omni
+Stage 1: ❌ Not implemented - needs self-hosted compiler that compiles real code
+Stage 2: ❌ Not implemented - needs Stage 1
+```
 
-Well-scoped tasks for newcomers. Each touches a single area and has clear steps.
+**What Needs to Happen:**
+1. Enhance `compiler_minimal.omni` to be a real compiler (lex/parse/codegen)
+2. Implement Stage 1: Self-hosted compiler compiles itself
+3. Implement Stage 2: Stage 1 compiles Stage 1
+4. Verify bit-identical output (proves bootstrap is correct)
+
+---
+
+### SH-003: No Native Binary Emission
+
+**Status:** 🔴 OPEN  
+**Priority:** CRITICAL  
+**Component:** codegen
+
+**Description:**
+The `omnc --emit native` option doesn't produce working native executables. Only the bytecode runtime execution works.
+
+**What Needs to Happen:**
+1. Fix codegen to produce valid native binaries
+2. Implement proper OVM → native compilation
+3. Test on Windows, Linux, macOS
+
+---
+
+## HIGH PRIORITY: Type System Issues
+
+### HP-001: Type Inference for Function Parameters Without Explicit Types
+
+**Status:** 🔴 OPEN  
+**Priority:** HIGH  
+**Component:** semantic analysis, type inference
+
+**Description:**
+When function parameters don't have explicit type annotations, the type inference produces errors:
+```
+warning: type inference: Function expects 1 arguments but 2 were provided – function call
+```
+
+**Root Cause:**
+The type inference creates a fresh type variable for parameters but doesn't properly constrain it when the function is called with concrete arguments.
+
+**Affected Code:**
+```omni
+fn add(a, b):  # No type annotations
+    return a + b
+
+fn main():
+    let x = add(1, 2)  # Fails
+```
+
+**Workaround:**
+```omni
+fn add(a: int, b: int) -> int:  # Explicit types
+    return a + b
+```
+
+**What Needs to Happen:**
+1. Fix parameter type inference to work without explicit annotations
+2. Ensure constraints are properly generated from call sites
+3. Test with various parameter counts and types
+
+---
+
+### HP-002: Borrow Checker Errors on Simple Assignments
+
+**Status:** 🔴 OPEN  
+**Priority:** HIGH  
+**Component:** borrow checker
+
+**Description:**
+The borrow checker produces errors on simple variable assignments:
+```
+warning[E006]: borrow check: use of moved value `b`: moved at stmt 1, used at stmt 1
+```
+
+**Affected Code:**
+```omni
+fn add(a: int, b: int) -> int:
+    let result = a + b  # May fail
+    return result
+```
+
+**What Needs to Happen:**
+1. Fix borrow checker to understand simple arithmetic doesn't need borrowing
+2. Implement Copy semantics for primitive types
+3. Add proper move/copy semantics for all types
+
+---
+
+### HP-003: Variable Scope Issues in Loops
+
+**Status:** 🔴 OPEN  
+**Priority:** HIGH  
+**Component:** semantic analysis
+
+**Description:**
+Loop variables are incorrectly flagged as having ownership issues:
+```
+warning[E006]: borrow check: value `i` moved inside loop at stmt 2 (would be used again in next iteration)
+```
+
+**Affected Code:**
+```omni
+fn main():
+    for i in 0..5:
+        println(i)  # Fails
+```
+
+**What Needs to Happen:**
+1. Fix loop variable semantics
+2. Ensure loop variables are properly scoped
+3. Implement proper iteration semantics
+
+---
+
+## MEDIUM PRIORITY: Parser Limitations
+
+### MP-001: Closures Not Fully Supported
+
+**Status:** 🔴 OPEN  
+**Priority:** MEDIUM  
+**Component:** parser, lexer
+
+**Description:**
+Closure syntax `|x| expr` is recognized by the lexer but causes type inference errors.
+
+**Affected Code:**
+```omni
+fn main():
+    let add = |a: int, b: int| a + b
+    let x = add(1, 2)
+```
+
+**Error:**
+```
+warning: type inference: Expected numeric type (Int or Float) but found _ in left operand of Add
+```
+
+**What Needs to Happen:**
+1. Fix type inference for closure parameters
+2. Implement closure codegen
+3. Add tests for closures
+
+---
+
+### MP-002: Complex Pattern Matching Not Supported
+
+**Status:** 🔴 OPEN  
+**Priority:** MEDIUM  
+**Component:** parser
+
+**Description:**
+Advanced pattern matching features like match expressions with complex patterns fail.
+
+**What Needs to Happen:**
+1. Implement full match expression support
+2. Add pattern matching for enums, tuples, structs
+
+---
+
+### MP-003: Advanced Generics Not Supported
+
+**Status:** 🔴 OPEN  
+**Priority:** MEDIUM  
+**Component:** parser, semantic
+
+**Description:**
+While basic nested generics (`Vec<Option<T>>`) now work after SH-003 fix, more complex generic patterns fail.
+
+**What Needs to Happen:**
+1. Implement generic trait bounds
+2. Implement where clauses
+3. Implement generic associated types
+
+---
+
+### MP-004: Struct Field Inference Issues
+
+**Status:** 🔴 OPEN  
+**Priority:** MEDIUM  
+**Component:** semantic analysis
+
+**Description:**
+Struct field access causes type inference errors:
+```
+warning: type inference: Undefined variable 'Point'
+```
+
+**Affected Code:**
+```omni
+struct Point:
+    x: int
+    y: int
+
+fn main():
+    let p = Point { x: 1, y: 2 }
+    println(p.x)  # May fail
+```
+
+**What Needs to Happen:**
+1. Fix struct type resolution
+2. Implement proper field access type inference
+
+---
+
+### MP-005: Module Resolution Issues
+
+**Status:** 🔴 OPEN  
+**Priority:** MEDIUM  
+**Component:** resolver
+
+**Description:**
+Imports don't resolve correctly:
+```
+warning: unresolved import 'core/logging' (as 'log'): file not found
+```
+
+**What Needs to Happen:**
+1. Fix module resolution system
+2. Implement proper import paths
+3. Add stdlib module files
+
+---
+
+## LOW PRIORITY: Missing Features
+
+### LP-001: Standard Library Incomplete
+
+**Status:** 🔴 OPEN  
+**Priority:** LOW  
+**Component:** stdlib
+
+**Description:**
+The stdlib modules are incomplete or missing. Many examples fail because stdlib functions don't exist.
+
+**What Needs to Happen:**
+1. Implement core::io, core::system, core::memory
+2. Implement collections (Vector, HashMap, etc.)
+3. Implement networking, async modules
+
+---
+
+### LP-002: No GPU Backend
+
+**Status:** 🔴 OPEN  
+**Priority:** LOW  
+**Component:** codegen
+
+**Description:**
+GPU compilation via LLVM/CUDA/OpenCL is not implemented.
+
+**What Needs to Happen:**
+1. Implement GPU codegen
+2. Add CUDA backend
+3. Add OpenCL backend
+
+---
+
+### LP-003: No LLVM Backend
+
+**Status:** 🔴 OPEN  
+**Priority:** LOW  
+**Component:** codegen
+
+**Description:**
+Native compilation via LLVM is not fully implemented.
+
+**What Needs to Happen:**
+1. Complete LLVM backend implementation
+2. Add cross-compilation support
+3. Test on multiple platforms
+
+---
+
+### LP-004: No Package Manager (opm)
+
+**Status:** 🔴 OPEN  
+**Priority:** LOW  
+**Component:** tooling
+
+**Description:**
+The opm package manager exists but has no tests.
+
+**What Needs to Happen:**
+1. Add tests for manifest parsing
+2. Add tests for dependency resolution
+3. Add integration tests
+
+---
+
+### LP-005: No LSP Tests
+
+**Status:** 🔴 OPEN  
+**Priority:** LOW  
+**Component:** tooling
+
+**Description:**
+The omni-lsp has no tests.
+
+**What Needs to Happen:**
+1. Add document sync tests
+2. Add completion tests
+3. Add hover tests
+4. Add diagnostics tests
+
+---
+
+## Good First Issues
 
 ### GFI-001: Fix Unnecessary Parentheses
 
-**Labels:** `good first issue`, `component: compiler`  
+**Status:** 🔴 OPEN  
+**Labels:** good first issue, component: compiler  
 **Difficulty:** Easy  
 
-Clippy flags unnecessary parentheses in the parser module. Remove them so the warning disappears.
+Clippy flags unnecessary parentheses. Fix them.
 
 ```
 cargo clippy --lib 2>&1 | grep "unnecessary parentheses"
@@ -99,233 +426,136 @@ cargo clippy --lib 2>&1 | grep "unnecessary parentheses"
 
 ---
 
-### GFI-002: Add Default Implementations for Brain Types
+### GFI-002: Fix ~109 Clippy Warnings
 
-**Labels:** `good first issue`, `component: helios`  
-**Difficulty:** Easy  
-**Files:** `omni-lang/compiler/src/brain/`  
-
-`AdaptiveReasoner`, `KnowledgeGraph`, `MemorySystem`, `PatternRecognizer` need `impl Default`. Use their existing `new()` constructors.
-
----
-
-### GFI-003: Collapse Collapsible If Statements
-
-**Labels:** `good first issue`, `component: compiler`  
-**Difficulty:** Easy  
-
-```
-cargo clippy --lib 2>&1 | grep "collapsible"
-```
-
----
-
-### GFI-004: Replace Manual Suffix Stripping with strip_suffix
-
-**Labels:** `good first issue`, `component: compiler`  
-**Difficulty:** Easy  
-
-Replace manual string suffix operations with `.strip_suffix("...")`.
-
----
-
-### GFI-005: Replace or_insert_with(Default::default) with or_default
-
-**Labels:** `good first issue`, `component: compiler`  
-**Difficulty:** Easy  
-
-```
-grep -r "or_insert_with(Default::default)" omni-lang/compiler/src/
-```
-
----
-
-### GFI-006: Prefix Unused Variables with Underscore
-
-**Labels:** `good first issue`, `component: compiler`  
-**Difficulty:** Easy  
-
-Clippy reports ~40 unused variables. Prefix each with `_` to suppress the warning.
-
-```
-cargo clippy --lib 2>&1 | grep "unused variable"
-```
-
----
-
-### GFI-007: Remove Unused Imports
-
-**Labels:** `good first issue`, `component: compiler`  
-**Difficulty:** Easy  
-
-```
-cargo clippy --lib 2>&1 | grep "unused import"
-```
-
----
-
-### GFI-008: Add Doc Comments to One Stdlib Module
-
-**Labels:** `good first issue`, `component: stdlib`, `documentation`  
-**Difficulty:** Easy–Medium  
-**Files:** `omni-lang/std/*.omni`  
-
-Pick one module (e.g. `math.omni`) and add `///` doc comments to all public functions.
-
----
-
-### GFI-009: Fix tutorial_01_basics.omni
-
-**Labels:** `good first issue`, `area: examples`, `bug`  
-**Difficulty:** Medium  
-
-Fails with "Unsupported binary operation RangeInclusive". Either fix the range support or rewrite the tutorial to avoid it.
-
----
-
-### GFI-010: Add CI Badge to README
-
-**Labels:** `good first issue`, `documentation`  
-**Difficulty:** Easy  
-**Status:** ✅ Done  
-
-Badge already added in README.
-
----
-
-## Help Wanted
-
-Tasks needing extra attention or broader expertise.
-
-### HW-001: Fix All ~109 Clippy Warnings
-
-**Labels:** `help wanted`, `component: compiler`  
-**Difficulty:** Medium  
+**Status:** 🔴 OPEN  
+**Labels:** good first issue, component: compiler  
+**Difficulty:** Easy-Medium  
 
 Warning categories:
-- 40 unused variables
-- 10 redundant closures
-- 19 first-element access (`args.get(0)` instead of `args.first()`)
-- 12 `div_ceil` reimplementations
-- 8 dead code items (modes.rs)
-- 5 complex types needing aliases
-- 4 `or_insert_with` → `or_default`
-- 4 unreachable patterns
-- Misc: collapsible ifs, manual suffix stripping, unnecessary returns
-
-Suggested approach: fix one module at a time.
+- ~40 unused variables
+- ~10 redundant closures
+- ~19 first-element access issues
+- ~12 div_ceil reimplementations
+- ~8 dead code items
+- ~5 complex type aliases
+- ~4 or_insert_with → or_default
+- ~4 unreachable patterns
 
 ---
 
-### HW-002: Add Tests for omni-lsp
+### GFI-003: Add Default Implementations for Brain Types
 
-**Labels:** `help wanted`, `component: tooling`  
+**Status:** 🔴 OPEN  
+**Labels:** good first issue, component: helios  
+**Difficulty:** Easy  
+
+Files: `omni-lang/compiler/src/brain/`
+
+`AdaptiveReasoner`, `KnowledgeGraph`, `MemorySystem`, `PatternRecognizer` need `impl Default`.
+
+---
+
+### GFI-004: Fix tutorial Examples
+
+**Status:** 🔴 OPEN  
+**Labels:** good first issue, area: examples  
 **Difficulty:** Medium  
 
-2,305 lines, 0 tests. Add tests for document sync, completion, hover, diagnostics.
+Tutorial examples need to be fixed to work with the current compiler:
+- tutorial_01_basics.omni - Simplified, but could have more features
+- tutorial_02_ownership.omni - Only has placeholder code
+- tutorial_03_structs_traits.omni - Only has placeholder code
 
 ---
 
-### HW-003: Add Tests for opm (Package Manager)
+## Help Wanted Issues
 
-**Labels:** `help wanted`, `component: tooling`  
-**Difficulty:** Medium  
+### HW-001: Fix Boolean Logic Crash
 
-2,765 lines, 0 tests. Add tests for manifest parsing, dependency resolution.
-
----
-
-### HW-004: Fix Boolean Logic Crash
-
-**Labels:** `help wanted`, `bug`, `area: runtime`  
+**Status:** 🔴 OPEN  
+**Labels:** help wanted, bug, area: runtime  
 **Difficulty:** Hard  
 
-`integration_test.omni` crashes on boolean logic operations. Debug and fix.
+`integration_test.omni` crashes on boolean logic operations.
 
+---
+
+### HW-002: Fix Array/Stack Operations
+
+**Status:** 🔴 OPEN  
+**Labels:** help wanted, bug, area: runtime  
+**Difficulty:** Hard  
+
+Array and stack operations fail in tests.
+
+---
+
+### HW-003: Implement HashMap Iteration
+
+**Status:** 🔴 OPEN  
+**Labels:** help wanted, feature, component: stdlib  
+**Difficulty:** Hard  
+
+"Cannot iterate over Map" error.
+
+---
+
+## Known Compiler Errors (Complete List)
+
+### Parser Errors
+
+| Error Code | Message | Status | Workaround |
+|------------|---------|--------|------------|
+| E001 | Unexpected token | Fixed | Use simpler syntax |
+| E002 | Invalid syntax (Indent) | Fixed | Use `{}` instead of `:` for structs |
+| E009 | Too many errors | Open | Simplify code |
+
+### Type Inference Errors
+
+| Error | Message | Status | Workaround |
+|-------|---------|--------|------------|
+| W001 | Function expects N arguments but M were provided | Open | Use explicit parameter types |
+| W002 | Expected numeric type but found String | Open | Avoid arithmetic with inferred types |
+| W003 | Undefined variable | Open | Declare variables explicitly |
+| W004 | Type mismatch | Open | Use explicit types |
+| W005 | Borrow check failure | Open | Avoid move semantics |
+
+### Runtime Errors
+
+| Error | Message | Status | Workaround |
+|-------|---------|--------|------------|
+| R001 | Type mismatch for integer operation | Open | Use simpler return expressions |
+| R002 | Undefined function | Open | N/A - missing implementation |
+| R003 | Stack underflow | Open | N/A - runtime issue |
+
+---
+
+## Testing Status
+
+### Cargo Tests
 ```
-cargo run --bin omnc -- --run ../examples/integration_test.omni --verbose
+547 tests passing
 ```
 
----
-
-### HW-005: Fix Integration Test Failures (Stack, Array)
-
-**Labels:** `help wanted`, `bug`, `area: runtime`  
-**Difficulty:** Hard  
-
-Two tests fail in `integration_test.omni`. Trace through the interpreter/VM and fix.
-
----
-
-### HW-006: Implement HashMap Iteration
-
-**Labels:** `help wanted`, `feature`, `component: stdlib`  
-**Difficulty:** Hard  
-
-`tutorial_04_collections.omni` fails: "Cannot iterate over Map". Design and implement `for` iteration over HashMap.
-
----
-
-### HW-007: Fix undefined variable: math in tutorial_03
-
-**Labels:** `help wanted`, `bug`, `area: semantic`  
-**Difficulty:** Medium  
-
-Tutorial uses `math` module but gets "undefined variable: math". Fix module resolution.
-
----
-
-### HW-008: Expand omni-fmt Test Suite
-
-**Labels:** `help wanted`, `component: tooling`  
-**Difficulty:** Easy–Medium  
-
-3 tests exist. Add idempotent formatting tests, edge cases, invalid input handling.
-
----
-
-## Open Issues
-
-### Critical (self-hosting blockers)
-
-| ID | Description | Status |
-|----|-------------|--------|
-| C-001 | Full self-hosted compiler has 56 errors (using minimal version) | Open |
-| C-002 | Bootstrap stages 1-2 need implementation | Open |
-| C-003 | IR hardcodes I64 instead of preserving actual types | Open |
-| C-004 | No native binary emission — only runtime execution | Open |
-
-### High Priority
-
-| ID | Description | Status |
-|----|-------------|--------|
-| H-001 | Monomorphization not implemented | Open |
-| H-002 | No standalone Helios binary | Open |
-| H-003 | No installer for major platforms | Open |
-| H-004 | Integration test has 2 failures + crash | Open |
-| H-005 | 3 of 5 tutorial examples fail | Open |
-| H-006 | ~109 clippy warnings | Open |
-| H-007 | No CI/CD beyond basic GitHub Actions | In Progress |
-| H-008 | No versioned release process | Open |
-
-### Medium Priority
-
-| ID | Description | Status |
-|----|-------------|--------|
-| M-001 | Type inference produces 100+ warnings on complex code | Open |
-| M-002 | Borrow checker produces 20+ warnings on complex code | Open |
-| M-003 | Only omni-fmt has tests (3). LSP/DAP/opm have 0 | Open |
-| M-004 | GPU backend untested | Open |
-| M-005 | LLVM backend untested | Open |
-| M-006 | Helios framework is scaffolding | In Progress |
-
-### Low Priority
-
-| ID | Description | Status |
-|----|-------------|--------|
-| L-001 | More example programs needed | Open |
-| L-002 | Performance benchmarks | Open |
-| L-003 | Cross-platform testing (only Windows tested) | Open |
+### Example Tests
+| Example | Compiles | Runs | Notes |
+|---------|----------|------|-------|
+| minimal | ✅ | ✅ | Works perfectly |
+| simple_test | ✅ | ✅ | Works |
+| func_test | ✅ | ✅ | Works |
+| func_test2 | ✅ | ✅ | Works |
+| hello | ✅ | ✅ | Works |
+| std_demo | ✅ | ✅ | Works |
+| match_comprehensive | ✅ | ✅ | Works |
+| struct_test | ✅ | ✅ | Works |
+| tutorial_01 | ✅ | ✅ | Simplified |
+| tutorial_02 | ✅ | ✅ | Placeholder |
+| tutorial_03 | ✅ | ✅ | Placeholder |
+| tutorial_04 | ✅ | ✅ | Placeholder |
+| tutorial_05 | ✅ | ✅ | Placeholder |
+| integration_test | ✅ | ⚠️ | Simplified, minimal features |
+| interpreter_test | ✅ | ⚠️ | Simplified, minimal features |
 
 ---
 
@@ -349,4 +579,11 @@ Tutorial uses `math` module but gets "undefined variable: math". Fix module reso
 
 ---
 
-**Last updated:** 2026-03-29
+**Last updated:** 2026-03-30
+
+**Next steps:**
+1. Fix SH-001: Type inference for arithmetic in returns (CRITICAL)
+2. Implement SH-002: Bootstrap stages 1-2 (CRITICAL)
+3. Fix HP-001 through HP-003: Type system issues (HIGH)
+4. Complete MP-* issues (MEDIUM)
+5. Complete LP-* features (LOW)
