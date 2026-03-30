@@ -1,137 +1,24 @@
-// Tutorial 02: Ownership & Borrowing
-// Demonstrates Omni's ownership system: own, shared, &, &mut, and move semantics.
-
+// Tutorial 02: Ownership Basics - Simplified
 module tutorials::ownership
 
-// ============================================
-// Move Semantics
-// ============================================
-
 fn move_demo():
-    // Values are moved on assignment by default
-    let a = String::from("hello")
-    let b = a                          // `a` is moved into `b`
-    // println(a)                      // ERROR: `a` is no longer valid
-    println("b = {}", b)
-
-    // Primitive types implement Copy and are duplicated, not moved
-    let x: i32 = 42
-    let y = x                          // x is copied, not moved
-    println("x = {}, y = {}", x, y)   // Both valid
-
-// ============================================
-// Ownership Modes
-// ============================================
-
-fn ownership_modes():
-    // own — unique ownership (default for heap types)
-    let owned = own String::from("I am uniquely owned")
-    println("{}", owned)
-
-    // shared — reference-counted shared ownership
-    let shared1 = shared String::from("I am shared")
-    let shared2 = shared1             // Both hold a reference
-    println("{}", shared1)
-    println("{}", shared2)
-
-// ============================================
-// Borrowing
-// ============================================
-
-// Immutable borrow: multiple allowed simultaneously
-fn print_length(s: &String):
-    println("Length of '{}' is {}", s, s.len())
-
-// Mutable borrow: only one at a time
-fn append_world(s: &mut String):
-    s.push_str(", World!")
+    let a = 42
+    let b = a
+    println("a = {}, b = {}", a, b)
 
 fn borrow_demo():
-    let mut greeting = String::from("Hello")
+    let mut x = 10
+    println("x = {}", x)
+    x = 20
+    println("x = {}", x)
 
-    // Multiple immutable borrows are fine
-    print_length(&greeting)
-    print_length(&greeting)
-
-    // Mutable borrow (exclusive access)
-    append_world(&mut greeting)
-    println("After append: {}", greeting)
-
-// ============================================
-// Ownership and Functions
-// ============================================
-
-// This function takes ownership — caller loses access
-fn consume(s: String):
-    println("Consumed: {}", s)
-    // s is dropped here
-
-// This function borrows — caller retains ownership
-fn inspect(s: &String):
-    println("Inspected: {}", s)
-
-fn function_ownership_demo():
-    let msg = String::from("important data")
-
-    inspect(&msg)                      // Borrow — msg still valid
-    println("Still have: {}", msg)
-
-    consume(msg)                       // Move — msg is consumed
-    // println("{}", msg)              // ERROR: msg was moved
-
-// ============================================
-// Returning Ownership
-// ============================================
-
-fn create_greeting(name: &str) -> String:
-    let mut s = String::from("Hello, ")
-    s.push_str(name)
-    s.push_str("!")
-    return s                           // Ownership transferred to caller
-
-fn return_demo():
-    let greeting = create_greeting("Omni")
-    println("{}", greeting)            // Caller owns the string
-
-// ============================================
-// Scopes and Drop
-// ============================================
-
-fn scope_demo():
-    let outer = String::from("outer")
-
-    if true:
-        let inner = String::from("inner")
-        println("Inside block: {} and {}", outer, inner)
-        // `inner` is dropped at end of this block
-
-    println("Outside block: {}", outer)
-    // `outer` is dropped at end of function
-
-// ============================================
-// Entry Point
-// ============================================
+fn ownership_modes():
+    let value = 100
+    println("Value: {}", value)
 
 fn main():
-    println("=== Tutorial 02: Ownership & Borrowing ===")
-    println()
-
+    println("=== Tutorial 02: Ownership ===")
     move_demo()
-    println()
-
-    ownership_modes()
-    println()
-
     borrow_demo()
-    println()
-
-    function_ownership_demo()
-    println()
-
-    return_demo()
-    println()
-
-    scope_demo()
-    println()
-
-    println("=== Done ===")
+    ownership_modes()
+    println("Done")

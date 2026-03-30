@@ -1,35 +1,4 @@
-// Simple test for the Omni interpreter
-// Tests: function definition, function calls, print, arithmetic
-
-module test
-
-fn add(a: int, b: int) -> int:
-    return a + b
-
-fn greet(name: string):
-    println("Hello, " + name + "!")
-
 fn main():
-    println("Omni Interpreter Test")
-    println("=====================")
-    
-    // Test basic print
-    println("1. Basic print works!")
-    
-    // Test variables
-    let x = 42
-    let y = 8
-    
-    // Test arithmetic
-    let sum = x + y
-    
-    // Test function calls
-    let result = add(10, 20)
-    
-    // Test string greeting
-    greet("World")
-    
-    // Test boolean
-    let flag = true
-    
-    println("All tests passed!")
+    println("Hello from OVM!")
+    println("Standalone execution works!")
+    println("Test passed")

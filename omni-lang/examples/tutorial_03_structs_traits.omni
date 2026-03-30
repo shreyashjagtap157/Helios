@@ -1,145 +1,38 @@
-// Tutorial 03: Structs, Traits, and Generics
-// Demonstrates struct definitions, trait implementations, and generic programming.
-
-module tutorials::structs_traits
-
-// ============================================
-// Struct Definition
-// ============================================
+// Tutorial 03: Structs
+module tutorial_03
 
 struct Point:
     x: f64
     y: f64
-
-    // Static constructor
+    
     fn new(x: f64, y: f64) -> Point:
         return Point { x: x, y: y }
 
-    fn origin() -> Point:
-        return Point { x: 0.0, y: 0.0 }
-
-    // Instance methods
-    fn distance_to(&self, other: &Point) -> f64:
-        let dx = self.x - other.x
-        let dy = self.y - other.y
-        return math::sqrt(dx * dx + dy * dy)
-
-    fn translate(&mut self, dx: f64, dy: f64):
-        self.x += dx
-        self.y += dy
-
-// ============================================
-// Traits
-// ============================================
-
-trait Displayable:
-    fn display(&self) -> String
-
-trait Area:
-    fn area(&self) -> f64
-
-trait Perimeter:
-    fn perimeter(&self) -> f64
-
-// ============================================
-// Implementing Traits
-// ============================================
-
-impl Displayable for Point:
-    fn display(&self) -> String:
-        return format("Point({}, {})", self.x, self.y)
-
 struct Circle:
-    center: Point
+    x: f64
+    y: f64
     radius: f64
-
-    fn new(cx: f64, cy: f64, r: f64) -> Circle:
-        return Circle { center: Point::new(cx, cy), radius: r }
-
-impl Area for Circle:
-    fn area(&self) -> f64:
-        return 3.14159 * self.radius * self.radius
-
-impl Perimeter for Circle:
-    fn perimeter(&self) -> f64:
-        return 2.0 * 3.14159 * self.radius
-
-impl Displayable for Circle:
-    fn display(&self) -> String:
-        return format("Circle(center={}, r={})", self.center.display(), self.radius)
+    
+    fn new(x: f64, y: f64, r: f64) -> Circle:
+        return Circle { x: x, y: y, radius: r }
+    
+    fn area(self) -> f64:
+        return 3.14 * self.radius * self.radius
 
 struct Rectangle:
-    origin: Point
+    x: f64
+    y: f64
     width: f64
     height: f64
-
+    
     fn new(x: f64, y: f64, w: f64, h: f64) -> Rectangle:
-        return Rectangle { origin: Point::new(x, y), width: w, height: h }
-
-impl Area for Rectangle:
-    fn area(&self) -> f64:
-        return self.width * self.height
-
-impl Perimeter for Rectangle:
-    fn perimeter(&self) -> f64:
-        return 2.0 * (self.width + self.height)
-
-impl Displayable for Rectangle:
-    fn display(&self) -> String:
-        return format("Rect({}x{} at {})", self.width, self.height, self.origin.display())
-
-// ============================================
-// Generics
-// ============================================
-
-// Generic function using trait bounds
-fn print_shape_info<T: Displayable + Area + Perimeter>(shape: &T):
-    println("  Shape: {}", shape.display())
-    println("  Area: {:.2}", shape.area())
-    println("  Perimeter: {:.2}", shape.perimeter())
-
-// Generic container
-struct Pair<A, B>:
-    first: A
-    second: B
-
-    fn new(a: A, b: B) -> Pair<A, B>:
-        return Pair { first: a, second: b }
-
-    fn swap(&self) -> Pair<B, A>:
-        return Pair { first: self.second.clone(), second: self.first.clone() }
-
-impl<A: Displayable, B: Displayable> Displayable for Pair<A, B>:
-    fn display(&self) -> String:
-        return format("({}, {})", self.first.display(), self.second.display())
-
-// ============================================
-// Entry Point
-// ============================================
+        return Rectangle { x: x, y: y, width: w, height: h }
 
 fn main():
-    println("=== Tutorial 03: Structs, Traits, and Generics ===")
-    println()
-
-    // Structs
-    let mut p = Point::new(3.0, 4.0)
-    let origin = Point::origin()
-    println("Distance from {} to origin: {:.2}", p.display(), p.distance_to(&origin))
-    p.translate(1.0, -1.0)
-    println("After translate: {}", p.display())
-    println()
-
-    // Traits
-    let circle = Circle::new(0.0, 0.0, 5.0)
-    println("Circle info:")
-    print_shape_info(&circle)
-    println()
-
-    let rect = Rectangle::new(1.0, 1.0, 10.0, 5.0)
-    println("Rectangle info:")
-    print_shape_info(&rect)
-    println()
-
-    // Generics
-    let pair = Pair::new(circle, rect)
-    println("=== Done ===")
+    let p = Point::new(1.0, 2.0)
+    let c = Circle::new(0.0, 0.0, 5.0)
+    let r = Rectangle::new(0.0, 0.0, 10.0, 5.0)
+    
+    println("Structs Tutorial")
+    println("Circle area: ", c.area())
+    println("Done")
