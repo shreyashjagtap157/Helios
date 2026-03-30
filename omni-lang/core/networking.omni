@@ -1,4 +1,4 @@
-// HELIOS Networking
+// Omni Networking
 // TCP, UDP, WebSocket, and network utilities
 
 module core::networking

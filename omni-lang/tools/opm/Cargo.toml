@@ -3,7 +3,7 @@ name = "opm"
 version = "0.1.0"
 edition = "2021"
 description = "Omni Package Manager"
-authors = ["HELIOS Project"]
+authors = ["Omni Project"]
 
 [[bin]]
 name = "opm"

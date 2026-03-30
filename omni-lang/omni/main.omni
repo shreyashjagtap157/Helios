@@ -1,23 +1,33 @@
-// Helios Main Entry Point
+// Omni Main Entry Point
 // Simplified version for bootstrap - uses basic Omni features only
 
 module main
 
-struct Helios:
-    config: HeliosConfig
+struct OmniConfig:
+    name: str
+    version: str
+
+    fn default() -> OmniConfig:
+        return OmniConfig {
+            name: "Omni",
+            version: "0.1.0"
+        }
+
+struct OmniRuntime:
+    config: OmniConfig
     running: bool
     knowledge_count: usize
     session_id: usize
     
-    fn new() -> Helios:
-        println("Initializing Helios...")
+    fn new() -> OmniRuntime:
+        println("Initializing Omni runtime...")
         
-        let config = HeliosConfig::default()
+        let config = OmniConfig::default()
         let session_id: usize = 0
         
-        println("Helios initialized")
+        println("Omni runtime initialized")
         
-        return Helios {
+        return OmniRuntime {
             config: config,
             running: false,
             knowledge_count: 0,
@@ -27,7 +37,7 @@ struct Helios:
     fn start(&mut self):
         self.running = true
         self.session_id = self.session_id + 1
-        println("Helios started")
+        println("Omni runtime started")
     
     fn run(&mut self):
         self.start()
@@ -35,25 +45,15 @@ struct Helios:
         self.stop()
     
     fn stop(&mut self):
-        println("Helios stopped")
+        println("Omni runtime stopped")
         self.running = false
-
-struct HeliosConfig:
-    name: str
-    version: str
-    
-    fn default() -> HeliosConfig:
-        return HeliosConfig {
-            name: "Helios",
-            version: "0.1.0"
-        }
 
 fn println(msg: str):
     // Basic println implementation for bootstrap
     pass
 
 fn main():
-    println("Starting Helios...")
-    let helios = Helios::new()
-    helios.run()
+    println("Starting Omni runtime...")
+    let runtime = OmniRuntime::new()
+    runtime.run()
     println("Done")

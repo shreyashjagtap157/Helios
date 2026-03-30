@@ -3,7 +3,7 @@ name = "omni-fmt"
 version = "0.1.0"
 edition = "2024"
 description = "Omni language code formatter"
-authors = ["Helios Team"]
+authors = ["Omni Project"]
 
 [dependencies]
 anyhow = "1.0"

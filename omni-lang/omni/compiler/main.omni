@@ -6,6 +6,8 @@ module compiler::main
 // Entry point for the self-hosted Omni compiler. Orchestrates the full
 // compilation pipeline from source to executable.
 
+import std::collections::{Vector, HashMap}
+
 import compiler::lexer::token::{Token}
 import compiler::lexer::{tokenize}
 import compiler::parser::ast::{Program}

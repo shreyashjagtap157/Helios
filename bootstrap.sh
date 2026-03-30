@@ -11,6 +11,21 @@ OMNI_DIR="$SCRIPT_DIR/omni-lang"
 COMPILER_DIR="$OMNI_DIR/compiler"
 BUILD_DIR="$SCRIPT_DIR/build"
 
+detect_omnc_binary() {
+    local base_dir="$1"
+    if [ -f "$base_dir/target/debug/omnc" ]; then
+        echo "$base_dir/target/debug/omnc"
+    elif [ -f "$base_dir/target/debug/omnc.exe" ]; then
+        echo "$base_dir/target/debug/omnc.exe"
+    elif [ -f "$base_dir/target/release/omnc" ]; then
+        echo "$base_dir/target/release/omnc"
+    elif [ -f "$base_dir/target/release/omnc.exe" ]; then
+        echo "$base_dir/target/release/omnc.exe"
+    else
+        return 1
+    fi
+}
+
 echo "=========================================="
 echo "Omni Compiler Bootstrap"
 echo "Self-Hosting Demonstration"
@@ -20,13 +35,13 @@ echo ""
 mkdir -p "$BUILD_DIR"
 
 # Check for Rust compiler
-if [ ! -f "$COMPILER_DIR/target/debug/omnc.exe" ]; then
-    echo "ERROR: Rust compiler (omnc) not found."
+if ! OMNC="$(detect_omnc_binary "$COMPILER_DIR")"; then
+    echo "ERROR: Rust compiler (omnc) not found in target/debug or target/release."
     echo "Please build: cd $COMPILER_DIR && cargo build"
     exit 1
 fi
 
-OMNC="$COMPILER_DIR/target/debug/omnc"
+chmod +x "$OMNC" 2>/dev/null || true
 
 echo "Omni Compiler: $OMNC"
 echo ""
@@ -68,10 +83,11 @@ echo ""
 
 # Bootstrap complete
 echo "=========================================="
-echo "Bootstrap Complete"
+echo "Bootstrap Complete (Stage 0 Smoke Test)"
 echo "=========================================="
 echo ""
-echo "Self-hosting pipeline working!"
+echo "Stage 0 pipeline verified."
+echo "Full self-hosting (true Stage 1/2) is tracked in omni-lang/ISSUES.md."
 echo ""
 echo "Files created:"
 ls -la "$BUILD_DIR"/stage*.ovm 2>/dev/null || true

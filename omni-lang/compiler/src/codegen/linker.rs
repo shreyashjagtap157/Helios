@@ -1908,7 +1908,7 @@ mod tests {
         let mut linker = Linker::new(TargetPlatform::MacOSAarch64);
         linker.add_text(vec![0xC0, 0x03, 0x5F, 0xD6]);
         linker.add_data(vec![0x42; 16]);
-        linker.add_rodata(b"Helios\0".to_vec());
+        linker.add_rodata(b"Omni\0".to_vec());
         linker.add_bss(64);
 
         let binary = linker.link().unwrap();

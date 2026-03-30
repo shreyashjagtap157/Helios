@@ -37,6 +37,21 @@ detect_arch() {
     esac
 }
 
+resolve_compiler_binary() {
+    local compiler_dir="$1"
+    if [ -f "$compiler_dir/target/release/omnc" ]; then
+        echo "$compiler_dir/target/release/omnc"
+    elif [ -f "$compiler_dir/target/release/omnc.exe" ]; then
+        echo "$compiler_dir/target/release/omnc.exe"
+    elif [ -f "$compiler_dir/target/debug/omnc" ]; then
+        echo "$compiler_dir/target/debug/omnc"
+    elif [ -f "$compiler_dir/target/debug/omnc.exe" ]; then
+        echo "$compiler_dir/target/debug/omnc.exe"
+    else
+        return 1
+    fi
+}
+
 # Print status
 status() {
     echo -e "${GREEN}[+]${NC} $1"
@@ -84,11 +99,16 @@ install_compiler() {
     mkdir -p "$LIB_DIR"
     mkdir -p "$SHARE_DIR"
     mkdir -p "$MAN_DIR"
+    mkdir -p "$PREFIX/share/omni"
     
     # Copy binary
     cd "$(dirname "$0")/omni-lang/compiler"
-    cp target/release/omnc "$BIN_DIR/" 2>/dev/null || cp target/debug/omnc "$BIN_DIR/"
-    chmod +x "$BIN_DIR/omnc"
+    COMPILER_BIN="$(resolve_compiler_binary "$(pwd)")" || {
+        error "Compiler binary not found. Run ./install.sh --build first."
+        exit 1
+    }
+    cp "$COMPILER_BIN" "$BIN_DIR/omnc"
+    chmod +x "$BIN_DIR/omnc" 2>/dev/null || true
     
     # Copy runtime
     cd "$(dirname "$0")"

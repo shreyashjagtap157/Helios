@@ -1,4 +1,4 @@
-// HELIOS JSON Module
+// Omni JSON Module
 // JSON serialization and deserialization
 
 module core::json

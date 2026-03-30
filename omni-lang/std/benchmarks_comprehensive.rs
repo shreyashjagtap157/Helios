@@ -1,4 +1,4 @@
-/// Helios Performance Benchmarks
+/// Omni Performance Benchmarks
 /// Validates all claimed performance metrics
 /// Date: Feb 28, 2026
 
@@ -363,7 +363,7 @@ fn benchmark_deallocation() {
 #[test]
 fn benchmark_summary() {
     println!("\n╔════════════════════════════════════════════════════════╗");
-    println!("║     HELIOS FRAMEWORK PERFORMANCE BENCHMARKS (Feb 2026)  ║");
+    println!("║       OMNI LANGUAGE PERFORMANCE BENCHMARKS (Feb 2026)    ║");
     println!("╚════════════════════════════════════════════════════════╝\n");
     
     println!("CLAIM VERIFICATION:");

@@ -1,4 +1,4 @@
-// HELIOS Test Suite
+// Omni Test Suite
 // Unit and integration tests
 
 module tests::tests
@@ -208,9 +208,9 @@ fn test_json_parse_array() -> Result<(), String>:
     Ok(())
 
 fn test_json_parse_object() -> Result<(), String>:
-    let obj = json::JsonParser::new("{\"name\": \"HELIOS\", \"version\": 1}").parse()?
+    let obj = json::JsonParser::new("{\"name\": \"OMNI\", \"version\": 1}").parse()?
     
-    assert_eq(obj.get("name").and_then(|v| v.as_str()), Some("HELIOS"))?
+    assert_eq(obj.get("name").and_then(|v| v.as_str()), Some("OMNI"))?
     assert_near(obj.get("version").and_then(|v| v.as_number()).unwrap(), 1.0, 1e-10)?
     
     Ok(())
@@ -222,7 +222,7 @@ fn test_json_parse_object() -> Result<(), String>:
 fn test_toml_parse() -> Result<(), String>:
     let toml_str = "
 [model]
-name = \"helios\"
+name = \"omni\"
 reasoning_depth = 12
 
 [knowledge]
@@ -232,7 +232,7 @@ chunk_size = 32
     
     let doc = toml::parse(toml_str)?
     
-    assert_eq(doc.get_path("model.name").and_then(|v| v.as_str()), Some("helios"))?
+    assert_eq(doc.get_path("model.name").and_then(|v| v.as_str()), Some("omni"))?
     assert_eq(doc.get_path("model.reasoning_depth").and_then(|v| v.as_int()), Some(12))?
     assert_near(doc.get_path("knowledge.consolidation_rate").and_then(|v| v.as_float()).unwrap(), 0.001, 1e-10)?
     

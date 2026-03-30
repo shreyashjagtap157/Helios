@@ -969,7 +969,7 @@ omni-lang/
 │   │   └── language_features/ # Extended features (5 files, ~950L)
 │   └── Cargo.toml
 ├── std/                   # Standard library (37 files, ~20,770L)
-├── core/                  # Core library for Helios (12 files, ~3,254L)
+├── core/                  # Core library for Omni (12 files, ~3,254L)
 ├── omni/                  # Self-hosted compiler source (34 files, ~23,000L)
 │   ├── main.omni         # Entry point
 │   ├── bootstrap.omni    # 3-stage bootstrap (684L)

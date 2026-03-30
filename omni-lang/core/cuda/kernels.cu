@@ -1,4 +1,4 @@
-// HELIOS CUDA Kernels
+// Omni CUDA Kernels
 // GPU acceleration for neural network operations
 
 #include <cuda_runtime.h>

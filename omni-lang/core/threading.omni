@@ -1,4 +1,4 @@
-// HELIOS Threading and Processing
+// Omni Threading and Processing
 // Concurrent execution and task scheduling
 
 module core::threading

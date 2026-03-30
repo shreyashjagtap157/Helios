@@ -1,5 +1,5 @@
-// HELIOS Math Module
-// Mathematical operations for Helios computation
+// Omni Math Module
+// Mathematical operations for Omni computation
 
 module core::math
 

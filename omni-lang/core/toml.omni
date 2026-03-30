@@ -1,4 +1,4 @@
-// HELIOS TOML Parser
+// Omni TOML Parser
 // Configuration file parsing
 
 module core::toml

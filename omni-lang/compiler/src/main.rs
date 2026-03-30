@@ -14,7 +14,7 @@
 
 //! Omni Compiler - Main Entry Point
 //!
-//! The Omni programming language compiler for Project HELIOS.
+//! The Omni programming language compiler.
 //! Supports multiple backends: LLVM (native), OVM (bytecode), and hybrid.
 //! Features hardware-adaptive compilation and universal execution model.
 
@@ -64,7 +64,7 @@ impl From<Target> for codegen::CodegenTarget {
 /// Omni Language Compiler & Runtime
 #[derive(Parser, Debug)]
 #[command(name = "omnc")]
-#[command(author = "HELIOS Project")]
+#[command(author = "Omni Project")]
 #[command(version = "2.0.0")]
 #[command(about = "Compiles and Executes Omni applications with hardware-adaptive optimization")]
 struct Args {
@@ -151,7 +151,7 @@ fn main() -> Result<()> {
         env_logger::init();
     }
 
-    log::info!("HELIOS Omni Compiler/Runtime v2.0.0 (Cognitive Framework)");
+    log::info!("Omni Compiler/Runtime v2.0.0");
     log::info!("Target: {:?}", args.target);
 
     // Ensure diagnostics directory exists and spawn a lightweight monitor thread when verbose mode is enabled.
@@ -554,73 +554,173 @@ fn resolve_imports(
     current_file: &std::path::Path,
 ) -> Result<parser::ast::Module> {
     use parser::ast::{ImportDecl, Item, Module};
+    use std::collections::HashSet;
+
+    fn normalized_import_paths(path: &[String]) -> Vec<Vec<String>> {
+        // `import foo::bar` is parsed as ["foo", "bar"].
+        // `import foo::{A, B}` is parsed as ["foo::A", "foo::B"].
+        if path.iter().any(|p| p.contains("::")) {
+            path.iter()
+                .map(|p| {
+                    p.split("::")
+                        .filter(|seg| !seg.is_empty())
+                        .map(|seg| seg.to_string())
+                        .collect::<Vec<String>>()
+                })
+                .collect()
+        } else {
+            vec![path.to_vec()]
+        }
+    }
+
+    fn detect_project_root(current_file: &std::path::Path) -> Option<std::path::PathBuf> {
+        current_file.ancestors().find_map(|ancestor| {
+            let has_compiler = ancestor.join("compiler").is_dir();
+            let has_omni = ancestor.join("omni").is_dir();
+            if has_compiler && has_omni {
+                Some(ancestor.to_path_buf())
+            } else {
+                None
+            }
+        })
+    }
+
+    fn push_omni_candidates(
+        candidates: &mut Vec<std::path::PathBuf>,
+        omni_root: &std::path::Path,
+        rel_parts: &[String],
+    ) {
+        if rel_parts.is_empty() {
+            return;
+        }
+
+        let rel = rel_parts.join("/");
+        candidates.push(omni_root.join(format!("{}.omni", rel)));
+        candidates.push(omni_root.join(rel).join("mod.omni"));
+    }
+
+    fn candidate_import_files(
+        base_dir: &std::path::Path,
+        path_parts: &[String],
+        project_root: Option<&std::path::Path>,
+    ) -> Vec<std::path::PathBuf> {
+        let mut candidates = Vec::new();
+
+        if path_parts.is_empty() {
+            return candidates;
+        }
+
+        let rel = path_parts.join("/");
+        candidates.push(base_dir.join(format!("{}.omni", rel)));
+        candidates.push(base_dir.join(&rel).join("mod.omni"));
+
+        if let Some(root) = project_root {
+            let omni_root = root.join("omni");
+            push_omni_candidates(&mut candidates, &omni_root, path_parts);
+
+            let head = path_parts[0].as_str();
+            let tail = &path_parts[1..];
+
+            match head {
+                "std" => push_omni_candidates(&mut candidates, &omni_root.join("stdlib"), tail),
+                "compiler" => {
+                    push_omni_candidates(&mut candidates, &omni_root.join("compiler"), tail)
+                }
+                "core" => push_omni_candidates(&mut candidates, &omni_root.join("core"), tail),
+                "ovm" => push_omni_candidates(&mut candidates, &omni_root.join("ovm"), tail),
+                _ => {}
+            }
+        }
+
+        // Keep order stable while removing duplicates.
+        let mut seen = HashSet::new();
+        candidates
+            .into_iter()
+            .filter(|p| seen.insert(p.clone()))
+            .collect()
+    }
 
     let base_dir = current_file
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
+    let project_root = detect_project_root(current_file);
 
     let mut resolved_items: Vec<Item> = Vec::new();
 
     for item in module.items {
         match &item {
             Item::Import(ImportDecl { path, alias }) => {
-                // Convert path segments to file path: ["std", "io"] → "std/io.omni"
-                let relative = path.join("/");
-                let file_path = base_dir.join(format!("{}.omni", relative));
+                let path_variants = normalized_import_paths(path);
+                let mut had_unresolved = false;
 
-                if file_path.exists() {
-                    log::debug!("Resolving import {:?} → {:?}", path, file_path);
-                    match std::fs::read_to_string(&file_path) {
-                        Ok(src) => match lexer::tokenize(&src) {
-                            Ok(tokens) => match parser::parse(tokens) {
-                                Ok(mut imported) => {
-                                    // Recursively resolve imports in the imported module
-                                    imported = resolve_imports(imported, &file_path)?;
-                                    resolved_items.extend(imported.items);
-                                }
+                for variant in &path_variants {
+                    let relative = variant.join("/");
+                    let candidate_files = candidate_import_files(
+                        base_dir,
+                        variant,
+                        project_root.as_deref(),
+                    );
+
+                    let file_path = candidate_files.iter().find(|p| p.exists()).cloned();
+
+                    if let Some(file_path) = file_path {
+                        log::debug!("Resolving import {:?} → {:?}", variant, file_path);
+                        match std::fs::read_to_string(&file_path) {
+                            Ok(src) => match lexer::tokenize(&src) {
+                                Ok(tokens) => match parser::parse(tokens) {
+                                    Ok(mut imported) => {
+                                        // Recursively resolve imports in the imported module
+                                        imported = resolve_imports(imported, &file_path)?;
+                                        resolved_items.extend(imported.items);
+                                    }
+                                    Err(e) => {
+                                        eprintln!(
+                                            "warning: failed to parse imported module {:?}: {}",
+                                            file_path, e
+                                        );
+                                        had_unresolved = true;
+                                    }
+                                },
                                 Err(e) => {
                                     eprintln!(
-                                        "warning: failed to parse imported module {:?}: {}",
+                                        "warning: failed to tokenize imported module {:?}: {}",
                                         file_path, e
                                     );
-                                    // Keep the unresolved import so downstream knows
-                                    resolved_items.push(item);
+                                    had_unresolved = true;
                                 }
                             },
                             Err(e) => {
                                 eprintln!(
-                                    "warning: failed to tokenize imported module {:?}: {}",
+                                    "warning: failed to read imported module {:?}: {}",
                                     file_path, e
                                 );
-                                resolved_items.push(item);
+                                had_unresolved = true;
                             }
-                        },
-                        Err(e) => {
-                            eprintln!(
-                                "warning: failed to read imported module {:?}: {}",
-                                file_path, e
-                            );
-                            resolved_items.push(item);
                         }
-                    }
-                } else {
-                    // File not found — warn but don't fail compilation
-                    if let Some(alias) = alias {
-                        eprintln!(
-                            "warning: unresolved import '{}' (as '{}'): file not found {:?}",
-                            relative, alias, file_path
-                        );
                     } else {
-                        eprintln!(
-                            "warning: unresolved import '{}': file not found {:?}",
-                            relative, file_path
+                        // File not found — warn but don't fail compilation
+                        if let Some(alias) = alias {
+                            eprintln!(
+                                "warning: unresolved import '{}' (as '{}'): searched {:?}",
+                                relative, alias, candidate_files
+                            );
+                        } else {
+                            eprintln!(
+                                "warning: unresolved import '{}': searched {:?}",
+                                relative, candidate_files
+                            );
+                        }
+                        log::warn!(
+                            "Unresolved import: {:?} — searched {:?}",
+                            variant,
+                            candidate_files
                         );
+                        had_unresolved = true;
                     }
-                    log::warn!(
-                        "Unresolved import: {:?} — file not found at {:?}",
-                        path,
-                        file_path
-                    );
+                }
+
+                if had_unresolved {
+                    // Keep unresolved import so downstream diagnostics can still surface context.
                     resolved_items.push(item);
                 }
             }

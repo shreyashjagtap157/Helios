@@ -38,7 +38,7 @@ Omni is in **Phase 2: Core Functionality**. The language has:
 
 ## Project Focus
 
-> **Note:** This project (`omni-lang/`) focuses exclusively on the Omni programming language compiler and runtime. The Helios framework (`helios-framework/`) is a separate project and is not part of this work.
+> **Note:** This repository focuses exclusively on the Omni programming language compiler, runtime, and tooling. Frameworks built on top of Omni are intentionally out of scope here.
 
 ---
 
@@ -48,7 +48,7 @@ Omni is in **Phase 2: Core Functionality**. The language has:
 
 ```bash
 # Clone the repository
-git clone https://github.com/helios-project/omni-lang.git
+git clone https://github.com/omni-lang/omni-lang.git
 cd omni-lang/compiler
 
 # Build the compiler
@@ -411,4 +411,4 @@ cargo test optimizer          # Optimizer tests
 
 ## License
 
-Proprietary — HELIOS Project. All rights reserved.
+Apache-2.0. See `../LICENSE`.
