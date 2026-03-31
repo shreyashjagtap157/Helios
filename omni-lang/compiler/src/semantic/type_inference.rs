@@ -715,6 +715,11 @@ impl InferenceEngine {
                     env.define(&cdecl.name, ty.clone());
                     self.result.variable_types.insert(cdecl.name.clone(), ty);
                 }
+                ast::Item::Static(sdecl) => {
+                    let ty = self.from_ast_type(&sdecl.ty);
+                    env.define(&sdecl.name, ty.clone());
+                    self.result.variable_types.insert(sdecl.name.clone(), ty);
+                }
                 _ => { /* imports, traits, type aliases, etc. – skip for now */ }
             }
         }

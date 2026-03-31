@@ -109,6 +109,10 @@ pub struct Parser {
     pub errors: Vec<ParseError>,
     /// Maximum number of errors before the parser gives up (default: 50).
     pub error_limit: usize,
+    /// Tick counter to detect runaway parsing loops.
+    pub tick_count: usize,
+    /// Maximum number of parse loop iterations (ticks) before aborting.
+    pub tick_limit: usize,
 }
 
 impl Parser {
@@ -118,6 +122,8 @@ impl Parser {
             current: 0,
             errors: Vec::new(),
             error_limit: 50,
+            tick_count: 0,
+            tick_limit: 1_000_000,
         }
     }
 
@@ -353,6 +359,11 @@ impl Parser {
         let mut last_heartbeat = Instant::now();
 
         while self.peek().is_some() {
+            // Increment tick counter and abort if we've exceeded the configured limit
+            self.tick_count = self.tick_count.saturating_add(1);
+            if self.tick_count > self.tick_limit {
+                return Err(ParseError::TooManyErrors { count: self.errors.len() });
+            }
             // Track progress each iteration to avoid infinite loops
             let before_idx = self.current;
             // Periodically warn about parser progress so we can trace runaway parsing
@@ -497,6 +508,7 @@ impl Parser {
             Some(TokenKind::Trait) => self.parse_trait(attributes),
             Some(TokenKind::Impl) => self.parse_impl(attributes),
             Some(TokenKind::Import) => self.parse_import(),
+            Some(TokenKind::Static) => self.parse_static(attributes),
             Some(TokenKind::Const) => self.parse_const(attributes),
             Some(TokenKind::Type) => self.parse_type_alias(attributes),
             Some(TokenKind::Extern) => self.parse_extern(attributes),
@@ -2569,6 +2581,30 @@ impl Parser {
         }))
     }
 
+    fn parse_static(&mut self, attributes: Vec<String>) -> Result<Item, ParseError> {
+        self.expect(&TokenKind::Static)?;
+        let mutable = if matches!(self.peek_kind(), Some(TokenKind::Mut)) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+        let name = self.parse_identifier()?;
+        self.expect(&TokenKind::Colon)?;
+        let ty = self.parse_type()?;
+        self.expect(&TokenKind::Eq)?;
+        let value = self.parse_expression()?;
+        self.skip_newlines();
+
+        Ok(Item::Static(ast::StaticDecl {
+            name,
+            mutable,
+            attributes,
+            ty,
+            value,
+        }))
+    }
+
     /// Parse enum definition — supports both colon+indent and brace-delimited blocks.
     fn parse_enum(&mut self, attributes: Vec<String>) -> Result<Item, ParseError> {
         self.expect(&TokenKind::Enum)?;
@@ -2702,8 +2738,11 @@ impl Parser {
 /// Main entry point for parsing.
 /// On success, returns the module AST. If the parser collected non-fatal
 /// errors during recovery, they are available via `parse_with_recovery`.
-pub fn parse(tokens: Vec<Token>) -> Result<Module, ParseError> {
+pub fn parse(tokens: Vec<Token>, tick_limit: Option<usize>) -> Result<Module, ParseError> {
     let mut parser = Parser::new(tokens);
+    if let Some(limit) = tick_limit {
+        parser.tick_limit = limit;
+    }
     let module = parser.parse_module()?;
     // If there were recovered errors, return the first one so callers that
     // rely on Result-based error handling still see a failure.
@@ -2717,8 +2756,11 @@ pub fn parse(tokens: Vec<Token>) -> Result<Module, ParseError> {
 /// Returns the (possibly partial) AST together with any collected errors.
 /// An empty `errors` vector means the parse was fully successful.
 #[allow(dead_code)]
-pub fn parse_with_recovery(tokens: Vec<Token>) -> (Module, Vec<ParseError>) {
+pub fn parse_with_recovery(tokens: Vec<Token>, tick_limit: Option<usize>) -> (Module, Vec<ParseError>) {
     let mut parser = Parser::new(tokens);
+    if let Some(limit) = tick_limit {
+        parser.tick_limit = limit;
+    }
     let module = match parser.parse_module() {
         Ok(m) => m,
         Err(e) => {

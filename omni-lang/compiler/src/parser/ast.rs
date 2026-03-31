@@ -36,8 +36,19 @@ pub enum Item {
     Const(ConstDecl),
     TypeAlias(TypeAlias),
     Extern(ExternBlock),
+    Static(StaticDecl),
     Comptime(Block),
     Macro(MacroDef),
+}
+
+/// Static variable declaration
+#[derive(Debug, Clone)]
+pub struct StaticDecl {
+    pub name: String,
+    pub mutable: bool,
+    pub attributes: Vec<String>,
+    pub ty: Type,
+    pub value: Expression,
 }
 
 /// Enum definition

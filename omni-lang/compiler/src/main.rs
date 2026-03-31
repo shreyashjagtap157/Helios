@@ -132,6 +132,14 @@ struct Args {
     #[arg(long)]
     emit_ast: bool,
 
+    /// Dump lexer tokens to a file and exit
+    #[arg(long)]
+    emit_tokens: bool,
+
+    /// Maximum parser tick limit to detect runaway parsing (0 = disabled)
+    #[arg(long)]
+    parser_tick_limit: Option<usize>,
+
     /// Dump typed AST (after semantic analysis)
     #[arg(long)]
     emit_typed_ast: bool,
@@ -380,17 +388,34 @@ fn compile(source: &str, args: &Args) -> Result<()> {
     // Phase 1: Lexical analysis
     log::debug!("Phase 1: Lexical analysis");
     let tokens = lexer::tokenize(source)?;
+    // If requested, write tokens to file and exit early
+    if args.emit_tokens {
+        let out_path = args
+            .output
+            .clone()
+            .unwrap_or_else(|| args.input.with_extension("tokens"));
+        if let Some(parent) = out_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let mut s = String::new();
+        for tok in &tokens {
+            s.push_str(&format!("{:?}\n", tok));
+        }
+        std::fs::write(&out_path, s.as_bytes())?;
+        log::info!("Wrote tokens to {:?}", out_path);
+        return Ok(());
+    }
     // heartbeat: tokens produced
     monitor::update_heartbeat();
 
     // Phase 2: Parsing
     log::debug!("Phase 2: Parsing");
     monitor::update_heartbeat();
-    let ast = parser::parse(tokens)?;
+    let ast = parser::parse(tokens, args.parser_tick_limit)?;
 
     // Phase 2.0: Import resolution
     log::debug!("Phase 2.0: Import resolution");
-    let ast = resolve_imports(ast, &args.input)?;
+    let ast = resolve_imports(ast, &args.input, args.parser_tick_limit)?;
 
     // Phase 2.0.1: Conditional compilation (#[cfg(...)] filtering)
     log::debug!("Phase 2.0.1: Conditional compilation (cfg filtering)");
@@ -552,6 +577,7 @@ fn compile(source: &str, args: &Args) -> Result<()> {
 fn resolve_imports(
     module: parser::ast::Module,
     current_file: &std::path::Path,
+    tick_limit: Option<usize>,
 ) -> Result<parser::ast::Module> {
     use parser::ast::{ImportDecl, Item, Module};
     use std::collections::HashSet;
@@ -667,10 +693,10 @@ fn resolve_imports(
                         log::debug!("Resolving import {:?} → {:?}", variant, file_path);
                         match std::fs::read_to_string(&file_path) {
                             Ok(src) => match lexer::tokenize(&src) {
-                                Ok(tokens) => match parser::parse(tokens) {
+                                Ok(tokens) => match parser::parse(tokens, tick_limit) {
                                     Ok(mut imported) => {
                                         // Recursively resolve imports in the imported module
-                                        imported = resolve_imports(imported, &file_path)?;
+                                        imported = resolve_imports(imported, &file_path, tick_limit)?;
                                         resolved_items.extend(imported.items);
                                     }
                                     Err(e) => {
@@ -772,6 +798,7 @@ fn item_attributes(item: &parser::ast::Item) -> &[String] {
         parser::ast::Item::Trait(t) => &t.attributes,
         parser::ast::Item::Impl(i) => &i.attributes,
         parser::ast::Item::Const(c) => &c.attributes,
+        parser::ast::Item::Static(s) => &s.attributes,
         // Items that don't carry attributes are always retained
         parser::ast::Item::Import(_)
         | parser::ast::Item::TypeAlias(_)

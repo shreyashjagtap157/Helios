@@ -101,33 +101,41 @@ struct CompilerConfig:
             static_link: false,
         }
 
-    fn default_output(&self) -> str:
-        if self.input_files.is_empty():
-            return "a.out"
-        let base = self.input_files[0]
-            .rsplit('/')
-            .next()
-            .unwrap_or("a")
-            .rsplit('\\')
-            .next()
-            .unwrap_or("a")
-        let stem = if base.ends_with(".omni"):
-            &base[..base.len() - 5]
-        else:
-            base
-        match self.emit:
-            EmitTarget::Executable =>
-                #[cfg(windows)]
-                format("{}.exe", stem)
-                #[cfg(not(windows))]
-                stem.to_string()
-            EmitTarget::Object => format("{}.o", stem)
-            EmitTarget::LLVMIR => format("{}.ll", stem)
-            EmitTarget::Assembly => format("{}.s", stem)
-            EmitTarget::Bytecode => format("{}.ovm", stem)
-            EmitTarget::AST => format("{}.ast.json", stem)
-            EmitTarget::IR => format("{}.ir", stem)
-            EmitTarget::Tokens => format("{}.tokens", stem)
+// Platform helper for executable name
+#[cfg(windows)]
+fn exe_name(stem: &str) -> str:
+    return format("{}.exe", stem)
+
+#[cfg(not(windows))]
+fn exe_name(stem: &str) -> str:
+    return stem.to_string()
+
+fn default_output(&self) -> str:
+    if self.input_files.is_empty():
+        return "a.out"
+
+    let base = self.input_files[0]
+        .rsplit('/')
+        .next()
+        .unwrap_or("a")
+        .rsplit('\\')
+        .next()
+        .unwrap_or("a")
+
+    let stem = if base.ends_with(".omni"):
+        &base[..base.len() - 5]
+    else:
+        base
+
+    match self.emit:
+        EmitTarget::Executable => exe_name(stem)
+        EmitTarget::Object => format("{}.o", stem)
+        EmitTarget::LLVMIR => format("{}.ll", stem)
+        EmitTarget::Assembly => format("{}.s", stem)
+        EmitTarget::Bytecode => format("{}.ovm", stem)
+        EmitTarget::AST => format("{}.ast.json", stem)
+        EmitTarget::IR => format("{}.ir", stem)
+        EmitTarget::Tokens => format("{}.tokens", stem)
 
 // ============================================================================
 // Argument Parser
@@ -297,10 +305,24 @@ struct CompilationResult:
             warnings: Vector::new(),
             timings: HashMap::new(),
         }
+    // Helper: report semantic errors into the compilation result
+    fn report_sem_errors(sem_errors: &Vector<SemanticError>, config: &CompilerConfig, result: &mut CompilationResult):
+        for err in &sem_errors:
+            match err.severity:
+                Severity::Error =>
+                    result.errors.push(format("error: {}", err.message))
+                Severity::Warning =>
+                    if config.warnings_as_errors:
+                        result.errors.push(format("error (from warning): {}", err.message))
+                    else:
+                        result.warnings.push(format("warning: {}", err.message))
+                Severity::Info =>
+                    if config.verbose:
+                        println("  info: {}", err.message)
 
-fn compile(config: &CompilerConfig) -> CompilationResult:
-    let mut result = CompilationResult::new()
-    let start_time = std::time::now()
+    fn compile(config: &CompilerConfig) -> CompilationResult:
+        let mut result = CompilationResult::new()
+        let start_time = std::time::now()
 
     if config.verbose:
         println("omnc {} — Omni Compiler", VERSION)
@@ -371,7 +393,7 @@ fn compile(config: &CompilerConfig) -> CompilationResult:
             let output = config.output_path.as_ref().unwrap()
             std::fs::write(output, &ast_str).unwrap_or(())
             return result
-        else:
+        if config.dump_ast:
             eprintln("{}", ast_str)
 
     result.timings.insert("parsing".to_string(), elapsed(parse_start))
@@ -386,18 +408,7 @@ fn compile(config: &CompilerConfig) -> CompilationResult:
 
     let (type_table, sem_errors) = analyze(&program)
 
-    for err in &sem_errors:
-        match err.severity:
-            Severity::Error =>
-                result.errors.push(format("error: {}", err.message))
-            Severity::Warning =>
-                if config.warnings_as_errors:
-                    result.errors.push(format("error (from warning): {}", err.message))
-                else:
-                    result.warnings.push(format("warning: {}", err.message))
-            Severity::Info =>
-                if config.verbose:
-                    println("  info: {}", err.message)
+    report_sem_errors(&sem_errors, &config, &mut result)
 
     if not result.errors.is_empty():
         result.success = false
@@ -460,58 +471,58 @@ fn compile(config: &CompilerConfig) -> CompilationResult:
 
     let output_path = config.output_path.as_ref().unwrap().clone()
 
-    match config.emit:
-        EmitTarget::Executable | EmitTarget::Object =>
-            let obj_path = if config.emit == EmitTarget::Executable:
-                format("{}.o", output_path)
-            else:
-                output_path.clone()
+    if config.emit == EmitTarget::Executable or config.emit == EmitTarget::Object:
+        let obj_path = if config.emit == EmitTarget::Executable:
+            format("{}.o", output_path)
+        else:
+            output_path.clone()
 
-            match generate_llvm(&ir_module, obj_path.clone(), config.opt_level.to_int() as i32):
+        match generate_llvm(&ir_module, obj_path.clone(), config.opt_level.to_int() as i32):
+            Ok(()) => pass
+            Err(e) =>
+                result.errors.push(format("codegen error: {}", e))
+                result.success = false
+                return result
+
+        if config.emit == EmitTarget::Executable:
+            // Link
+            let link_start = std::time::now()
+            if config.verbose:
+                println("  linking...")
+
+            let objects = Vector::from([obj_path.clone()])
+            match link_executable(&objects, output_path.clone(), config.debug_info):
                 Ok(()) => pass
                 Err(e) =>
-                    result.errors.push(format("codegen error: {}", e))
+                    result.errors.push(format("linker error: {}", e))
                     result.success = false
                     return result
 
-            if config.emit == EmitTarget::Executable:
-                // Link
-                let link_start = std::time::now()
-                if config.verbose:
-                    println("  linking...")
+            // Clean up temporary object file
+            std::fs::remove(obj_path).unwrap_or(())
 
-                let objects = Vector::from([obj_path.clone()])
-                match link_executable(&objects, output_path.clone(), config.debug_info):
-                    Ok(()) => pass
-                    Err(e) =>
-                        result.errors.push(format("linker error: {}", e))
-                        result.success = false
-                        return result
+            result.timings.insert("linking".to_string(), elapsed(link_start))
 
-                // Clean up temporary object file
-                std::fs::remove(obj_path).unwrap_or(())
-
-                result.timings.insert("linking".to_string(), elapsed(link_start))
-
-        EmitTarget::LLVMIR =>
+    else:
+        if config.emit == EmitTarget::LLVMIR:
             let ir_str = generate_llvm_ir(&ir_module)
             std::fs::write(&output_path, &ir_str).unwrap_or(())
-
-        EmitTarget::Assembly =>
-            match generate_llvm(&ir_module, output_path.clone(), config.opt_level.to_int() as i32):
-                Ok(()) => pass
-                Err(e) =>
-                    result.errors.push(format("codegen error: {}", e))
-                    result.success = false
-
-        EmitTarget::Bytecode =>
-            match generate_ovm_bytecode(&ir_module, output_path.clone()):
-                Ok(()) => pass
-                Err(e) =>
-                    result.errors.push(format("bytecode gen error: {}", e))
-                    result.success = false
-
-        _ => pass
+        else:
+            if config.emit == EmitTarget::Assembly:
+                match generate_llvm(&ir_module, output_path.clone(), config.opt_level.to_int() as i32):
+                    Ok(()) => pass
+                    Err(e) =>
+                        result.errors.push(format("codegen error: {}", e))
+                        result.success = false
+            else:
+                if config.emit == EmitTarget::Bytecode:
+                    match generate_ovm_bytecode(&ir_module, output_path.clone()):
+                        Ok(()) => pass
+                        Err(e) =>
+                            result.errors.push(format("bytecode gen error: {}", e))
+                            result.success = false
+                else:
+                    pass
 
     result.timings.insert("codegen".to_string(), elapsed(codegen_start))
 

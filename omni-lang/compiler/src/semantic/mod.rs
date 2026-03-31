@@ -351,6 +351,15 @@ pub enum TypedItem {
     Extern(TypedExternBlock),
     Trait(TraitInfo),
     Impl(TypedImpl),
+    Static(TypedStatic),
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedStatic {
+    pub name: String,
+    pub mutable: bool,
+    pub ty: Type,
+    pub value: TypedExpr,
 }
 
 #[derive(Debug, Clone)]
@@ -1664,6 +1673,11 @@ impl Analyzer {
                         self.const_values.insert(c.name.clone(), val);
                     }
                 }
+                Item::Static(s) => {
+                    // Define static variables in root scope to allow access throughout module
+                    let ty = s.ty.clone();
+                    let _ = self.define_symbol(s.name.clone(), ty.clone(), s.mutable);
+                }
                 _ => {}
             }
         }
@@ -1695,6 +1709,7 @@ impl Analyzer {
                     associated_types: HashMap::new(),
                 })),
                 Item::Impl(i) => items.push(self.analyze_impl(i)?),
+                Item::Static(s) => items.push(self.analyze_static(s)?),
                 Item::Comptime(block) => {
                     info!("Evaluating comptime block");
                     // Execute comptime statements
@@ -1778,6 +1793,22 @@ impl Analyzer {
             trait_name: i.trait_name,
             type_name: i.type_name,
             methods,
+        }))
+    }
+
+    fn analyze_static(&mut self, s: StaticDecl) -> Result<TypedItem, SemanticError> {
+        debug!("Analyzing static variable: {}", s.name);
+        let ty = s.ty.clone();
+        let typed_value = self.analyze_expression(&s.value)?;
+
+        // Ensure the initializer is assignable to the static type
+        self.unify(&ty, &typed_value.ty)?;
+
+        Ok(TypedItem::Static(TypedStatic {
+            name: s.name,
+            mutable: s.mutable,
+            ty,
+            value: typed_value,
         }))
     }
 

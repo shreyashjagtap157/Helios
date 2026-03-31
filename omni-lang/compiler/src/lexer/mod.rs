@@ -83,6 +83,8 @@ pub enum TokenKind {
     Implements,
     #[token("const")]
     Const,
+    #[token("static")]
+    Static,
     #[token("true")]
     True,
     #[token("false")]

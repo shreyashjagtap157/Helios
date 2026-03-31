@@ -1,0 +1,13 @@
+import compiler::lexer::{tokenize}
+import compiler::lexer::token::{Token}
+
+fn main() -> int:
+    let s = "let x = 1_000 + 0xFF;"
+    let res = tokenize(s)
+    match res:
+        Ok(tokens) =>:
+            for t in tokens:
+                println!("{} {}", t.span.start, t.lexeme)
+        Err(e) =>:
+            println!("Lex error: {}", e)
+    return 0
