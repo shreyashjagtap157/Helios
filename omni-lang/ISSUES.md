@@ -418,6 +418,23 @@ Many stdlib files use `#[cfg(unix)]` / `#[cfg(windows)]` attributes for platform
 **Priority:** MEDIUM
 **Component:** semantic, parser
 
+---
+
+### SH-001: Stage 0 Bootstrap Works, Stage 1-2 Self-hosting Blocked
+
+**Status:** 🔴 OPEN
+**Priority:** CRITICAL
+**Component:** bootstrap/runtime
+**Progress:** Stage 0 compilation from Rust `omnc` (with `compiler_minimal.omni`) now runs but does not emit `stage0.ovm` as expected.
+
+**Issue observed:** `Undefined symbol` errors were fixed by adding API size globals to `compiler_minimal.omni`, but full Stage 0 output still not created due ongoing generation issues.
+
+**Next actions:**
+1. Complete `compiler_minimal.omni` bootstrap range by reviewing OVM writer expectations and global state initialization.
+2. Add self-verification for `g_` arrays in the self-hosted parser and codegen path.
+3. Add Stage 1 (self-hosted compiler compile itself) and Stage 2 fixpoint verification in `bootstrap.sh`.
+
+
 **Working:** Basic generics (`Vec<T>`), simple trait bounds, const generics (131L)
 **Not Working:** Generic trait bounds in where clauses, generic associated types (GATs), higher-kinded types
 

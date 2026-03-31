@@ -6,6 +6,36 @@
 // AST: 1=Fn 2=Let 3=Ret 4=If 5=While 6=ES 7=Call
 // 8=Bin 9=IntL 10=StrL 11=Id 12=Bool 13=Blk 14=Asgn
 module omni_compiler
+
+static mut g_tt: [int; 16384] = [0; 16384]
+static mut g_ts: [str; 16384] = [""; 16384]
+static mut g_ti: [int; 16384] = [0; 16384]
+static mut g_pp: int = 0
+static mut g_nc: int = 0
+static mut g_nt: [int; 16384] = [0; 16384]
+static mut g_ns: [str; 16384] = [""; 16384]
+static mut g_ni: [int; 16384] = [0; 16384]
+static mut g_n1: [int; 16384] = [0; 16384]
+static mut g_n2: [int; 16384] = [0; 16384]
+static mut g_n3: [int; 16384] = [0; 16384]
+static mut g_pf: [int; 16384] = [0; 16384]
+static mut g_fp: [str; 16384] = [""; 16384]
+static mut g_bs: [int; 16384] = [0; 16384]
+static mut g_ca: [int; 16384] = [0; 16384]
+static mut g_cc: int = 0
+static mut g_cl: int = 0
+static mut g_csv: [str; 1024] = [""; 1024]
+static mut g_fbe: [int; 16384] = [0; 16384]
+static mut g_fbs: [int; 16384] = [0; 16384]
+static mut g_fc: int = 0
+static mut g_flc: [int; 16384] = [0; 16384]
+static mut g_fn: [str; 16384] = [""; 16384]
+static mut g_fpc: [int; 16384] = [0; 16384]
+static mut g_lc: int = 0
+static mut g_ln: [str; 16384] = [""; 16384]
+static mut g_ob: [int; 16384] = [0; 16384]
+static mut g_ol: int = 0
+
 fn is_id1(c: int) -> bool:
     if c >= 65:
         if c <= 90:
