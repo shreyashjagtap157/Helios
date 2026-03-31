@@ -666,6 +666,52 @@ impl Analyzer {
                 Type::Function(vec![Type::Any], Some(Box::new(Type::Any))),
                 false,
             ),
+            // Bootstrap string/file helpers used by compiler_minimal.omni
+            (
+                "str_eq",
+                Type::Function(vec![Type::Str, Type::Str], Some(Box::new(Type::Bool))),
+                false,
+            ),
+            (
+                "str_len",
+                Type::Function(vec![Type::Str], Some(Box::new(Type::I64))),
+                false,
+            ),
+            (
+                "str_char_at",
+                Type::Function(vec![Type::Str, Type::I64], Some(Box::new(Type::I64))),
+                false,
+            ),
+            (
+                "str_append",
+                Type::Function(vec![Type::Str, Type::I64], Some(Box::new(Type::Str))),
+                false,
+            ),
+            (
+                "str_slice",
+                Type::Function(vec![Type::Str, Type::I64, Type::I64], Some(Box::new(Type::Str))),
+                false,
+            ),
+            (
+                "file_read",
+                Type::Function(vec![Type::Str], Some(Box::new(Type::Str))),
+                false,
+            ),
+            (
+                "file_write_bytes",
+                Type::Function(vec![Type::Str, Type::I64], None),
+                false,
+            ),
+            (
+                "str_replace_ext",
+                Type::Function(vec![Type::Str, Type::Str], Some(Box::new(Type::Str))),
+                false,
+            ),
+            (
+                "arg",
+                Type::Function(vec![Type::I64], Some(Box::new(Type::Str))),
+                false,
+            ),
         ];
 
         for (name, ty, mutable) in builtins {

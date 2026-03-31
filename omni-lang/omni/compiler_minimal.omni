@@ -7,36 +7,37 @@
 // 8=Bin 9=IntL 10=StrL 11=Id 12=Bool 13=Blk 14=Asgn
 module omni_compiler
 
-static mut g_tt: [int; 16384] = []
+static mut g_tt: [i64; 16384] = []
 static mut g_ts: [str; 16384] = []
-static mut g_ti: [int; 16384] = []
-static mut g_pp: int = 0
-static mut g_nc: int = 0
-static mut g_nt: [int; 16384] = []
+static mut g_ti: [i64; 16384] = []
+static mut g_pp: i64 = 0
+static mut g_nc: i64 = 0
+static mut g_nt: [i64; 16384] = []
 static mut g_ns: [str; 16384] = []
-static mut g_ni: [int; 16384] = []
-static mut g_n1: [int; 16384] = []
-static mut g_n2: [int; 16384] = []
-static mut g_n3: [int; 16384] = []
-static mut g_pf: [int; 16384] = []
+static mut g_ni: [i64; 16384] = []
+static mut g_n1: [i64; 16384] = []
+static mut g_n2: [i64; 16384] = []
+static mut g_n3: [i64; 16384] = []
+static mut g_pf: [i64; 16384] = []
 static mut g_fp: [str; 16384] = []
-static mut g_bs: [int; 16384] = []
-static mut g_ca: [int; 16384] = []
-static mut g_cc: int = 0
-static mut g_cl: int = 0
-static mut g_csv: [str; 1024] = [""; 1024]
-static mut g_fbe: [int; 16384] = []
-static mut g_fbs: [int; 16384] = []
-static mut g_fc: int = 0
-static mut g_flc: [int; 16384] = []
+static mut g_bs: [i64; 16384] = []
+static mut g_bc: [i64; 16384] = []
+static mut g_ca: [i64; 16384] = []
+static mut g_cc: i64 = 0
+static mut g_cl: i64 = 0
+static mut g_csv: [str; 1024] = []
+static mut g_fbe: [i64; 16384] = []
+static mut g_fbs: [i64; 16384] = []
+static mut g_fc: i64 = 0
+static mut g_flc: [i64; 16384] = []
 static mut g_fn: [str; 16384] = []
-static mut g_fpc: [int; 16384] = []
-static mut g_lc: int = 0
+static mut g_fpc: [i64; 16384] = []
+static mut g_lc: i64 = 0
 static mut g_ln: [str; 16384] = []
-static mut g_ob: [int; 16384] = []
-static mut g_ol: int = 0
+static mut g_ob: [i64; 16384] = []
+static mut g_ol: i64 = 0
 
-fn is_id1(c: int) -> bool:
+fn is_id1(c: i64) -> bool:
     if c >= 65:
         if c <= 90:
             return true
@@ -44,22 +45,22 @@ fn is_id1(c: int) -> bool:
         if c <= 122:
             return true
     return c == 95
-fn is_id(c: int) -> bool:
+fn is_id(c: i64) -> bool:
     if is_id1(c):
         return true
     if c >= 48:
         return c <= 57
     return false
-fn is_dg(c: int) -> bool:
+fn is_dg(c: i64) -> bool:
     if c >= 48:
         return c <= 57
     return false
-fn te(tc: int, t: int, s: str, v: int) -> int:
+fn te(tc: i64, t: i64, s: str, v: i64) -> i64:
     g_tt[tc] = t
     g_ts[tc] = s
     g_ti[tc] = v
     return tc + 1
-fn kw(w: str) -> int:
+fn kw(w: str) -> i64:
     if str_eq(w, "fn"):
         return 4
     if str_eq(w, "let"):
@@ -85,7 +86,7 @@ fn kw(w: str) -> int:
     if str_eq(w, "mut"):
         return 39
     return 1
-fn tokenize(src: str) -> int:
+fn tokenize(src: str) -> i64:
     let sl = str_len(src)
     let p = 0
     let tc = 0
@@ -230,7 +231,7 @@ fn tokenize(src: str) -> int:
         p = p + 1
     return te(tc, 0, "", 0)
 // --- Parser helpers ---
-fn pk() -> int:
+fn pk() -> i64:
     return g_tt[g_pp]
 fn ps() -> str:
     return g_ts[g_pp]
@@ -239,10 +240,10 @@ fn av():
 fn snl():
     while pk() == 28:
         av()
-fn ex(t: int):
+fn ex(t: i64):
     if pk() == t:
         av()
-fn nd(t: int) -> int:
+fn nd(t: i64) -> i64:
     let i = g_nc
     g_nt[i] = t
     g_ns[i] = ""
@@ -252,7 +253,7 @@ fn nd(t: int) -> int:
     g_n3[i] = -1
     g_nc = g_nc + 1
     return i
-fn parse_prog() -> int:
+fn parse_prog() -> i64:
     let r = nd(15)
     let c = 0
     snl()
@@ -282,7 +283,7 @@ fn parse_prog() -> int:
         snl()
     g_ni[r] = c
     return r
-fn p_fndef() -> int:
+fn p_fndef() -> i64:
     let n = nd(1)
     av()
     g_ns[n] = ps()
@@ -314,7 +315,7 @@ fn p_fndef() -> int:
         av()
     g_n1[n] = p_blk()
     return n
-fn p_blk() -> int:
+fn p_blk() -> i64:
     let b = nd(13)
     let c = 0
     snl()
@@ -328,7 +329,7 @@ fn p_blk() -> int:
         av()
     g_ni[b] = c
     return b
-fn p_st() -> int:
+fn p_st() -> i64:
     snl()
     let t = pk()
     if t == 5:
@@ -401,7 +402,7 @@ fn p_st() -> int:
         g_n2[a] = p_x()
         return a
     return n
-fn p_x() -> int:
+fn p_x() -> i64:
     let l = p_add()
     let t = pk()
     if t >= 22:
@@ -424,7 +425,7 @@ fn p_x() -> int:
             g_ns[n] = ops
             return n
     return l
-fn p_add() -> int:
+fn p_add() -> i64:
     let l = p_pri()
     while pk() == 17:
         av()
@@ -455,7 +456,7 @@ fn p_add() -> int:
         g_ns[n] = "/"
         l = n
     return l
-fn p_pri() -> int:
+fn p_pri() -> i64:
     let t = pk()
     if t == 18:
         av()
@@ -512,7 +513,7 @@ fn p_pri() -> int:
     av()
     return nd(0)
 // --- Codegen ---
-fn asc(s: str) -> int:
+fn asc(s: str) -> i64:
     let i = 0
     while i < g_cc:
         if str_eq(g_csv[i], s):
@@ -522,26 +523,26 @@ fn asc(s: str) -> int:
     g_csv[x] = s
     g_cc = g_cc + 1
     return x
-fn eb(b: int):
+fn eb(b: i64):
     g_bc[g_cl] = b
     g_cl = g_cl + 1
-fn eu16(v: int):
+fn eu16(v: i64):
     eb(v % 256)
     eb(v / 256)
-fn eu32(v: int):
+fn eu32(v: i64):
     eb(v % 256)
     eb((v / 256) % 256)
     eb((v / 65536) % 256)
     eb((v / 16777216) % 256)
-fn ei32(v: int):
+fn ei32(v: i64):
     if v < 0:
         eu32(4294967296 + v)
     else:
         eu32(v)
-fn eu64(v: int):
+fn eu64(v: i64):
     eu32(v % 4294967296)
     eu32(v / 4294967296)
-fn pi32(o: int, v: int):
+fn pi32(o: i64, v: i64):
     let u = v
     if v < 0:
         u = 4294967296 + v
@@ -549,7 +550,7 @@ fn pi32(o: int, v: int):
     g_bc[o + 1] = (u / 256) % 256
     g_bc[o + 2] = (u / 65536) % 256
     g_bc[o + 3] = (u / 16777216) % 256
-fn fl(nm: str) -> int:
+fn fl(nm: str) -> i64:
     let i = 0
     while i < g_lc:
         if str_eq(g_ln[i], nm):
@@ -559,14 +560,14 @@ fn fl(nm: str) -> int:
     g_ln[x] = nm
     g_lc = g_lc + 1
     return x
-fn ff(nm: str) -> int:
+fn ff(nm: str) -> i64:
     let i = 0
     while i < g_fc:
         if str_eq(g_fn[i], nm):
             return i
         i = i + 1
     return -1
-fn c_fn(fnode: int):
+fn c_fn(fnode: i64):
     g_lc = 0
     let p = 0
     while p < g_ni[fnode]:
@@ -582,14 +583,14 @@ fn c_fn(fnode: int):
     eb(91)
     g_fbe[fi] = g_cl
     g_flc[fi] = g_lc
-fn c_blk(bn: int):
+fn c_blk(bn: i64):
     if bn < 0:
         return
     let i = 0
     while i < g_ni[bn]:
         c_st(g_bs[i])
         i = i + 1
-fn c_st(n: int):
+fn c_st(n: i64):
     if n < 0:
         return
     let t = g_nt[n]
@@ -640,7 +641,7 @@ fn c_st(n: int):
             c_e(g_n2[n])
             eb(97)
             eu16(fl(g_ns[g_n1[n]]))
-fn c_e(n: int):
+fn c_e(n: i64):
     if n < 0:
         eb(8)
         return
@@ -698,15 +699,15 @@ fn c_e(n: int):
     else:
         eb(8)
 // --- OVM binary writer ---
-fn ob(b: int):
+fn ob(b: i64):
     g_ob[g_ol] = b
     g_ol = g_ol + 1
-fn ou32(v: int):
+fn ou32(v: i64):
     ob(v % 256)
     ob((v / 256) % 256)
     ob((v / 65536) % 256)
     ob((v / 16777216) % 256)
-fn ou64(v: int):
+fn ou64(v: i64):
     ou32(v % 4294967296)
     ou32(v / 4294967296)
 fn os(s: str):
@@ -714,7 +715,7 @@ fn os(s: str):
     while i < str_len(s):
         ob(str_char_at(s, i))
         i = i + 1
-fn pu64(o: int, v: int):
+fn pu64(o: i64, v: i64):
     let lo = v % 4294967296
     let hi = v / 4294967296
     g_ob[o] = lo % 256
@@ -795,7 +796,7 @@ fn write_ovm(fname: str):
     pu64(p3, ss)
     pu64(p3 + 8, se - ss)
     file_write_bytes(fname, g_ol)
-fn compile(source: str, outfile: str) -> int:
+fn compile(source: str, outfile: str) -> i64:
     println("=== Omni Bootstrap Compiler v0.6.1 ===")
     let tc = tokenize(source)
     println("Tokens: ", tc)
@@ -825,3 +826,4 @@ fn main():
         println("Error: cannot read file")
         return
     compile(source, str_replace_ext(filename, ".ovm"))
+
