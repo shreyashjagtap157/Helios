@@ -281,14 +281,14 @@ impl Parser {
             if &token.kind == kind {
                 Ok(self.advance().unwrap())
             } else {
-                let hint = Self::suggest_hint(&token.lexeme);
+                let _hint = Self::suggest_hint(&token.lexeme);
                 Err(ParseError::UnexpectedToken {
-                    line: token.line,
-                    column: token.column,
-                    expected: format!("{:?}", kind),
-                    got: format!("{:?}", token.kind),
+                    line: self.tokens[self.current].line,
+                    column: self.tokens[self.current].column,
+                    expected: "]".to_string(),
+                    got: ";".to_string(),
                     code: ParseErrorCode::UnexpectedToken,
-                    hint,
+                    hint: Some("Ensure array size is followed by ']'".to_string()),
                 })
             }
         } else {
@@ -1151,6 +1151,17 @@ impl Parser {
                 if matches!(self.peek_kind(), Some(TokenKind::Semicolon)) {
                     self.advance();
                     let size = self.parse_expression()?;
+                        if !matches!(self.peek_kind(), Some(TokenKind::RBracket)) {
+                        self.synchronize(); // Attempt to recover by skipping to the next valid token
+                        return Err(ParseError::UnexpectedToken {
+                            line: self.tokens.get(self.current).map(|t| t.line).unwrap_or(0),
+                            column: self.tokens.get(self.current).map(|t| t.column).unwrap_or(0),
+                            expected: "]".to_string(),
+                            got: ";".to_string(),
+                            code: ParseErrorCode::UnexpectedToken,
+                            hint: Some("Expected ']' after array size".to_string()),
+                        });
+                    }
                     self.expect(&TokenKind::RBracket)?;
                     Ok(Type::Array(Box::new(elem_type), Some(Box::new(size))))
                 } else {
@@ -1876,6 +1887,7 @@ impl Parser {
             }
             Some(TokenKind::CharLiteral) => {
                 let val = self.advance().unwrap().lexeme.clone();
+                // Remove quotes and get character value
                 let unquoted = &val[1..val.len() - 1];
                 let ch = if unquoted.starts_with('\\') {
                     match &unquoted[1..] {

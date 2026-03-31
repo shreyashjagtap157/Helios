@@ -656,6 +656,98 @@ impl OvmInterpreter {
             }),
         );
 
+        // Thread spawn / join wrappers (native-facing intrinsics used by std)
+        self.native_functions.insert(
+            "__intrinsic_thread_spawn".to_string(),
+            Box::new(|interp, args| {
+                // args[0] = FuncRef or Int(index)
+                if args.is_empty() {
+                    return Err(anyhow!("__intrinsic_thread_spawn: missing function arg"));
+                }
+                let func_val = args[0].clone();
+                let func_index = match func_val {
+                    OvmValue::FuncRef(idx) => idx,
+                    OvmValue::Int(idx) => idx as usize,
+                    _ => return Err(anyhow!("__intrinsic_thread_spawn: bad arg")),
+                };
+
+                let module = interp
+                    .module
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("__intrinsic_thread_spawn: no module loaded"))?
+                    .clone();
+
+                let finished_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let finished_clone = finished_flag.clone();
+
+                let join_handle = std::thread::spawn(move || {
+                    let mut child_interp = OvmInterpreter::new();
+                    child_interp.load_module(module);
+                    let result = child_interp
+                        .call_function(func_index, Vec::new())
+                        .unwrap_or(OvmValue::Null);
+                    finished_clone.store(true, std::sync::atomic::Ordering::Release);
+                    result
+                });
+
+                let handle_id = interp.alloc_handle_id();
+                interp.thread_handles.insert(
+                    handle_id,
+                    ThreadHandle {
+                        join_handle: Some(join_handle),
+                        finished: finished_flag,
+                    },
+                );
+
+                Ok(OvmValue::Int(handle_id as i64))
+            }),
+        );
+
+        self.native_functions.insert(
+            "__intrinsic_thread_spawn_with_stack".to_string(),
+            Box::new(|interp, args| {
+                // args[0] = stack_size (Int), args[1] = func
+                if args.len() < 2 {
+                    return Err(anyhow!("__intrinsic_thread_spawn_with_stack: missing args"));
+                }
+                let func_val = args[1].clone();
+                let func_index = match func_val {
+                    OvmValue::FuncRef(idx) => idx,
+                    OvmValue::Int(idx) => idx as usize,
+                    _ => return Err(anyhow!("__intrinsic_thread_spawn_with_stack: bad func arg")),
+                };
+                // stack_size ignored in interpreter
+                let module = interp
+                    .module
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("__intrinsic_thread_spawn_with_stack: no module"))?
+                    .clone();
+
+                let finished_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let finished_clone = finished_flag.clone();
+
+                let join_handle = std::thread::spawn(move || {
+                    let mut child_interp = OvmInterpreter::new();
+                    child_interp.load_module(module);
+                    let result = child_interp
+                        .call_function(func_index, Vec::new())
+                        .unwrap_or(OvmValue::Null);
+                    finished_clone.store(true, std::sync::atomic::Ordering::Release);
+                    result
+                });
+
+                let handle_id = interp.alloc_handle_id();
+                interp.thread_handles.insert(
+                    handle_id,
+                    ThreadHandle {
+                        join_handle: Some(join_handle),
+                        finished: finished_flag,
+                    },
+                );
+                Ok(OvmValue::Int(handle_id as i64))
+            }),
+        );
+
         // Spin hint (stateless)
         self.native_functions.insert(
             "__intrinsic_spin_hint".to_string(),
@@ -702,6 +794,62 @@ impl OvmInterpreter {
         self.native_functions.insert(
             "__intrinsic_thread_handle".to_string(),
             Box::new(|_, _| Ok(OvmValue::Int(0))),
+        );
+
+        // Join / is_finished wrappers
+        self.native_functions.insert(
+            "__intrinsic_thread_join".to_string(),
+            Box::new(|interp, args| {
+                if args.is_empty() {
+                    return Err(anyhow!("__intrinsic_thread_join: missing handle"));
+                }
+                let handle_id = args[0].as_int().ok_or_else(|| anyhow!("invalid handle"))? as u64;
+                let thread = interp.thread_handles.remove(&handle_id).ok_or_else(|| anyhow!("invalid handle"))?;
+                if let Some(jh) = thread.join_handle {
+                    match jh.join() {
+                        Ok(result) => Ok(result),
+                        Err(_) => Ok(OvmValue::Null),
+                    }
+                } else {
+                    Ok(OvmValue::Null)
+                }
+            }),
+        );
+
+        self.native_functions.insert(
+            "__intrinsic_thread_is_finished".to_string(),
+            Box::new(|interp, args| {
+                if args.is_empty() {
+                    return Err(anyhow!("__intrinsic_thread_is_finished: missing handle"));
+                }
+                let handle_id = args[0].as_int().ok_or_else(|| anyhow!("invalid handle"))? as u64;
+                let finished = interp
+                    .thread_handles
+                    .get(&handle_id)
+                    .map(|th| th.finished.load(std::sync::atomic::Ordering::Acquire))
+                    .unwrap_or(true);
+                Ok(OvmValue::Bool(finished))
+            }),
+        );
+
+        // Futex / wait/wake stubs
+        self.native_functions.insert(
+            "__intrinsic_futex_wait".to_string(),
+            Box::new(|_, _| {
+                // Simplified: yield to allow other threads to progress
+                std::thread::yield_now();
+                Ok(OvmValue::Null)
+            }),
+        );
+
+        self.native_functions.insert(
+            "__intrinsic_futex_wake".to_string(),
+            Box::new(|_, _| Ok(OvmValue::Null)),
+        );
+
+        self.native_functions.insert(
+            "__intrinsic_futex_wait_timeout".to_string(),
+            Box::new(|_, _| Ok(OvmValue::Bool(false))),
         );
 
         debug!(

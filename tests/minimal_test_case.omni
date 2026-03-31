@@ -1,0 +1,6 @@
+// Minimal test case to isolate parser error
+// This file contains a simplified version of the problematic code
+
+static array[10] int testArray;
+
+// End of test case

@@ -63,7 +63,7 @@ impl Backend {
         };
 
         // --- Parser pass ---
-        match omni_compiler::parser::parse(tokens) {
+        match omni_compiler::parser::parse(tokens, None) {
             Ok(_module) => { /* no errors */ }
             Err(e) => {
                 diagnostics.push(Diagnostic {

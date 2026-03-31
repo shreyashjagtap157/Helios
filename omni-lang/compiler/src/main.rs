@@ -238,7 +238,7 @@ fn main() -> Result<()> {
                                         "diagnostics/monitor_flame_{}.svg",
                                         chrono::Utc::now().format("%Y%m%dT%H%M%S")
                                     );
-                                    match File::create(&fg_name) {
+                                    match std::fs::File::create(&fg_name) {
                                         Ok(mut f) => {
                                             if let Err(e) = report.flamegraph(&mut f) {
                                                 log::error!(
