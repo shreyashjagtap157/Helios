@@ -48,10 +48,8 @@ struct OmniRuntime:
         println("Omni runtime stopped")
         self.running = false
 
-fn println(msg: str):
-    // Basic println implementation for bootstrap
-    // Use core println implementation from std/core/lib.omni
-    // This file previously had a placeholder; defer to core implementation.
+fn println(msg: &str):
+    // Bootstrap println wrapper — forward to core implementation which accepts `&str`.
     core::println(msg)
 
 fn main():
