@@ -91,10 +91,7 @@ pub fn generate_ovm_direct(module: &TypedModule, output: &std::path::Path) -> Re
     let entry_point = if !static_items.is_empty() {
         0
     } else {
-        functions
-            .iter()
-            .position(|f| f.name == "main")
-            .unwrap_or(0)
+        functions.iter().position(|f| f.name == "main").unwrap_or(0)
     };
 
     let ovm_module = OvmModule {

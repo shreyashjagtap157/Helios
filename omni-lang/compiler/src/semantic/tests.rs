@@ -70,7 +70,9 @@ mod tests {
             attributes: Vec::new(),
             params: Vec::new(),
             return_type: None,
-            body: Block { statements: Vec::new() },
+            body: Block {
+                statements: Vec::new(),
+            },
         });
 
         let module = Module {
@@ -78,7 +80,10 @@ mod tests {
         };
 
         let typed = analyzer.analyze(module).unwrap();
-        assert!(typed.items.iter().any(|item| matches!(item, TypedItem::Static(s) if s.name == "g_count")));
+        assert!(typed
+            .items
+            .iter()
+            .any(|item| matches!(item, TypedItem::Static(s) if s.name == "g_count")));
     }
 
     #[test]

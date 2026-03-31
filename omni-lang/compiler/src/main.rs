@@ -681,11 +681,8 @@ fn resolve_imports(
 
                 for variant in &path_variants {
                     let relative = variant.join("/");
-                    let candidate_files = candidate_import_files(
-                        base_dir,
-                        variant,
-                        project_root.as_deref(),
-                    );
+                    let candidate_files =
+                        candidate_import_files(base_dir, variant, project_root.as_deref());
 
                     let file_path = candidate_files.iter().find(|p| p.exists()).cloned();
 
@@ -696,7 +693,8 @@ fn resolve_imports(
                                 Ok(tokens) => match parser::parse(tokens, tick_limit) {
                                     Ok(mut imported) => {
                                         // Recursively resolve imports in the imported module
-                                        imported = resolve_imports(imported, &file_path, tick_limit)?;
+                                        imported =
+                                            resolve_imports(imported, &file_path, tick_limit)?;
                                         resolved_items.extend(imported.items);
                                     }
                                     Err(e) => {

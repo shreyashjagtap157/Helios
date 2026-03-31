@@ -804,7 +804,10 @@ impl OvmInterpreter {
                     return Err(anyhow!("__intrinsic_thread_join: missing handle"));
                 }
                 let handle_id = args[0].as_int().ok_or_else(|| anyhow!("invalid handle"))? as u64;
-                let thread = interp.thread_handles.remove(&handle_id).ok_or_else(|| anyhow!("invalid handle"))?;
+                let thread = interp
+                    .thread_handles
+                    .remove(&handle_id)
+                    .ok_or_else(|| anyhow!("invalid handle"))?;
                 if let Some(jh) = thread.join_handle {
                     match jh.join() {
                         Ok(result) => Ok(result),

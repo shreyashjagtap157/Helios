@@ -362,7 +362,9 @@ impl Parser {
             // Increment tick counter and abort if we've exceeded the configured limit
             self.tick_count = self.tick_count.saturating_add(1);
             if self.tick_count > self.tick_limit {
-                return Err(ParseError::TooManyErrors { count: self.errors.len() });
+                return Err(ParseError::TooManyErrors {
+                    count: self.errors.len(),
+                });
             }
             // Track progress each iteration to avoid infinite loops
             let before_idx = self.current;
@@ -1151,7 +1153,7 @@ impl Parser {
                 if matches!(self.peek_kind(), Some(TokenKind::Semicolon)) {
                     self.advance();
                     let size = self.parse_expression()?;
-                        if !matches!(self.peek_kind(), Some(TokenKind::RBracket)) {
+                    if !matches!(self.peek_kind(), Some(TokenKind::RBracket)) {
                         self.synchronize(); // Attempt to recover by skipping to the next valid token
                         return Err(ParseError::UnexpectedToken {
                             line: self.tokens.get(self.current).map(|t| t.line).unwrap_or(0),
@@ -2768,7 +2770,10 @@ pub fn parse(tokens: Vec<Token>, tick_limit: Option<usize>) -> Result<Module, Pa
 /// Returns the (possibly partial) AST together with any collected errors.
 /// An empty `errors` vector means the parse was fully successful.
 #[allow(dead_code)]
-pub fn parse_with_recovery(tokens: Vec<Token>, tick_limit: Option<usize>) -> (Module, Vec<ParseError>) {
+pub fn parse_with_recovery(
+    tokens: Vec<Token>,
+    tick_limit: Option<usize>,
+) -> (Module, Vec<ParseError>) {
     let mut parser = Parser::new(tokens);
     if let Some(limit) = tick_limit {
         parser.tick_limit = limit;
