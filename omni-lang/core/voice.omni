@@ -1,4 +1,4 @@
-// HELIOS Voice Input/Output
+// Omni Voice Input/Output
 // Speech recognition and synthesis
 
 module core::voice

@@ -365,6 +365,60 @@ impl TypeEnv {
         }
         None
     }
+
+    /// Look up a variable and return a fresh copy with type variables replaced.
+    /// This is used for function calls to ensure each call site gets fresh type variables.
+    pub fn lookup_fresh(&self, name: &str, fresh_var_fn: &mut dyn FnMut() -> Type) -> Option<Type> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(ty) = scope.get(name) {
+                return Some(self.freshen_type(ty, fresh_var_fn));
+            }
+        }
+        None
+    }
+
+    /// Recursively replace type variables with fresh ones.
+    fn freshen_type(&self, ty: &Type, fresh_var_fn: &mut dyn FnMut() -> Type) -> Type {
+        match ty {
+            Type::Var(id) if *id >= 99900 => fresh_var_fn(), // Replace "Any" sentinel variables
+            Type::Var(id) => Type::Var(*id),
+            Type::Nullable(inner) => {
+                Type::Nullable(Box::new(self.freshen_type(inner, fresh_var_fn)))
+            }
+            Type::Array(elem) => Type::Array(Box::new(self.freshen_type(elem, fresh_var_fn))),
+            Type::Map(k, v) => Type::Map(
+                Box::new(self.freshen_type(k, fresh_var_fn)),
+                Box::new(self.freshen_type(v, fresh_var_fn)),
+            ),
+            Type::Tuple(elems) => Type::Tuple(
+                elems
+                    .iter()
+                    .map(|e| self.freshen_type(e, fresh_var_fn))
+                    .collect(),
+            ),
+            Type::Function(params, ret) => Type::Function(
+                params
+                    .iter()
+                    .map(|p| self.freshen_type(p, fresh_var_fn))
+                    .collect(),
+                Box::new(self.freshen_type(ret, fresh_var_fn)),
+            ),
+            Type::Struct(name, fields) => Type::Struct(
+                name.clone(),
+                fields
+                    .iter()
+                    .map(|(n, t)| (n.clone(), self.freshen_type(t, fresh_var_fn)))
+                    .collect(),
+            ),
+            Type::Applied(base, args) => Type::Applied(
+                Box::new(self.freshen_type(base, fresh_var_fn)),
+                args.iter()
+                    .map(|a| self.freshen_type(a, fresh_var_fn))
+                    .collect(),
+            ),
+            _ => ty.clone(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -462,18 +516,21 @@ impl InferenceEngine {
         env.define("bool", Type::Bool);
         env.define("string", Type::String);
 
-        // IO functions
+        // IO functions - use Any type with a special sentinel ID
+        // This allows println to accept any type while the constraint solver
+        // creates fresh variables for each call site
+        let any_type = Type::Var(99999);
         env.define(
             "println",
-            Type::Function(vec![Type::String], Box::new(Type::Void)),
+            Type::Function(vec![any_type.clone()], Box::new(Type::Void)),
         );
         env.define(
             "print",
-            Type::Function(vec![Type::String], Box::new(Type::Void)),
+            Type::Function(vec![any_type.clone()], Box::new(Type::Void)),
         );
         env.define(
             "println!",
-            Type::Function(vec![Type::String], Box::new(Type::Void)),
+            Type::Function(vec![any_type.clone()], Box::new(Type::Void)),
         );
 
         // String formatting
@@ -568,7 +625,7 @@ impl InferenceEngine {
     // -----------------------------------------------------------------
 
     /// Convert an `ast::Type` annotation into the inference engine's `Type`.
-    fn from_ast_type(&self, ast_ty: &ast::Type) -> Type {
+    fn from_ast_type(&mut self, ast_ty: &ast::Type) -> Type {
         match ast_ty {
             ast::Type::I8 | ast::Type::I16 | ast::Type::I32 | ast::Type::I64 | ast::Type::Isize => {
                 Type::Int
@@ -617,6 +674,7 @@ impl InferenceEngine {
             }
             ast::Type::Nullable(inner) => Type::Nullable(Box::new(self.from_ast_type(inner))),
             ast::Type::Any => Type::Var(99999), // Any = unconstrained sentinel type variable
+            ast::Type::Infer => self.fresh_var(), // Create fresh type variable for inference
         }
     }
 
@@ -656,6 +714,11 @@ impl InferenceEngine {
                     let ty = self.from_ast_type(&cdecl.ty);
                     env.define(&cdecl.name, ty.clone());
                     self.result.variable_types.insert(cdecl.name.clone(), ty);
+                }
+                ast::Item::Static(sdecl) => {
+                    let ty = self.from_ast_type(&sdecl.ty);
+                    env.define(&sdecl.name, ty.clone());
+                    self.result.variable_types.insert(sdecl.name.clone(), ty);
                 }
                 _ => { /* imports, traits, type aliases, etc. – skip for now */ }
             }
@@ -1031,8 +1094,9 @@ impl InferenceEngine {
                 let callee_ty = self.infer_expr(callee, env);
                 let arg_tys: Vec<Type> = args.iter().map(|a| self.infer_expr(a, env)).collect();
                 let ret_ty = self.fresh_var();
+                let fresh_callee_ty = self.freshen_type_variables(&callee_ty);
                 self.add_constraint(Constraint::Callable(
-                    callee_ty,
+                    fresh_callee_ty,
                     arg_tys,
                     ret_ty.clone(),
                     ConstraintOrigin::new("function call"),
@@ -1461,7 +1525,7 @@ impl InferenceEngine {
             (Type::Array(elem), "first" | "last") => {
                 return Type::Nullable(elem.clone());
             }
-            (Type::Array(elem), "map") => {
+            (Type::Array(_elem), "map") => {
                 let out_elem = self.fresh_var();
                 return Type::Array(Box::new(out_elem));
             }
@@ -1506,7 +1570,7 @@ impl InferenceEngine {
                     ConstraintOrigin::new("pattern literal must match scrutinee type"),
                 ));
             }
-            ast::Pattern::Constructor(name, sub_pats) => {
+            ast::Pattern::Constructor(_name, sub_pats) => {
                 // Each sub-pattern gets a fresh variable
                 for sp in sub_pats {
                     let sub_ty = self.fresh_var();
@@ -1579,7 +1643,7 @@ impl InferenceEngine {
                     let resolved_field_ty = self.substitution.apply(field_ty);
                     if let Type::Struct(name, fields) = &resolved_recv {
                         if let Some((_, ft)) = fields.iter().find(|(n, _)| n == field) {
-                            if let Err(e) = self.unify(&resolved_field_ty, ft) {
+                            if let Err(_e) = self.unify(&resolved_field_ty, ft) {
                                 self.errors.push(TypeError::new(format!(
                                     "Field '{}' on struct '{}' has type {}, not {} – {}",
                                     field, name, ft, resolved_field_ty, origin.description
@@ -1587,7 +1651,7 @@ impl InferenceEngine {
                             }
                         } else if let Some(def_fields) = self.struct_defs.get(name).cloned() {
                             if let Some((_, ft)) = def_fields.iter().find(|(n, _)| n == field) {
-                                if let Err(e) = self.unify(&resolved_field_ty, ft) {
+                                if let Err(_e) = self.unify(&resolved_field_ty, ft) {
                                     self.errors.push(TypeError::new(format!(
                                         "Field '{}' on struct '{}' has type {}, not {}",
                                         field, name, ft, resolved_field_ty
@@ -1609,7 +1673,7 @@ impl InferenceEngine {
                     if let Type::Function(param_tys, ret_ty) = &resolved_callee {
                         // Unify return type
                         let resolved_ret = self.substitution.apply(ret);
-                        if let Err(e) = self.unify(&resolved_ret, ret_ty) {
+                        if let Err(_e) = self.unify(&resolved_ret, ret_ty) {
                             self.errors.push(TypeError::new(format!(
                                 "Return type mismatch in call: expected {}, got {} – {}",
                                 ret_ty, resolved_ret, origin.description
@@ -1629,7 +1693,7 @@ impl InferenceEngine {
                             {
                                 let a = self.substitution.apply(actual);
                                 let e = self.substitution.apply(expected);
-                                if let Err(err) = self.unify(&a, &e) {
+                                if let Err(_err) = self.unify(&a, &e) {
                                     self.errors.push(TypeError::new(format!(
                                         "Argument {} type mismatch: expected {}, got {} – {}",
                                         i, e, a, origin.description
@@ -1901,6 +1965,47 @@ impl InferenceEngine {
                     self.infer_function(method, &mut env);
                 }
             }
+        }
+    }
+
+    /// Freshen all type variables in a type, replacing them with new unique variables.
+    /// This is used for function call sites to ensure each call has independent type variables.
+    fn freshen_type_variables(&mut self, ty: &Type) -> Type {
+        match ty {
+            Type::Var(_) => self.fresh_var(),
+            Type::Nullable(inner) => Type::Nullable(Box::new(self.freshen_type_variables(inner))),
+            Type::Array(elem) => Type::Array(Box::new(self.freshen_type_variables(elem))),
+            Type::Map(k, v) => Type::Map(
+                Box::new(self.freshen_type_variables(k)),
+                Box::new(self.freshen_type_variables(v)),
+            ),
+            Type::Tuple(elems) => Type::Tuple(
+                elems
+                    .iter()
+                    .map(|e| self.freshen_type_variables(e))
+                    .collect(),
+            ),
+            Type::Function(params, ret) => Type::Function(
+                params
+                    .iter()
+                    .map(|p| self.freshen_type_variables(p))
+                    .collect(),
+                Box::new(self.freshen_type_variables(ret)),
+            ),
+            Type::Struct(name, fields) => Type::Struct(
+                name.clone(),
+                fields
+                    .iter()
+                    .map(|(n, t)| (n.clone(), self.freshen_type_variables(t)))
+                    .collect(),
+            ),
+            Type::Applied(base, args) => Type::Applied(
+                Box::new(self.freshen_type_variables(base)),
+                args.iter()
+                    .map(|a| self.freshen_type_variables(a))
+                    .collect(),
+            ),
+            _ => ty.clone(),
         }
     }
 }

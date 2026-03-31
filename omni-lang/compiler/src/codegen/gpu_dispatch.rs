@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![allow(dead_code, non_snake_case)]
 //! GPU Kernel Dispatch System
 //!
 //! Provides a unified GPU compute dispatch layer for the Omni compiler.
@@ -48,7 +48,7 @@ pub trait GpuContext: Send + Sync {
     fn memcpy_d2h(&self, src: u64, size: usize) -> Result<Vec<u8>, String>;
 
     /// Load a kernel package/module
-    fn load_kernel(&self, kernel: &GpuKernel) -> Result<(), String> {
+    fn load_kernel(&self, _kernel: &GpuKernel) -> Result<(), String> {
         // Default implementation does nothing (for now)
         Ok(())
     }
@@ -270,7 +270,7 @@ impl CudaBackend {
         }
     }
 
-    fn get_symbol<T>(&self, name: &[u8]) -> Result<Symbol<T>, String> {
+    fn get_symbol<T>(&self, name: &[u8]) -> Result<Symbol<'_, T>, String> {
         unsafe { self.lib.get(name).map_err(|e| e.to_string()) }
     }
 }
@@ -333,9 +333,9 @@ impl GpuContext for CudaBackend {
     fn launch_kernel(
         &self,
         _kernel_name: &str, // In real backend, finding the function handle (CUfunction) from module
-        grid: [u32; 3],
-        block: [u32; 3],
-        shared_mem: u32,
+        _grid: [u32; 3],
+        _block: [u32; 3],
+        _shared_mem: u32,
         _args: &[KernelArg],
     ) -> Result<(), String> {
         // Limitation: We don't have the compiled kernel module loaded here.
@@ -1847,7 +1847,7 @@ impl GpuKernelCompiler {
         ((inst_count * 2 + func.params.len()) as u32).min(255)
     }
 
-    fn estimate_shared_mem(&self, func: &IrFunction) -> u32 {
+    fn estimate_shared_mem(&self, _func: &IrFunction) -> u32 {
         // Check for shared memory annotations in the IR
         // For now, return 0 (no static shared memory)
         0
@@ -1912,14 +1912,14 @@ impl GpuDispatcher {
         &mut self,
         kernel_name: &str,
         config: &LaunchConfig,
-        args: &[u64], // allocation IDs or scalar values
+        _args: &[u64], // allocation IDs or scalar values
     ) -> Result<(), String> {
         // Validate configuration
         let device = self.device_manager.active_device().clone();
         config.validate(&device)?;
 
         // Look up kernel
-        let kernel = self
+        let _kernel = self
             .kernel_cache
             .get(kernel_name)
             .ok_or_else(|| format!("Kernel '{}' not found in cache", kernel_name))?;

@@ -1,7 +1,7 @@
 [package]
 name = "omni-lang"
 version = "2.0.0"
-authors = ["HELIOS Project"]
+authors = ["Omni Project"]
 mode = "hosted"
 abi_version = "1.0.0"
 ir_version = "1.0.0"

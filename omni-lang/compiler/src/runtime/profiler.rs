@@ -190,6 +190,7 @@ impl CpuFeatureDetector {
         {
             // Use CPUID leaf 0 to get vendor string
             #[cfg(target_feature = "sse")]
+            #[allow(unused_unsafe)]
             unsafe {
                 let result = std::arch::x86_64::__cpuid(0);
                 let vendor_bytes: [u8; 12] = [

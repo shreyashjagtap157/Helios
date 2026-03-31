@@ -16,6 +16,41 @@ defaults:
     working-directory: omni-lang/compiler
 
 jobs:
+  bootstrap-smoke:
+    name: Bootstrap Smoke
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build seed compiler
+        run: cargo build --manifest-path omni-lang/compiler/Cargo.toml
+      - name: Run stage0 bootstrap smoke test
+        run: bash bootstrap.sh
+
+  selfhost-infra:
+    name: Self-Hosted Infra Gate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build seed compiler
+        run: cargo build --manifest-path omni-lang/compiler/Cargo.toml
+      - name: Run infra bootstrap
+        run: bash omni-lang/bootstrap.sh --allow-infra-placeholders
+      - name: Enforce real Stage1 compile
+        run: |
+          source omni-lang/build/bootstrap_status.env
+          test "$STAGE1_COMPILATION_OK" = "1"
+          test "$VERIFY_IDENTICAL" = "1"
+
   check:
     name: Check
     runs-on: ubuntu-latest
@@ -65,7 +100,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [check, test, clippy, fmt]
+    needs: [bootstrap-smoke, selfhost-infra, check, test, clippy, fmt]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

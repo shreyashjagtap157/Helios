@@ -3,7 +3,7 @@ use crate::codegen::ovm::{
 };
 use crate::parser::ast::{BinaryOp, Literal, Type as AstType, UnaryOp};
 use crate::semantic::{
-    TypedExpr, TypedExprKind, TypedFunction, TypedItem, TypedModule, TypedStatement,
+    TypedExpr, TypedExprKind, TypedFunction, TypedItem, TypedModule, TypedStatement, TypedStatic,
 };
 
 /// Direct OVM bytecode generation from Typed AST.
@@ -15,23 +15,92 @@ pub fn generate_ovm_direct(module: &TypedModule, output: &std::path::Path) -> Re
     let mut codegen = OvmCodegen::new();
     let mut functions = Vec::new();
 
-    // Index functions by name
-    for (i, item) in module.items.iter().enumerate() {
-        if let TypedItem::Function(f) = item {
-            codegen.func_indices.insert(f.name.clone(), i as u32);
+    // Collect static declarations
+    let mut static_items: Vec<TypedStatic> = Vec::new();
+    for item in &module.items {
+        if let TypedItem::Static(s) = item {
+            static_items.push(s.clone());
         }
     }
 
+    // Permanent ordering of functions: __static_init (if needed) + user functions.
+    let mut pool_names: Vec<String> = Vec::new();
+    if !static_items.is_empty() {
+        pool_names.push("__static_init".to_string());
+    }
+    for item in &module.items {
+        if let TypedItem::Function(f) = item {
+            pool_names.push(f.name.clone());
+        }
+    }
+
+    for (i, name) in pool_names.iter().enumerate() {
+        codegen.func_indices.insert(name.clone(), i as u32);
+    }
+
+    // Generate static initialization function if needed
+    if !static_items.is_empty() {
+        let mut init_body = Vec::new();
+        for s in &static_items {
+            init_body.push(TypedStatement::Assignment {
+                target: TypedExpr {
+                    kind: TypedExprKind::Identifier(s.name.clone()),
+                    ty: s.ty.clone(),
+                },
+                op: None,
+                value: s.value.clone(),
+            });
+        }
+
+        if module.items.iter().any(|item| {
+            if let TypedItem::Function(f) = item {
+                f.name == "main"
+            } else {
+                false
+            }
+        }) {
+            init_body.push(TypedStatement::Expr(TypedExpr {
+                kind: TypedExprKind::Call(
+                    Box::new(TypedExpr {
+                        kind: TypedExprKind::Identifier("main".to_string()),
+                        ty: AstType::Named("()".into()),
+                    }),
+                    Vec::new(),
+                ),
+                ty: AstType::Named("()".into()),
+            }));
+        }
+
+        let init_func = TypedFunction {
+            name: "__static_init".to_string(),
+            params: Vec::new(),
+            return_type: AstType::Named("()".into()),
+            body: init_body,
+            is_async: false,
+        };
+        functions.push(compile_func(&mut codegen, &init_func)?);
+    }
+
+    // Compile user-defined functions
     for item in &module.items {
         if let TypedItem::Function(f) = item {
             functions.push(compile_func(&mut codegen, f)?);
         }
     }
 
+    let entry_point = if !static_items.is_empty() {
+        0
+    } else {
+        functions
+            .iter()
+            .position(|f| f.name == "main")
+            .unwrap_or(0)
+    };
+
     let ovm_module = OvmModule {
         name: "main".to_string(),
         version: 1,
-        entry_point: functions.iter().position(|f| f.name == "main").unwrap_or(0) as u32,
+        entry_point: entry_point as u32,
         constants: codegen.constants,
         functions,
         types: Vec::new(),
@@ -134,9 +203,14 @@ fn compile_stmt(codegen: &mut OvmCodegen, stmt: &TypedStatement) -> Result<(), S
             compile_expr(codegen, value)?;
             match &target.kind {
                 TypedExprKind::Identifier(name) => {
-                    let idx = alloc_local(codegen, name);
-                    codegen.emit(OvmOpcode::StoreLoc);
-                    codegen.emit_u16(idx);
+                    if let Some(&idx) = codegen.local_indices.get(name) {
+                        codegen.emit(OvmOpcode::StoreLoc);
+                        codegen.emit_u16(idx);
+                    } else {
+                        codegen.emit(OvmOpcode::StoreGlb);
+                        let name_idx = codegen.add_constant(OvmConstant::String(name.clone()));
+                        codegen.emit_u32(name_idx);
+                    }
                 }
                 TypedExprKind::Field(obj, field_name) => {
                     // Stack: [value] — need [obj, value]
@@ -420,7 +494,7 @@ fn compile_stmt(codegen: &mut OvmCodegen, stmt: &TypedStatement) -> Result<(), S
             codegen.emit_u16(match_val);
 
             let mut arm_exit_jumps = Vec::new();
-            for (i, (pattern, body)) in arms.iter().enumerate() {
+            for (_i, (pattern, body)) in arms.iter().enumerate() {
                 // Load match value for pattern test
                 codegen.emit(OvmOpcode::LoadLoc);
                 codegen.emit_u16(match_val);
@@ -473,7 +547,9 @@ fn compile_expr(codegen: &mut OvmCodegen, expr: &TypedExpr) -> Result<(), String
                 codegen.emit(OvmOpcode::LoadLoc);
                 codegen.emit_u16(idx);
             } else {
-                codegen.emit(OvmOpcode::PushNull);
+                codegen.emit(OvmOpcode::LoadGlb);
+                let name_idx = codegen.add_constant(OvmConstant::String(name.clone()));
+                codegen.emit_u32(name_idx);
             }
         }
 

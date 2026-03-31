@@ -3,7 +3,7 @@
     "displayName": "Omni Language",
     "description": "Language support for the Omni programming language",
     "version": "0.1.0",
-    "publisher": "helios-team",
+    "publisher": "omni-lang",
     "engines": {
         "vscode": "^1.75.0"
     },
@@ -11,9 +11,6 @@
         "Programming Languages",
         "Formatters",
         "Linters"
-    ],
-    "activationEvents": [
-        "onLanguage:omni"
     ],
     "main": "./out/extension.js",
     "contributes": {

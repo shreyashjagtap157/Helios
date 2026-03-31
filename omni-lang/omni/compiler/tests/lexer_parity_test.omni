@@ -1,0 +1,23 @@
+// Use fully-qualified calls to avoid import resolution issues when running under omnc
+
+fn main() -> int:
+    let samples = [
+        "let x = 1_000 + 0xFF;",
+        "fn foo(a: i32) -> i32 { return a + 1 }",
+        "    if x > 0:\n        x = x - 1\n",
+        "\"hello\\nworld\"",
+        "# a comment\n42",
+        "/* block */ 5",
+        "[1, 2, 3]",
+    ]
+
+    for s in samples:
+        let res = compiler::lexer::tokenize(s)
+        match res:
+            Ok(tokens) =>:
+                println!("--- Sample: {} ---", s)
+                for t in tokens:
+                    println!("{} {} {}", t.span.start, t.kind.to_string(), t.span.len())
+            Err(e) =>:
+                println!("Lex error: {}", e)
+    return 0

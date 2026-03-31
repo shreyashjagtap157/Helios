@@ -729,8 +729,6 @@ impl OvmModule {
 
     /// Deserialize an OVM module from bytes.
     pub fn deserialize(bytes: &[u8]) -> Result<Self> {
-        let mut pos: usize = 0;
-
         // Magic
         if bytes.len() < 6 {
             return Err(anyhow!("bytecode too short for header"));
@@ -738,7 +736,7 @@ impl OvmModule {
         if &bytes[0..4] != &OVM_MAGIC {
             return Err(anyhow!("invalid OVM magic bytes"));
         }
-        pos = 4;
+        let mut pos: usize = 4;
 
         // Version
         let version = Self::read_u16(bytes, &mut pos)?;

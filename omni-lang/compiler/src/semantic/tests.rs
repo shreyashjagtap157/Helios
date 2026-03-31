@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::parser::ast::*;
-    use crate::semantic::Analyzer;
+    use crate::semantic::{Analyzer, TypedItem};
 
     #[test]
     fn test_analyzer_creation() {
@@ -50,6 +50,35 @@ mod tests {
         let mut analyzer = Analyzer::new();
         let result = analyzer.unify(&Type::I64, &Type::Str);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_static_declaration_analysis() {
+        let mut analyzer = Analyzer::new();
+
+        let static_item = Item::Static(StaticDecl {
+            name: "g_count".to_string(),
+            mutable: true,
+            attributes: Vec::new(),
+            ty: Type::I64,
+            value: Expression::Literal(Literal::Int(0)),
+        });
+
+        let main_fn = Item::Function(Function {
+            name: "main".to_string(),
+            is_async: false,
+            attributes: Vec::new(),
+            params: Vec::new(),
+            return_type: None,
+            body: Block { statements: Vec::new() },
+        });
+
+        let module = Module {
+            items: vec![static_item, main_fn],
+        };
+
+        let typed = analyzer.analyze(module).unwrap();
+        assert!(typed.items.iter().any(|item| matches!(item, TypedItem::Static(s) if s.name == "g_count")));
     }
 
     #[test]

@@ -1,3 +1,17 @@
+// Copyright 2024 Shreyash Jagtap
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #![allow(dead_code)]
 //! Omni Language Runtime
 //! Executes compiled or interpreted Omni code and facilitates native FFI.
@@ -112,14 +126,14 @@ impl Runtime {
             info!("Runtime: Processing file {:?}", change.path);
 
             // 1. Read source
-            if let Ok(source) = std::fs::read_to_string(&change.path) {
+            if let Ok(_source) = std::fs::read_to_string(&change.path) {
                 // 2. Parse (Simulated/Stubbed for now as we don't have easy access to the full pipeline here)
                 // In a full implementation:
                 // let ast = crate::parser::parse(&source)?;
                 // let ir_module = crate::ir::IrGenerator::new().generate(ast);
 
                 // For demonstration, we'll create a dummy IR function representing the changed code
-                let mut dummy_func = crate::ir::IrFunction {
+                let dummy_func = crate::ir::IrFunction {
                     name: "hot_swapped_func".to_string(),
                     params: vec![],
                     return_type: crate::ir::IrType::Void,

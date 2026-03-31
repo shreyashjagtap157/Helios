@@ -1,8 +1,21 @@
 // Omni Language Specification: Entry Point Contract
 //
 // Every Omni program MUST define a `fn main()` entry point.
+// The compiler looks for `fn main()` as the program entry point.
+// If no `fn main()` is found, compilation produces an error.
+
+module std::entry_point
+
+import std::core
+
+// ============================================
+// Entry Point Contract
+// ============================================
+
+// The main function is the entry point for every Omni program.
+// It takes no arguments and returns void in v1.
 //
-// The entry point signature is:
+// Signature:
 //   fn main():
 //       // program body
 //
@@ -10,14 +23,45 @@
 //   - The function must be named `main`
 //   - It takes no arguments (in v1)
 //   - It returns void (no return type annotation needed)
-//   - The compiler looks for `fn main()` as the program entry point
-//   - If no `fn main()` is found, compilation should produce an error
 //   - Execution begins at the first statement inside `main()`
+
+// ============================================
+// Runtime Bootstrap
+// ============================================
+
+// The runtime calls _omni_start which initializes the runtime
+// and then calls the user-defined main().
+
+fn _omni_start():
+    _init_runtime()
+    let exit_code = _run_main()
+    _shutdown_runtime()
+    _exit(exit_code)
+
+fn _init_runtime():
+    // Initialize allocator, signal handlers, and thread pool
+    core::_init_allocator()
+    core::_init_signals()
+
+fn _shutdown_runtime():
+    // Flush I/O buffers and clean up resources
+    core::_flush_io()
+    core::_cleanup_resources()
+
+fn _run_main() -> i32:
+    // Invoke user-defined main() and catch panics
+    match core::catch_panic(main):
+        Ok(()) => return 0
+        Err(panic_info) =>
+            eprintln("panic: " + panic_info.message())
+            return 1
+
+extern "C":
+    fn _exit(code: i32)
+
+// ============================================
+// Future (post-v1)
+// ============================================
 //
-// Example:
-//   fn main():
-//       println("Hello, World!")
-//
-// Future (post-v1):
-//   - fn main(args: Vec<String>) -> i32   (with exit code)
-//   - async fn main()                      (for async runtimes)
+//   fn main(args: Vec<String>) -> i32   (with exit code and args)
+//   async fn main()                      (for async runtimes)

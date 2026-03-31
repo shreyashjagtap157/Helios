@@ -1,3 +1,17 @@
+// Copyright 2024 Shreyash Jagtap
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #![allow(dead_code)]
 //! Omni Semantic Analyzer - Core module
 //! Implements type checking, borrow checking, lifetime inference, and trait bound verification.
@@ -337,6 +351,15 @@ pub enum TypedItem {
     Extern(TypedExternBlock),
     Trait(TraitInfo),
     Impl(TypedImpl),
+    Static(TypedStatic),
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedStatic {
+    pub name: String,
+    pub mutable: bool,
+    pub ty: Type,
+    pub value: TypedExpr,
 }
 
 #[derive(Debug, Clone)]
@@ -1650,6 +1673,11 @@ impl Analyzer {
                         self.const_values.insert(c.name.clone(), val);
                     }
                 }
+                Item::Static(s) => {
+                    // Define static variables in root scope to allow access throughout module
+                    let ty = s.ty.clone();
+                    let _ = self.define_symbol(s.name.clone(), ty.clone(), s.mutable);
+                }
                 _ => {}
             }
         }
@@ -1681,6 +1709,7 @@ impl Analyzer {
                     associated_types: HashMap::new(),
                 })),
                 Item::Impl(i) => items.push(self.analyze_impl(i)?),
+                Item::Static(s) => items.push(self.analyze_static(s)?),
                 Item::Comptime(block) => {
                     info!("Evaluating comptime block");
                     // Execute comptime statements
@@ -1764,6 +1793,22 @@ impl Analyzer {
             trait_name: i.trait_name,
             type_name: i.type_name,
             methods,
+        }))
+    }
+
+    fn analyze_static(&mut self, s: StaticDecl) -> Result<TypedItem, SemanticError> {
+        debug!("Analyzing static variable: {}", s.name);
+        let ty = s.ty.clone();
+        let typed_value = self.analyze_expression(&s.value)?;
+
+        // Ensure the initializer is assignable to the static type
+        self.unify(&ty, &typed_value.ty)?;
+
+        Ok(TypedItem::Static(TypedStatic {
+            name: s.name,
+            mutable: s.mutable,
+            ty,
+            value: typed_value,
         }))
     }
 
@@ -2600,7 +2645,7 @@ impl Analyzer {
     /// Validates that concrete types satisfy trait bounds on generic parameters
     fn check_generic_trait_bounds(
         &mut self,
-        type_param: &str,
+        _type_param: &str,
         bounds: &[String],
         concrete_type: &Type,
     ) -> Result<(), SemanticError> {
@@ -2659,7 +2704,7 @@ impl Analyzer {
     fn check_move_with_enforcement(&mut self, name: &str) -> Result<(), SemanticError> {
         self.borrow_checker
             .move_var(name)
-            .map_err(|e| SemanticError::MoveError {
+            .map_err(|_e| SemanticError::MoveError {
                 name: name.to_string(),
             })?;
         Ok(())
@@ -2688,7 +2733,7 @@ impl Analyzer {
 
         // Collect all trait bounds to check
         let bounds_to_check: Vec<(String, String, Type)> =
-            if let Some(bounds) = self.generic_bounds.get(func_name) {
+            if let Some(_bounds) = self.generic_bounds.get(func_name) {
                 let type_param_names: Vec<String> =
                     (0..type_args.len()).map(|i| format!("T{}", i)).collect();
 
@@ -2739,7 +2784,7 @@ impl Analyzer {
             .statements
             .iter()
             .filter_map(|stmt| {
-                let mut substitutor = StatementSubstitutor::new(subst.clone());
+                let substitutor = StatementSubstitutor::new(subst.clone());
                 let transformed = substitutor.transform_statement(stmt);
                 self.statement_to_typed(&transformed).ok()
             })
@@ -2781,7 +2826,7 @@ impl Analyzer {
                     value: typed_value,
                 })
             }
-            Statement::Var { name, ty, value } => {
+            Statement::Var { name: _, ty, value } => {
                 let typed_value = value
                     .as_ref()
                     .map(|v| self.analyze_expression(v))

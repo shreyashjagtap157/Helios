@@ -620,13 +620,18 @@ struct LocalKey<T: 'static>:
         __intrinsic_tls_get_or_init(self, self.init)
 
 // ============================================
-// Intrinsics (TODO: O-082)
+// Intrinsics (O-082 — IMPLEMENTED)
 // ============================================
-// All intrinsics below are declared but NOT implemented in the OVM.
-// The runtime has no thread support yet. These are aspirational signatures
-// for future OVM implementation. Any code using std::thread will fail at
-// runtime until these intrinsics are implemented.
-// See ISSUES.md O-082.
+// These intrinsics are implemented in the OVM interpreter via Syscall dispatch.
+// Each maps to a specific syscall ID (see interpreter.rs handle_syscall):
+//
+//   Thread:  0x100 spawn, 0x101 join, 0x102 sleep_ms, 0x103 yield,
+//            0x104 thread_id, 0x105 is_finished, 0x106 sleep_nanos, 0x107 park
+//   Mutex:   0x110 new, 0x111 lock, 0x112 unlock, 0x113 try_lock
+//   Atomic:  0x120 new, 0x121 load, 0x122 store, 0x123 cas,
+//            0x124 fetch_add, 0x125 fetch_sub, 0x126 swap
+//   Channel: 0x130 new, 0x131 send, 0x132 recv
+//   Sync:    0x140 spin_hint, 0x141 futex_wait, 0x142 futex_wake
 
 extern "intrinsic":
     fn __intrinsic_thread_id() -> usize

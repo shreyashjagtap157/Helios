@@ -1,4 +1,4 @@
-// HELIOS Standard Library - System Module
+// Omni Standard Library - System Module
 // Written in Omni - OS and hardware interaction
 
 module core::system

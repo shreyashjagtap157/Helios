@@ -145,7 +145,7 @@ pub enum OvmOpcode {
 }
 
 /// OVM Bytecode Module
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OvmModule {
     pub name: String,
     pub version: u32,
@@ -164,7 +164,7 @@ pub enum OvmConstant {
     Bytes(Vec<u8>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OvmFunction {
     pub name: String,
     pub name_index: u32,
@@ -175,7 +175,7 @@ pub struct OvmFunction {
     pub is_native: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OvmTypeInfo {
     pub name: String,
     pub size: u32,
@@ -183,7 +183,7 @@ pub struct OvmTypeInfo {
     pub fields: Vec<(String, u32)>, // name, offset
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OvmSymbol {
     pub name: String,
     pub kind: OvmSymbolKind,
@@ -951,7 +951,7 @@ fn stack_effect(instr: &IrInstruction) -> (usize, usize) {
     match instr {
         IrInstruction::Alloca { .. } => (0, 1),
         IrInstruction::Load { .. } => (0, 1),
-        IrInstruction::Store { value, .. } => (1, 0),
+        IrInstruction::Store { value: _, .. } => (1, 0),
         IrInstruction::BinOp { .. } => (2, 1),
         IrInstruction::Call { args, dest, .. } => (args.len(), if dest.is_some() { 1 } else { 0 }),
         IrInstruction::GetField { .. } => (1, 1),

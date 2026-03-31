@@ -1,3 +1,17 @@
+// Copyright 2024 Shreyash Jagtap
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //! Omni Parser - AST Generation
 //!
 //! Parses tokens into an Abstract Syntax Tree.
@@ -95,6 +109,10 @@ pub struct Parser {
     pub errors: Vec<ParseError>,
     /// Maximum number of errors before the parser gives up (default: 50).
     pub error_limit: usize,
+    /// Tick counter to detect runaway parsing loops.
+    pub tick_count: usize,
+    /// Maximum number of parse loop iterations (ticks) before aborting.
+    pub tick_limit: usize,
 }
 
 impl Parser {
@@ -104,6 +122,8 @@ impl Parser {
             current: 0,
             errors: Vec::new(),
             error_limit: 50,
+            tick_count: 0,
+            tick_limit: 1_000_000,
         }
     }
 
@@ -261,14 +281,14 @@ impl Parser {
             if &token.kind == kind {
                 Ok(self.advance().unwrap())
             } else {
-                let hint = Self::suggest_hint(&token.lexeme);
+                let _hint = Self::suggest_hint(&token.lexeme);
                 Err(ParseError::UnexpectedToken {
-                    line: token.line,
-                    column: token.column,
-                    expected: format!("{:?}", kind),
-                    got: format!("{:?}", token.kind),
+                    line: self.tokens[self.current].line,
+                    column: self.tokens[self.current].column,
+                    expected: "]".to_string(),
+                    got: ";".to_string(),
                     code: ParseErrorCode::UnexpectedToken,
-                    hint,
+                    hint: Some("Ensure array size is followed by ']'".to_string()),
                 })
             }
         } else {
@@ -339,6 +359,11 @@ impl Parser {
         let mut last_heartbeat = Instant::now();
 
         while self.peek().is_some() {
+            // Increment tick counter and abort if we've exceeded the configured limit
+            self.tick_count = self.tick_count.saturating_add(1);
+            if self.tick_count > self.tick_limit {
+                return Err(ParseError::TooManyErrors { count: self.errors.len() });
+            }
             // Track progress each iteration to avoid infinite loops
             let before_idx = self.current;
             // Periodically warn about parser progress so we can trace runaway parsing
@@ -483,6 +508,7 @@ impl Parser {
             Some(TokenKind::Trait) => self.parse_trait(attributes),
             Some(TokenKind::Impl) => self.parse_impl(attributes),
             Some(TokenKind::Import) => self.parse_import(),
+            Some(TokenKind::Static) => self.parse_static(attributes),
             Some(TokenKind::Const) => self.parse_const(attributes),
             Some(TokenKind::Type) => self.parse_type_alias(attributes),
             Some(TokenKind::Extern) => self.parse_extern(attributes),
@@ -525,7 +551,7 @@ impl Parser {
         }
     }
 
-    /// Parse module declaration
+    /// Parse module declaration — supports colon+indent, brace-delimited, and file-scope.
     /// Supports double-colon separated paths: module std::io, module std::collections::vec
     fn parse_module_decl(&mut self, attributes: Vec<String>) -> Result<Item, ParseError> {
         self.expect(&TokenKind::Module)?;
@@ -538,8 +564,46 @@ impl Parser {
             name = format!("{}::{}", name, segment);
         }
 
-        // Check for colon (block module) vs newline (file-scope declaration)
-        if matches!(self.peek_kind(), Some(TokenKind::Colon)) {
+        if matches!(self.peek_kind(), Some(TokenKind::LBrace)) {
+            // ── Brace-delimited module block ──
+            self.advance(); // consume '{'
+            self.skip_newlines();
+            while matches!(self.peek_kind(), Some(TokenKind::Indent)) {
+                self.advance();
+                self.skip_newlines();
+            }
+
+            let mut items = Vec::new();
+            while !matches!(self.peek_kind(), Some(TokenKind::RBrace)) {
+                self.skip_newlines();
+                while matches!(self.peek_kind(), Some(TokenKind::Indent))
+                    || matches!(self.peek_kind(), Some(TokenKind::Dedent))
+                {
+                    self.advance();
+                    self.skip_newlines();
+                }
+                if matches!(self.peek_kind(), Some(TokenKind::RBrace)) {
+                    break;
+                }
+                if self.peek().is_none() {
+                    break;
+                }
+                items.push(self.parse_item()?);
+                self.skip_newlines();
+            }
+            while matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+                self.advance();
+                self.skip_newlines();
+            }
+            self.expect(&TokenKind::RBrace)?;
+
+            Ok(Item::Module(ModuleDecl {
+                name,
+                attributes,
+                items,
+            }))
+        } else if matches!(self.peek_kind(), Some(TokenKind::Colon)) {
+            // ── Colon + indent/dedent block ──
             self.advance(); // consume colon
             self.expect(&TokenKind::Newline)?;
             self.expect(&TokenKind::Indent)?;
@@ -568,7 +632,7 @@ impl Parser {
         }
     }
 
-    /// Parse struct definition
+    /// Parse struct definition — supports both colon+indent and brace-delimited blocks.
     fn parse_struct(&mut self, attributes: Vec<String>) -> Result<Item, ParseError> {
         self.expect(&TokenKind::Struct)?;
         let name = self.parse_identifier()?;
@@ -581,24 +645,68 @@ impl Parser {
             None
         };
 
-        self.expect(&TokenKind::Colon)?;
-        self.expect(&TokenKind::Newline)?;
-        self.expect(&TokenKind::Indent)?;
-
         let mut fields = Vec::new();
         let mut methods = Vec::new();
 
-        while !matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+        if matches!(self.peek_kind(), Some(TokenKind::LBrace)) {
+            // ── Brace-delimited block ──
+            self.advance(); // consume '{'
             self.skip_newlines();
-            if matches!(self.peek_kind(), Some(TokenKind::Fn)) {
-                methods.push(self.parse_method()?);
-            } else if matches!(self.peek_kind(), Some(TokenKind::Identifier)) {
-                fields.push(self.parse_field()?);
-            } else if matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
-                break;
+            while matches!(self.peek_kind(), Some(TokenKind::Indent)) {
+                self.advance();
+                self.skip_newlines();
             }
+
+            while !matches!(self.peek_kind(), Some(TokenKind::RBrace)) {
+                self.skip_newlines();
+                while matches!(self.peek_kind(), Some(TokenKind::Indent))
+                    || matches!(self.peek_kind(), Some(TokenKind::Dedent))
+                {
+                    self.advance();
+                    self.skip_newlines();
+                }
+                if matches!(self.peek_kind(), Some(TokenKind::RBrace)) {
+                    break;
+                }
+                if matches!(self.peek_kind(), Some(TokenKind::Fn)) {
+                    methods.push(self.parse_method()?);
+                } else if matches!(self.peek_kind(), Some(TokenKind::Identifier)) {
+                    fields.push(self.parse_field()?);
+                    // Allow optional comma or semicolon separators in brace blocks
+                    if matches!(self.peek_kind(), Some(TokenKind::Comma))
+                        || matches!(self.peek_kind(), Some(TokenKind::Semicolon))
+                    {
+                        self.advance();
+                    }
+                } else if matches!(self.peek_kind(), Some(TokenKind::RBrace)) {
+                    break;
+                } else {
+                    self.advance(); // skip unexpected token
+                }
+            }
+            while matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+                self.advance();
+                self.skip_newlines();
+            }
+            self.expect(&TokenKind::RBrace)?;
+        } else {
+            // ── Colon + indent/dedent block ──
+            self.expect(&TokenKind::Colon)?;
+            self.expect(&TokenKind::Newline)?;
+            self.expect(&TokenKind::Indent)?;
+
+            while !matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+                self.skip_newlines();
+                if matches!(self.peek_kind(), Some(TokenKind::Fn)) {
+                    methods.push(self.parse_method()?);
+                } else if matches!(self.peek_kind(), Some(TokenKind::Identifier)) {
+                    fields.push(self.parse_field()?);
+                } else if matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+                    break;
+                }
+            }
+            self.expect(&TokenKind::Dedent)?;
         }
-        self.expect(&TokenKind::Dedent)?;
 
         Ok(Item::Struct(StructDef {
             name,
@@ -624,7 +732,14 @@ impl Parser {
         Ok(Item::Function(func))
     }
 
-    /// Parse extern block (e.g. extern "C++")
+    /// Parse extern block (e.g. extern "C++" { ... } or extern "C":)
+    ///
+    /// Supports two block styles:
+    ///   - Brace-delimited: `extern "C" { fn foo() -> i32; ... }`
+    ///   - Colon + indent:  `extern "C":\n    fn foo() -> i32\n`
+    ///
+    /// Also accepts an optional `from "libname"` clause after the ABI string
+    /// (e.g. `extern "C" from "kernel32":`).
     fn parse_extern(&mut self, _attributes: Vec<String>) -> Result<Item, ParseError> {
         self.expect(&TokenKind::Extern)?;
 
@@ -635,23 +750,118 @@ impl Parser {
             "C".to_string() // Default to C
         };
 
-        self.expect(&TokenKind::LBrace)?;
-
-        let mut functions = Vec::new();
-        while !matches!(self.peek_kind(), Some(TokenKind::RBrace)) {
-            self.skip_newlines();
-            if matches!(self.peek_kind(), Some(TokenKind::Fn)) {
-                // Parse function signature only (no body) for extern declarations.
-                // Uses parse_fn_signature which handles semicolon-terminated signatures.
-                functions.push(self.parse_fn_signature()?);
-            } else if matches!(self.peek_kind(), Some(TokenKind::RBrace)) {
-                break;
-            } else {
-                // Skip unexpected tokens to avoid infinite loop
-                self.advance();
+        // Optional `from "libname"` clause — consume and ignore for now.
+        if self.peek().map(|t| t.lexeme.as_str()) == Some("from") {
+            self.advance(); // consume `from`
+            if matches!(self.peek_kind(), Some(TokenKind::StringLiteral)) {
+                self.advance(); // consume the library name string
             }
         }
-        self.expect(&TokenKind::RBrace)?;
+
+        // Skip optional attributes between the ABI and the block opener.
+        // e.g. `extern "C" #[cfg(unix)]:`
+        while matches!(self.peek_kind(), Some(TokenKind::Hash)) {
+            let _ = self.parse_attribute()?;
+            self.skip_newlines();
+        }
+
+        // Allow newlines between ABI string and block opener
+        self.skip_newlines();
+
+        let mut functions = Vec::new();
+
+        if matches!(self.peek_kind(), Some(TokenKind::LBrace)) {
+            // ── Brace-delimited block ──
+            self.advance(); // consume '{'
+            self.skip_newlines();
+
+            while !matches!(self.peek_kind(), Some(TokenKind::RBrace)) {
+                self.skip_newlines();
+                if matches!(self.peek_kind(), Some(TokenKind::RBrace)) {
+                    break;
+                }
+                // Allow attributes on individual extern fn declarations
+                let mut fn_attrs = Vec::new();
+                while matches!(self.peek_kind(), Some(TokenKind::Hash)) {
+                    let attr = self.parse_attribute()?;
+                    fn_attrs.push(attr);
+                    self.skip_newlines();
+                }
+                if matches!(self.peek_kind(), Some(TokenKind::Fn))
+                    || matches!(self.peek_kind(), Some(TokenKind::Async))
+                {
+                    let mut func = self.parse_fn_signature()?;
+                    func.attributes = fn_attrs;
+                    functions.push(func);
+                    // Consume optional trailing semicolon after signature
+                    if matches!(self.peek_kind(), Some(TokenKind::Semicolon)) {
+                        self.advance();
+                    }
+                } else if matches!(self.peek_kind(), Some(TokenKind::RBrace)) {
+                    break;
+                } else {
+                    // Skip unexpected tokens inside braced extern to avoid infinite loop
+                    self.advance();
+                }
+                self.skip_newlines();
+            }
+            self.expect(&TokenKind::RBrace)?;
+        } else if matches!(self.peek_kind(), Some(TokenKind::Colon)) {
+            // ── Colon + indent/dedent block ──
+            self.advance(); // consume ':'
+            self.expect(&TokenKind::Newline)?;
+            self.expect(&TokenKind::Indent)?;
+
+            while !matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+                self.skip_newlines();
+                if matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+                    break;
+                }
+                // Allow attributes on individual extern fn declarations
+                let mut fn_attrs = Vec::new();
+                while matches!(self.peek_kind(), Some(TokenKind::Hash)) {
+                    let attr = self.parse_attribute()?;
+                    fn_attrs.push(attr);
+                    self.skip_newlines();
+                }
+                if matches!(self.peek_kind(), Some(TokenKind::Fn))
+                    || matches!(self.peek_kind(), Some(TokenKind::Async))
+                {
+                    let mut func = self.parse_fn_signature()?;
+                    func.attributes = fn_attrs;
+                    functions.push(func);
+                } else if matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+                    break;
+                } else {
+                    // Skip unexpected tokens to avoid infinite loop
+                    self.advance();
+                }
+                self.skip_newlines();
+            }
+            self.expect(&TokenKind::Dedent)?;
+        } else {
+            // Single extern function without a block (edge case)
+            // e.g. `extern "C" fn foo() -> i32`
+            if matches!(self.peek_kind(), Some(TokenKind::Fn))
+                || matches!(self.peek_kind(), Some(TokenKind::Async))
+            {
+                functions.push(self.parse_fn_signature()?);
+            } else if let Some(token) = self.peek() {
+                return Err(ParseError::InvalidSyntax {
+                    line: token.line,
+                    column: token.column,
+                    message: format!(
+                        "Expected '{{' or ':' after extern ABI, got {:?}",
+                        token.kind
+                    ),
+                    code: ParseErrorCode::InvalidSyntax,
+                    hint: Some(
+                        "use `extern \"C\" { ... }` or `extern \"C\":` with indented body"
+                            .to_string(),
+                    ),
+                });
+            }
+        }
 
         Ok(Item::Extern(ExternBlock { abi, functions }))
     }
@@ -663,7 +873,10 @@ impl Parser {
         Ok(Item::Comptime(body))
     }
 
-    /// Parse function signature (fn name(args) -> Ret;)
+    /// Parse function signature (fn name(args) -> Ret) — no body.
+    ///
+    /// Used for extern function declarations. Handles optional trailing
+    /// semicolons and newlines. Does NOT consume a function body.
     fn parse_fn_signature(&mut self) -> Result<Function, ParseError> {
         let is_async = if matches!(self.peek_kind(), Some(TokenKind::Async)) {
             self.advance();
@@ -685,16 +898,13 @@ impl Parser {
             None
         };
 
-        if matches!(self.peek_kind(), Some(TokenKind::Colon)) {
-            // It's a definition, not a signature? But externs shouldn't have bodies.
-            // We allow it to error out or we parse body.
-            // For extern, we expect NO body.
+        // Consume optional trailing semicolon (common in brace-delimited extern blocks)
+        if matches!(self.peek_kind(), Some(TokenKind::Semicolon)) {
+            self.advance();
         }
 
-        // Extern functions usually end with newline or semicolon/brace depending on syntax
-        // Omni syntax: `fn foo():` <- block start.
-        // For extern, maybe `fn foo()` simply?
-        // Let's assume externs are just signatures inside the brace block.
+        // Skip trailing newlines after the signature
+        self.skip_newlines();
 
         Ok(Function {
             name,
@@ -746,8 +956,9 @@ impl Parser {
         // Skip where clauses if present
         if matches!(self.peek_kind(), Some(TokenKind::Where)) {
             self.advance(); // consume `where`
-                            // Consume tokens until we hit a colon (block start)
+                            // Consume tokens until we hit a colon or brace (block start)
             while !matches!(self.peek_kind(), Some(TokenKind::Colon))
+                && !matches!(self.peek_kind(), Some(TokenKind::LBrace))
                 && !matches!(self.peek_kind(), Some(TokenKind::Newline))
                 && self.peek().is_some()
             {
@@ -755,11 +966,15 @@ impl Parser {
             }
         }
 
-        self.expect(&TokenKind::Colon)?;
-        self.expect(&TokenKind::Newline)?;
-
-        // Function body
-        let body = self.parse_block()?;
+        // Function body — accept either colon+indent or brace-delimited block
+        let body = if matches!(self.peek_kind(), Some(TokenKind::LBrace)) {
+            self.advance(); // consume '{'
+            self.parse_brace_block()?
+        } else {
+            self.expect(&TokenKind::Colon)?;
+            self.expect(&TokenKind::Newline)?;
+            self.parse_block()?
+        };
 
         Ok(Function {
             name,
@@ -804,8 +1019,12 @@ impl Parser {
 
         while !matches!(self.peek_kind(), Some(TokenKind::RParen)) {
             let name = self.parse_identifier()?;
-            self.expect(&TokenKind::Colon)?;
-            let ty = self.parse_type()?;
+            let ty = if matches!(self.peek_kind(), Some(TokenKind::Colon)) {
+                self.advance();
+                self.parse_type()?
+            } else {
+                Type::Infer
+            };
             params.push(Param { name, ty });
 
             if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
@@ -932,6 +1151,17 @@ impl Parser {
                 if matches!(self.peek_kind(), Some(TokenKind::Semicolon)) {
                     self.advance();
                     let size = self.parse_expression()?;
+                        if !matches!(self.peek_kind(), Some(TokenKind::RBracket)) {
+                        self.synchronize(); // Attempt to recover by skipping to the next valid token
+                        return Err(ParseError::UnexpectedToken {
+                            line: self.tokens.get(self.current).map(|t| t.line).unwrap_or(0),
+                            column: self.tokens.get(self.current).map(|t| t.column).unwrap_or(0),
+                            expected: "]".to_string(),
+                            got: ";".to_string(),
+                            code: ParseErrorCode::UnexpectedToken,
+                            hint: Some("Expected ']' after array size".to_string()),
+                        });
+                    }
                     self.expect(&TokenKind::RBracket)?;
                     Ok(Type::Array(Box::new(elem_type), Some(Box::new(size))))
                 } else {
@@ -964,14 +1194,28 @@ impl Parser {
                 if matches!(self.peek_kind(), Some(TokenKind::Lt)) {
                     self.advance();
                     let mut type_args = Vec::new();
-                    while !matches!(self.peek_kind(), Some(TokenKind::Gt)) {
+                    while !matches!(self.peek_kind(), Some(TokenKind::Gt))
+                        && !matches!(self.peek_kind(), Some(TokenKind::Shr))
+                    {
                         type_args.push(self.parse_type()?);
                         if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
                             self.advance();
                         }
                     }
-                    self.expect(&TokenKind::Gt)?;
-                    Ok(Type::Generic(name, type_args))
+                    // Handle nested generics: if we see Shr (>>), treat as closing >
+                    if matches!(self.peek_kind(), Some(TokenKind::Shr)) {
+                        // Skip the Shr - it's actually > > (close two generics)
+                        self.advance();
+                        // If there was an inner generic, we've closed both
+                        // Check if we need to close more
+                        if !type_args.is_empty() {
+                            // Inner generic was closed, now close outer
+                        }
+                        Ok(Type::Generic(name, type_args))
+                    } else {
+                        self.expect(&TokenKind::Gt)?;
+                        Ok(Type::Generic(name, type_args))
+                    }
                 } else {
                     Ok(Type::Named(name))
                 }
@@ -1009,7 +1253,7 @@ impl Parser {
         }
     }
 
-    /// Parse a block of statements.
+    /// Parse a block of statements (indent/dedent style).
     /// Uses panic-mode recovery: on error, records the error, synchronizes,
     /// and continues parsing remaining statements in the block.
     fn parse_block(&mut self) -> Result<Block, ParseError> {
@@ -1053,6 +1297,75 @@ impl Parser {
         }
 
         self.expect(&TokenKind::Dedent)?;
+        Ok(Block { statements })
+    }
+
+    /// Parse a brace-delimited block of statements: `{ stmt; stmt; ... }`.
+    /// The opening `{` must already be consumed by the caller.
+    /// Uses the same recovery strategy as `parse_block`.
+    fn parse_brace_block(&mut self) -> Result<Block, ParseError> {
+        let mut statements = Vec::new();
+
+        self.skip_newlines();
+        // Also consume any indent tokens the lexer may have emitted inside braces
+        while matches!(self.peek_kind(), Some(TokenKind::Indent)) {
+            self.advance();
+            self.skip_newlines();
+        }
+
+        while !matches!(self.peek_kind(), Some(TokenKind::RBrace)) {
+            let before_idx = self.current;
+            self.skip_newlines();
+            // Tolerate stray indent/dedent tokens emitted by the
+            // indentation-tracking lexer inside brace-delimited blocks.
+            if matches!(self.peek_kind(), Some(TokenKind::Indent))
+                || matches!(self.peek_kind(), Some(TokenKind::Dedent))
+            {
+                self.advance();
+                self.skip_newlines();
+                continue;
+            }
+            if matches!(self.peek_kind(), Some(TokenKind::RBrace)) {
+                break;
+            }
+            if self.peek().is_none() {
+                self.record_error(ParseError::InvalidSyntax {
+                    line: 0,
+                    column: 0,
+                    message: "Unterminated brace block: expected '}' before end of file"
+                        .to_string(),
+                    code: ParseErrorCode::UnterminatedBlock,
+                    hint: Some("check for matching '}'".to_string()),
+                })?;
+                return Ok(Block { statements });
+            }
+            match self.parse_statement() {
+                Ok(stmt) => statements.push(stmt),
+                Err(e) => {
+                    self.record_error(e)?;
+                    self.synchronize();
+                }
+            }
+            // Consume optional semicolons between statements in brace blocks
+            if matches!(self.peek_kind(), Some(TokenKind::Semicolon)) {
+                self.advance();
+            }
+            // Progress guard
+            if self.current == before_idx {
+                if self.peek().is_none() || matches!(self.peek_kind(), Some(TokenKind::RBrace)) {
+                    break;
+                }
+                self.advance();
+            }
+        }
+
+        // Consume any trailing dedent before the closing brace
+        while matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+            self.advance();
+            self.skip_newlines();
+        }
+
+        self.expect(&TokenKind::RBrace)?;
         Ok(Block { statements })
     }
 
@@ -1325,7 +1638,7 @@ impl Parser {
                 // Re-enter elif handling: synthesize an if-statement for the next elif
                 // We need to "put back" the elif and call ourselves, but since we can't
                 // unadvance, we build the chain manually
-                let mut inner = self.parse_elif_chain()?;
+                let inner = self.parse_elif_chain()?;
                 Some(Block {
                     statements: vec![inner],
                 })
@@ -1574,6 +1887,7 @@ impl Parser {
             }
             Some(TokenKind::CharLiteral) => {
                 let val = self.advance().unwrap().lexeme.clone();
+                // Remove quotes and get character value
                 let unquoted = &val[1..val.len() - 1];
                 let ch = if unquoted.starts_with('\\') {
                     match &unquoted[1..] {
@@ -2056,21 +2370,60 @@ impl Parser {
         })
     }
 
+    /// Parse trait definition — supports both colon+indent and brace-delimited blocks.
     fn parse_trait(&mut self, attributes: Vec<String>) -> Result<Item, ParseError> {
         self.expect(&TokenKind::Trait)?;
         let name = self.parse_identifier()?;
-        self.expect(&TokenKind::Colon)?;
-        self.expect(&TokenKind::Newline)?;
-        self.expect(&TokenKind::Indent)?;
 
         let mut methods = Vec::new();
-        while !matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+
+        if matches!(self.peek_kind(), Some(TokenKind::LBrace)) {
+            // ── Brace-delimited block ──
+            self.advance(); // consume '{'
             self.skip_newlines();
-            if matches!(self.peek_kind(), Some(TokenKind::Fn)) {
-                methods.push(self.parse_method()?);
+            while matches!(self.peek_kind(), Some(TokenKind::Indent)) {
+                self.advance();
+                self.skip_newlines();
             }
+
+            while !matches!(self.peek_kind(), Some(TokenKind::RBrace)) {
+                self.skip_newlines();
+                while matches!(self.peek_kind(), Some(TokenKind::Indent))
+                    || matches!(self.peek_kind(), Some(TokenKind::Dedent))
+                {
+                    self.advance();
+                    self.skip_newlines();
+                }
+                if matches!(self.peek_kind(), Some(TokenKind::RBrace)) {
+                    break;
+                }
+                if matches!(self.peek_kind(), Some(TokenKind::Fn)) {
+                    methods.push(self.parse_method()?);
+                } else if matches!(self.peek_kind(), Some(TokenKind::RBrace)) {
+                    break;
+                } else {
+                    self.advance(); // skip unexpected token
+                }
+            }
+            while matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+                self.advance();
+                self.skip_newlines();
+            }
+            self.expect(&TokenKind::RBrace)?;
+        } else {
+            // ── Colon + indent/dedent block ──
+            self.expect(&TokenKind::Colon)?;
+            self.expect(&TokenKind::Newline)?;
+            self.expect(&TokenKind::Indent)?;
+
+            while !matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+                self.skip_newlines();
+                if matches!(self.peek_kind(), Some(TokenKind::Fn)) {
+                    methods.push(self.parse_method()?);
+                }
+            }
+            self.expect(&TokenKind::Dedent)?;
         }
-        self.expect(&TokenKind::Dedent)?;
 
         Ok(Item::Trait(TraitDef {
             name,
@@ -2079,6 +2432,7 @@ impl Parser {
         }))
     }
 
+    /// Parse impl block — supports both colon+indent and brace-delimited blocks.
     fn parse_impl(&mut self, attributes: Vec<String>) -> Result<Item, ParseError> {
         self.expect(&TokenKind::Impl)?;
         let first_name = self.parse_identifier()?;
@@ -2088,22 +2442,59 @@ impl Parser {
             let type_name = self.parse_identifier()?;
             (first_name, type_name)
         } else {
-            // Inherent impl: `impl TypeName { }`
+            // Inherent impl: `impl TypeName { }` or `impl TypeName:`
             (String::new(), first_name)
         };
 
-        self.expect(&TokenKind::Colon)?;
-        self.expect(&TokenKind::Newline)?;
-        self.expect(&TokenKind::Indent)?;
-
         let mut methods = Vec::new();
-        while !matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+
+        if matches!(self.peek_kind(), Some(TokenKind::LBrace)) {
+            // ── Brace-delimited block ──
+            self.advance(); // consume '{'
             self.skip_newlines();
-            if matches!(self.peek_kind(), Some(TokenKind::Fn)) {
-                methods.push(self.parse_method()?);
+            while matches!(self.peek_kind(), Some(TokenKind::Indent)) {
+                self.advance();
+                self.skip_newlines();
             }
+
+            while !matches!(self.peek_kind(), Some(TokenKind::RBrace)) {
+                self.skip_newlines();
+                while matches!(self.peek_kind(), Some(TokenKind::Indent))
+                    || matches!(self.peek_kind(), Some(TokenKind::Dedent))
+                {
+                    self.advance();
+                    self.skip_newlines();
+                }
+                if matches!(self.peek_kind(), Some(TokenKind::RBrace)) {
+                    break;
+                }
+                if matches!(self.peek_kind(), Some(TokenKind::Fn)) {
+                    methods.push(self.parse_method()?);
+                } else if matches!(self.peek_kind(), Some(TokenKind::RBrace)) {
+                    break;
+                } else {
+                    self.advance(); // skip unexpected token
+                }
+            }
+            while matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+                self.advance();
+                self.skip_newlines();
+            }
+            self.expect(&TokenKind::RBrace)?;
+        } else {
+            // ── Colon + indent/dedent block ──
+            self.expect(&TokenKind::Colon)?;
+            self.expect(&TokenKind::Newline)?;
+            self.expect(&TokenKind::Indent)?;
+
+            while !matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+                self.skip_newlines();
+                if matches!(self.peek_kind(), Some(TokenKind::Fn)) {
+                    methods.push(self.parse_method()?);
+                }
+            }
+            self.expect(&TokenKind::Dedent)?;
         }
-        self.expect(&TokenKind::Dedent)?;
 
         Ok(Item::Impl(ImplBlock {
             trait_name,
@@ -2202,65 +2593,129 @@ impl Parser {
         }))
     }
 
-    /// Parse enum definition
+    fn parse_static(&mut self, attributes: Vec<String>) -> Result<Item, ParseError> {
+        self.expect(&TokenKind::Static)?;
+        let mutable = if matches!(self.peek_kind(), Some(TokenKind::Mut)) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+        let name = self.parse_identifier()?;
+        self.expect(&TokenKind::Colon)?;
+        let ty = self.parse_type()?;
+        self.expect(&TokenKind::Eq)?;
+        let value = self.parse_expression()?;
+        self.skip_newlines();
+
+        Ok(Item::Static(ast::StaticDecl {
+            name,
+            mutable,
+            attributes,
+            ty,
+            value,
+        }))
+    }
+
+    /// Parse enum definition — supports both colon+indent and brace-delimited blocks.
     fn parse_enum(&mut self, attributes: Vec<String>) -> Result<Item, ParseError> {
         self.expect(&TokenKind::Enum)?;
         let name = self.parse_identifier()?;
-        self.expect(&TokenKind::Colon)?;
-        self.expect(&TokenKind::Newline)?;
-        self.expect(&TokenKind::Indent)?;
 
-        let mut variants = Vec::new();
-        while !matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
-            self.skip_newlines();
-            if matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
-                break;
-            }
-            // Allow associated `fn` methods inside enum bodies (ignore them)
-            if matches!(self.peek_kind(), Some(TokenKind::Fn)) {
-                // Parse and discard method to avoid breaking the enum body parse
-                let _ = self.parse_method();
-                self.skip_newlines();
-                continue;
-            }
+        let variants;
 
-            let variant_name = self.parse_identifier()?;
-
-            let fields = if matches!(self.peek_kind(), Some(TokenKind::LParen)) {
-                // Tuple variant
-                self.advance();
-                let mut types = Vec::new();
-                while !matches!(self.peek_kind(), Some(TokenKind::RParen)) {
-                    types.push(self.parse_type()?);
-                    if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
-                        self.advance();
-                    }
+        /// Helper: parse enum variants from the token stream until `terminator`
+        /// returns true. Shared by both block styles.
+        fn parse_enum_variants(
+            parser: &mut Parser,
+            is_terminator: impl Fn(&Parser) -> bool,
+        ) -> Result<Vec<EnumVariant>, ParseError> {
+            let mut variants = Vec::new();
+            while !is_terminator(parser) {
+                parser.skip_newlines();
+                // Skip stray indent/dedent tokens in brace blocks
+                while matches!(parser.peek_kind(), Some(TokenKind::Indent))
+                    || matches!(parser.peek_kind(), Some(TokenKind::Dedent))
+                {
+                    parser.advance();
+                    parser.skip_newlines();
                 }
-                self.expect(&TokenKind::RParen)?;
-                Some(EnumFields::Tuple(types))
-            } else if matches!(self.peek_kind(), Some(TokenKind::LBrace)) {
-                // Struct variant
-                self.advance();
-                let mut struct_fields = Vec::new();
-                while !matches!(self.peek_kind(), Some(TokenKind::RBrace)) {
-                    struct_fields.push(self.parse_field()?);
-                    if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
-                        self.advance();
-                    }
+                if is_terminator(parser) {
+                    break;
                 }
-                self.expect(&TokenKind::RBrace)?;
-                Some(EnumFields::Struct(struct_fields))
-            } else {
-                None
-            };
+                // Allow associated `fn` methods inside enum bodies (ignore them)
+                if matches!(parser.peek_kind(), Some(TokenKind::Fn)) {
+                    let _ = parser.parse_method();
+                    parser.skip_newlines();
+                    continue;
+                }
 
-            variants.push(EnumVariant {
-                name: variant_name,
-                fields,
-            });
-            self.skip_newlines();
+                let variant_name = parser.parse_identifier()?;
+
+                let fields = if matches!(parser.peek_kind(), Some(TokenKind::LParen)) {
+                    // Tuple variant
+                    parser.advance();
+                    let mut types = Vec::new();
+                    while !matches!(parser.peek_kind(), Some(TokenKind::RParen)) {
+                        types.push(parser.parse_type()?);
+                        if matches!(parser.peek_kind(), Some(TokenKind::Comma)) {
+                            parser.advance();
+                        }
+                    }
+                    parser.expect(&TokenKind::RParen)?;
+                    Some(EnumFields::Tuple(types))
+                } else if matches!(parser.peek_kind(), Some(TokenKind::LBrace)) {
+                    // Struct variant
+                    parser.advance();
+                    let mut struct_fields = Vec::new();
+                    while !matches!(parser.peek_kind(), Some(TokenKind::RBrace)) {
+                        struct_fields.push(parser.parse_field()?);
+                        if matches!(parser.peek_kind(), Some(TokenKind::Comma)) {
+                            parser.advance();
+                        }
+                    }
+                    parser.expect(&TokenKind::RBrace)?;
+                    Some(EnumFields::Struct(struct_fields))
+                } else {
+                    None
+                };
+
+                variants.push(EnumVariant {
+                    name: variant_name,
+                    fields,
+                });
+                // Allow optional comma separators between variants in brace blocks
+                if matches!(parser.peek_kind(), Some(TokenKind::Comma)) {
+                    parser.advance();
+                }
+                parser.skip_newlines();
+            }
+            Ok(variants)
         }
-        self.expect(&TokenKind::Dedent)?;
+
+        if matches!(self.peek_kind(), Some(TokenKind::LBrace)) {
+            // ── Brace-delimited block ──
+            self.advance(); // consume '{'
+            variants = parse_enum_variants(self, |p| {
+                matches!(p.peek_kind(), Some(TokenKind::RBrace)) || p.peek().is_none()
+            })?;
+            // Consume any trailing dedent before the closing brace
+            while matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+                self.advance();
+                self.skip_newlines();
+            }
+            self.expect(&TokenKind::RBrace)?;
+        } else {
+            // ── Colon + indent/dedent block ──
+            self.expect(&TokenKind::Colon)?;
+            self.expect(&TokenKind::Newline)?;
+            self.expect(&TokenKind::Indent)?;
+
+            variants = parse_enum_variants(self, |p| {
+                matches!(p.peek_kind(), Some(TokenKind::Dedent)) || p.peek().is_none()
+            })?;
+            self.expect(&TokenKind::Dedent)?;
+        }
 
         Ok(Item::Enum(EnumDef {
             name,
@@ -2295,8 +2750,11 @@ impl Parser {
 /// Main entry point for parsing.
 /// On success, returns the module AST. If the parser collected non-fatal
 /// errors during recovery, they are available via `parse_with_recovery`.
-pub fn parse(tokens: Vec<Token>) -> Result<Module, ParseError> {
+pub fn parse(tokens: Vec<Token>, tick_limit: Option<usize>) -> Result<Module, ParseError> {
     let mut parser = Parser::new(tokens);
+    if let Some(limit) = tick_limit {
+        parser.tick_limit = limit;
+    }
     let module = parser.parse_module()?;
     // If there were recovered errors, return the first one so callers that
     // rely on Result-based error handling still see a failure.
@@ -2310,8 +2768,11 @@ pub fn parse(tokens: Vec<Token>) -> Result<Module, ParseError> {
 /// Returns the (possibly partial) AST together with any collected errors.
 /// An empty `errors` vector means the parse was fully successful.
 #[allow(dead_code)]
-pub fn parse_with_recovery(tokens: Vec<Token>) -> (Module, Vec<ParseError>) {
+pub fn parse_with_recovery(tokens: Vec<Token>, tick_limit: Option<usize>) -> (Module, Vec<ParseError>) {
     let mut parser = Parser::new(tokens);
+    if let Some(limit) = tick_limit {
+        parser.tick_limit = limit;
+    }
     let module = match parser.parse_module() {
         Ok(m) => m,
         Err(e) => {

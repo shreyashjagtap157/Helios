@@ -3,9 +3,15 @@
 # Install: make install PREFIX=/usr/local
 
 CC      ?= cc
-CFLAGS  ?= -O2 -Wall -Wextra -std=c99
-LDFLAGS ?= -lm
+CFLAGS  ?= -O2 -Wall -Wextra -std=c11
 PREFIX  ?= /usr/local
+
+# Platform-specific linker flags
+ifeq ($(OS),Windows_NT)
+LDFLAGS ?= -lm
+else
+LDFLAGS ?= -lm -lpthread
+endif
 
 TARGET = ovm
 SRC    = ovm.c

@@ -216,7 +216,7 @@ struct Instant:
     
     fn now() -> Instant:
         // Platform-specific monotonic clock
-        @cfg(unix):
+        #[cfg(unix)]:
             var ts = Timespec { tv_sec: 0, tv_nsec: 0 }
             clock_gettime(CLOCK_MONOTONIC, &ts)
             Instant {
@@ -224,7 +224,7 @@ struct Instant:
                 nanos: ts.tv_nsec as u32
             }
         
-        @cfg(windows):
+        #[cfg(windows)]:
             var counter: i64 = 0
             var freq: i64 = 0
             QueryPerformanceCounter(&counter)
@@ -297,7 +297,7 @@ struct SystemTime:
     const UNIX_EPOCH: SystemTime = SystemTime { secs: 0, nanos: 0 }
     
     fn now() -> SystemTime:
-        @cfg(unix):
+        #[cfg(unix)]:
             var ts = Timespec { tv_sec: 0, tv_nsec: 0 }
             clock_gettime(CLOCK_REALTIME, &ts)
             SystemTime {
@@ -305,7 +305,7 @@ struct SystemTime:
                 nanos: ts.tv_nsec as u32
             }
         
-        @cfg(windows):
+        #[cfg(windows)]:
             var ft: u64 = 0
             GetSystemTimeAsFileTime(&ft)
             
@@ -398,7 +398,7 @@ struct DateTime:
         DateTime::from_timestamp_local(st.secs, st.nanos)
     
     fn from_timestamp_utc(secs: i64, nanos: u32) -> DateTime:
-        @cfg(unix):
+        #[cfg(unix)]:
             var tm = Tm { tm_sec: 0, tm_min: 0, tm_hour: 0, tm_mday: 0, tm_mon: 0, tm_year: 0, tm_wday: 0, tm_yday: 0, tm_isdst: 0 }
             gmtime_r(&secs, &tm)
             DateTime {
@@ -412,12 +412,12 @@ struct DateTime:
                 offset_seconds: 0
             }
         
-        @cfg(windows):
+        #[cfg(windows)]:
             // Use manual calculation for UTC
             DateTime::from_unix_manual(secs, nanos, 0)
     
     fn from_timestamp_local(secs: i64, nanos: u32) -> DateTime:
-        @cfg(unix):
+        #[cfg(unix)]:
             var tm = Tm { tm_sec: 0, tm_min: 0, tm_hour: 0, tm_mday: 0, tm_mon: 0, tm_year: 0, tm_wday: 0, tm_yday: 0, tm_isdst: 0 }
             localtime_r(&secs, &tm)
             
@@ -439,7 +439,7 @@ struct DateTime:
                 offset_seconds: offset
             }
         
-        @cfg(windows):
+        #[cfg(windows)]:
             var st: SystemTimeW
             GetLocalTime(&st)
             DateTime {
@@ -729,7 +729,7 @@ struct Stopwatch:
 // ============================================
 
 fn sleep(duration: &Duration):
-    @cfg(unix):
+    #[cfg(unix)]:
         var req = Timespec {
             tv_sec: duration.secs as i64,
             tv_nsec: duration.nanos as i64
@@ -739,7 +739,7 @@ fn sleep(duration: &Duration):
         while nanosleep(&req, &rem) == -1:
             req = rem
     
-    @cfg(windows):
+    #[cfg(windows)]:
         let millis = duration.as_millis() as u32
         Sleep(millis)
 

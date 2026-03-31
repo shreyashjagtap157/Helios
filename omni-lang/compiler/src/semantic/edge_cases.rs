@@ -52,7 +52,7 @@ impl EdgeCaseHandler {
         let result = match ty {
             Type::Array(inner, _) => self.check_recursive_type(inner, context),
             Type::WithOwnership(inner, _) => self.check_recursive_type(inner, context),
-            Type::Generic(name, args) => {
+            Type::Generic(name, _args) => {
                 if let Some(bound_type) = context.get(name).cloned() {
                     self.check_recursive_type(&bound_type, context)
                 } else {
@@ -70,7 +70,7 @@ impl EdgeCaseHandler {
     pub fn check_circular_trait_bounds(
         &mut self,
         trait_name: &str,
-        trait_bounds: &[String],
+        _trait_bounds: &[String],
     ) -> Result<(), String> {
         if self.current_depth >= self.max_depth {
             return Err("Trait bound recursion depth exceeded".to_string());
@@ -97,11 +97,11 @@ impl EdgeCaseHandler {
         generics: &[Type],
         where_clause: Option<&WhereClause>,
     ) -> Result<Type, String> {
-        let mut result = base_type.clone();
+        let result = base_type.clone();
 
         // Apply generic substitutions
-        for (i, generic) in generics.iter().enumerate() {
-            let type_var_name = format!("T{}", i);
+        for (i, _generic) in generics.iter().enumerate() {
+            let _type_var_name = format!("T{}", i);
             // Would perform substitution here
         }
 
@@ -169,7 +169,7 @@ impl EdgeCaseHandler {
     /// Handle lifetime variance in complex scenarios
     pub fn check_lifetime_variance(
         &self,
-        lifetime: &str,
+        _lifetime: &str,
         usage_context: LifetimeUsageContext,
     ) -> Result<(), String> {
         match usage_context {

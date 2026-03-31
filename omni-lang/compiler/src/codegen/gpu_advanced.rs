@@ -246,7 +246,7 @@ impl OccupancyCalculator {
         threads_per_block: u32,
         registers_per_thread: u32,
         shared_memory_per_block: u32,
-        compute_capability: (u32, u32),
+        _compute_capability: (u32, u32),
     ) -> OccupancyResult {
         // SM resources for Ampere (SM 80)
         let max_threads_per_sm = 2048;

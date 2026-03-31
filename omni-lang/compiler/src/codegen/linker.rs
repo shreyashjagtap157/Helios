@@ -1,3 +1,17 @@
+// Copyright 2024 Shreyash Jagtap
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #![allow(dead_code)]
 //! Omni Compiler Linker
 //!
@@ -1894,7 +1908,7 @@ mod tests {
         let mut linker = Linker::new(TargetPlatform::MacOSAarch64);
         linker.add_text(vec![0xC0, 0x03, 0x5F, 0xD6]);
         linker.add_data(vec![0x42; 16]);
-        linker.add_rodata(b"Helios\0".to_vec());
+        linker.add_rodata(b"Omni\0".to_vec());
         linker.add_bss(64);
 
         let binary = linker.link().unwrap();

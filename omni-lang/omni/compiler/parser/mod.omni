@@ -375,7 +375,6 @@ struct Parser:
         let is_async = self.eat(&TokenKind::KwAsync)
         self.expect(&TokenKind::KwFn)?
         let name = self.expect_identifier()?
-
         let generic_params = self.parse_optional_generic_params()?
 
         self.expect(&TokenKind::LeftParen)?
@@ -574,7 +573,6 @@ struct Parser:
     fn parse_enum_variant(&mut self, attrs: Vector<Attribute>) -> ParseResult<EnumVariant>:
         let start = self.span()
         let name = self.expect_identifier()?
-
         let kind = if self.eat(&TokenKind::LeftParen):
             // Tuple variant
             let mut types = Vector::new()
@@ -782,19 +780,16 @@ struct Parser:
 
     fn parse_static_def(&mut self, vis: Visibility, attrs: Vector<Attribute>) -> ParseResult<StaticDef>:
         let start = self.span()
-        let id = self.gen_id()
         self.expect(&TokenKind::KwStatic)?
-        let is_thread_local = false  // handled via attribute
         let name = self.expect_identifier()?
         self.expect(&TokenKind::Colon)?
-        let ty = self.parse_type()?
-        self.expect(&TokenKind::Eq)?
-        let value = self.parse_expr()?
-        self.expect_newline()?
+        let ty = self.parse_type()?  // Parse the type of the static variable
+        self.expect(&TokenKind::Semicolon)?  // Ensure the static definition ends with a semicolon
         return Ok(StaticDef {
-            id: id, name: name, visibility: vis,
-            is_thread_local: is_thread_local,
-            ty: ty, value: value, attrs: attrs,
+            name: name,
+            ty: ty,
+            visibility: vis,
+            attrs: attrs,
             span: start.merge(&self.span()),
         })
 
@@ -1082,8 +1077,6 @@ struct Parser:
     fn parse_named_type(&mut self) -> ParseResult<TypeExpr>:
         let start = self.span()
         let name = self.expect_identifier()?
-
-        // Check for path: module::Type
         let mut segments = Vector::from([name.clone()])
         while self.check(&TokenKind::ColonColon) and not self.is_at_end():
             // Check it's not ::< (turbofish)

@@ -3,7 +3,7 @@ name = "omni-lsp"
 version = "0.1.0"
 edition = "2021"
 description = "Omni Language Server Protocol implementation"
-authors = ["HELIOS Project"]
+authors = ["Omni Project"]
 
 [[bin]]
 name = "omni-lsp"

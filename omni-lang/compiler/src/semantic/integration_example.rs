@@ -7,6 +7,7 @@
 //! 4. Generic monomorphization
 
 #![cfg(test)]
+#![allow(unused_variables, dead_code)]
 
 #[cfg(test)]
 mod integration_tests {

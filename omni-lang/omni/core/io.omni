@@ -1,0 +1,90 @@
+module core::io
+
+// Core IO operations
+
+import std::collections::Vector
+
+pub fn print(value: str) {
+    // Print value to stdout
+    pass
+}
+
+pub fn println(value: str) {
+    // Print value with newline to stdout
+    pass
+}
+
+pub fn eprint(value: str) {
+    // Print value to stderr
+    pass
+}
+
+pub fn eprintln(value: str) {
+    // Print value with newline to stderr
+    pass
+}
+
+pub fn read_line() -> str {
+    // Read line from stdin
+    return ""
+}
+
+pub fn read_to_string(path: str) -> str {
+    // Read entire file as string
+    return ""
+}
+
+pub fn write_string(path: str, content: str) -> bool {
+    // Write string to file
+    return true
+}
+
+pub fn append_string(path: str, content: str) -> bool {
+    // Append string to file
+    return true
+}
+
+pub fn file_exists(path: str) -> bool {
+    // Check if file exists
+    return false
+}
+
+pub fn remove_file(path: str) -> bool {
+    // Remove file
+    return true
+}
+
+pub fn create_dir(path: str) -> bool {
+    // Create directory
+    return true
+}
+
+pub fn remove_dir(path: str) -> bool {
+    // Remove directory
+    return true
+}
+
+pub fn copy_file(src: str, dst: str) -> bool {
+    // Copy file
+    return true
+}
+
+pub fn move_file(src: str, dst: str) -> bool {
+    // Move file
+    return true
+}
+
+pub fn file_size(path: str) -> int {
+    // Get file size
+    return 0
+}
+
+pub fn is_directory(path: str) -> bool {
+    // Check if path is directory
+    return false
+}
+
+pub fn list_directory(path: str) -> Vector<str> {
+    // List directory contents
+    return Vector::new()
+}

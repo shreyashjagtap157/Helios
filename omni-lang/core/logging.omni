@@ -1,4 +1,4 @@
-// HELIOS Logging System
+// Omni Logging System
 // Written in Omni - comprehensive structured logging
 
 module core::logging
@@ -23,7 +23,7 @@ struct LogConfig:
     fn default() -> own LogConfig:
         return LogConfig {
             level: LogLevel::Info,
-            log_file: "logs/helios.log",
+            log_file: "logs/omni.log",
             format: "json",
             max_size_mb: 100
         }
@@ -86,7 +86,7 @@ struct Logger:
 static GLOBAL_LOGGER: Option<Logger> = None
 
 fn init(config: LogConfig):
-    GLOBAL_LOGGER = Some(Logger::new("helios", config))
+    GLOBAL_LOGGER = Some(Logger::new("omni", config))
 
 fn get(name: &str) -> Logger:
     return Logger::new(name, LogConfig::default())

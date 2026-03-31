@@ -63,7 +63,7 @@ impl Backend {
         };
 
         // --- Parser pass ---
-        match omni_compiler::parser::parse(tokens) {
+        match omni_compiler::parser::parse(tokens, None) {
             Ok(_module) => { /* no errors */ }
             Err(e) => {
                 diagnostics.push(Diagnostic {
@@ -218,6 +218,35 @@ impl LanguageServer for Backend {
             }
         }
         Ok(None)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_omni_keywords_contain_basic() {
+        assert!(OMNI_KEYWORDS.contains(&"fn"));
+        assert!(OMNI_KEYWORDS.contains(&"let"));
+        assert!(OMNI_KEYWORDS.contains(&"struct"));
+        assert!(OMNI_KEYWORDS.contains(&"module"));
+    }
+
+    #[test]
+    fn test_keywords_count() {
+        assert!(OMNI_KEYWORDS.len() > 30, "Should have comprehensive keywords");
+    }
+
+    #[test]
+    fn test_keywords_are_unique() {
+        let mut sorted: Vec<&str> = OMNI_KEYWORDS.to_vec();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), OMNI_KEYWORDS.len(), "Keywords should be unique");
     }
 }
 

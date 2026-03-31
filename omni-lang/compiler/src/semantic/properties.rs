@@ -301,7 +301,7 @@ pub fn parse_property_syntax(name: String, type_expr: Type) -> Property {
 
 /// Pattern matching support for properties
 /// Allows using properties in patterns: let Point { x, y } = point
-pub fn expand_property_pattern(pattern: &Pattern, container: &PropertyContainer) -> Pattern {
+pub fn expand_property_pattern(pattern: &Pattern, _container: &PropertyContainer) -> Pattern {
     // Would recursively expand property patterns
     // For now, return pattern as-is (would need full AST support)
     pattern.clone()

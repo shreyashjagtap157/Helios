@@ -1,3 +1,17 @@
+// Copyright 2024 Shreyash Jagtap
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #![allow(dead_code)]
 //! JIT Compiler Framework for OVM
 //!
@@ -852,7 +866,11 @@ impl BaselineJit {
                 }
             }
 
-            IrInstruction::Call { dest, func, args } => {
+            IrInstruction::Call {
+                dest,
+                func: _,
+                args,
+            } => {
                 // Save caller-saved registers
                 // Load arguments into ABI registers
                 for (i, arg) in args.iter().enumerate() {
@@ -877,12 +895,12 @@ impl BaselineJit {
                 }
             }
 
-            IrInstruction::Alloca { dest, ty } => {
+            IrInstruction::Alloca { dest, ty: _ } => {
                 // Allocate stack space (already done in prologue)
                 let _reg = emitter.reg_alloc.allocate(dest);
             }
 
-            IrInstruction::Load { dest, ptr, ty } => {
+            IrInstruction::Load { dest, ptr, ty: _ } => {
                 if let Some(ptr_reg) = emitter.reg_alloc.get_reg(ptr) {
                     let dest_reg = emitter.reg_alloc.allocate(dest);
                     // mov dest, [ptr_reg]
@@ -905,14 +923,14 @@ impl BaselineJit {
             }
 
             IrInstruction::TraitDispatch {
-                dest,
+                dest: _,
                 object,
                 method,
-                args,
+                args: _,
             } => {
                 // Inline Cache Site
                 // 1. Load object (receiver)
-                let obj_reg =
+                let _obj_reg =
                     self.load_value(emitter, &crate::ir::IrValue::Var(object.clone()), "rcv_tmp")?;
 
                 // 2. Emit IC check (Fast Path) - initially empty, just a call to runtime (Slow Path)
@@ -1366,7 +1384,7 @@ pub struct JitEngine {
 impl JitEngine {
     pub fn new(config: JitConfig) -> Self {
         let cache_limit = config.code_cache_limit;
-        let max_ic = config.max_ic_entries;
+        let _max_ic = config.max_ic_entries;
         JitEngine {
             baseline_jit: BaselineJit::new(config.clone()),
             config,

@@ -1,6 +1,6 @@
-fn greet(name: string):
-    println("Hello, " + name + "!")
+fn greet():
+    println("Hello")
 
 fn main():
-    greet("OVM")
-    println("Function calls work!")
+    greet()
+    println("Functions work")

@@ -149,8 +149,14 @@ refactor(semantic): extract type checking logic
 
 ## What to Work On
 
-- [Good First Issues](ISSUES.md#good-first-issues) — beginner-friendly
-- [Help Wanted](ISSUES.md#help-wanted) — community help needed
+### Project-Wide Issues
+- [Critical Project Issues](../ISSUES.md#critical-project-issues) — blockers affecting all components
+
+### Omni Compiler Issues
+- [Compiler-Specific Issues](omni-lang/ISSUES.md) — lexer, parser, type inference, codegen
+  - [Self-Hosting Blockers](omni-lang/ISSUES.md#-critical-self-hosting-blockers)
+  - [Good First Issues](omni-lang/ISSUES.md#good-first-issues)
+  - [Compiler Errors](omni-lang/ISSUES.md#compiler-error-reference)
 
 ---
 

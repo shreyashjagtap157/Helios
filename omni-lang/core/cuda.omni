@@ -1,4 +1,4 @@
-// HELIOS CUDA Bindings
+// Omni CUDA Bindings
 // GPU acceleration for compute-intensive operations
 
 module core::cuda

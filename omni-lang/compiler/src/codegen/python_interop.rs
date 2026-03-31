@@ -74,7 +74,7 @@ pub fn generate_python_shim(func: &IrFunction) -> String {
     }
 
     // Build the format string for PyArg_ParseTuple validation
-    let format_str: String = func
+    let _format_str: String = func
         .params
         .iter()
         .map(|(_, ty)| ir_type_to_py_format(ty))

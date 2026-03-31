@@ -2,10 +2,19 @@
 name = "omnc"
 version = "1.0.0"
 edition = "2021"
-authors = ["HELIOS Project"]
 description = "Omni Language Compiler - A systems programming language for AI"
 readme = "README.md"
 license = "Apache-2.0"
+authors = ["Omni Project"]
+homepage = "https://github.com/omni-lang/omni-lang"
+repository = "https://github.com/omni-lang/omni-lang"
+keywords = ["compiler", "programming-language", "omni"]
+categories = ["development-tools", "language"]
+
+[package.metadata.install]
+bin = "omnc"
+desc = "Omni Language Compiler"
+platforms = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu", "aarch64-apple-darwin"]
 
 [[bin]]
 name = "omnc"

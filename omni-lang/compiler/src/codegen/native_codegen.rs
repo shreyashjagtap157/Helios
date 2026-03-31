@@ -1,4 +1,18 @@
-#![allow(dead_code)]
+// Copyright 2024 Shreyash Jagtap
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#![allow(dead_code, unused_imports)]
 //! Native Code Generation
 //!
 //! Multi-architecture native code generation from Omni IR.
@@ -1081,7 +1095,7 @@ impl InstructionSelector {
             IrInstruction::Phi {
                 dest,
                 ty: _,
-                incoming,
+                incoming: _,
             } => {
                 // Phi nodes are resolved during register allocation
                 // For now, just allocate a vreg for the destination
@@ -1171,6 +1185,12 @@ pub struct X86Emitter {
     fixups: Vec<(usize, String, bool)>, // (offset, label, is_relative)
 }
 
+impl Default for X86Emitter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl X86Emitter {
     pub fn new() -> Self {
         X86Emitter {
@@ -1233,7 +1253,7 @@ impl X86Emitter {
                 src,
                 base,
                 offset,
-                size,
+                size: _,
             } => {
                 // mov [base + offset], src
                 let rex = 0x48 | ((*src >> 3) << 2) | ((*base >> 3) & 1);
@@ -1629,10 +1649,10 @@ impl Arm64Emitter {
                 // Patch imm19 or imm26 field
                 if (word >> 24) == 0x54 {
                     // B.cond: imm19 at bits [23:5]
-                    word |= ((rel as u32 & 0x7FFFF) << 5);
+                    word |= (rel as u32 & 0x7FFFF) << 5;
                 } else {
                     // B/BL: imm26 at bits [25:0]
-                    word |= (rel as u32 & 0x3FFFFFF);
+                    word |= rel as u32 & 0x3FFFFFF;
                 }
                 self.code[*offset..*offset + 4].copy_from_slice(&word.to_le_bytes());
             }
@@ -1683,6 +1703,12 @@ struct WasmExport {
     name: String,
     kind: u8,
     index: u32,
+}
+
+impl Default for WasmEmitter {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl WasmEmitter {
@@ -1765,7 +1791,7 @@ impl WasmEmitter {
     fn emit_wasm_instruction(&self, body: &mut Vec<u8>, inst: &IrInstruction) {
         match inst {
             IrInstruction::BinOp {
-                dest,
+                dest: _,
                 op,
                 left,
                 right,
@@ -1792,7 +1818,11 @@ impl WasmEmitter {
                 self.encode_u32(body, 0); // local index placeholder
             }
 
-            IrInstruction::Call { dest, func, args } => {
+            IrInstruction::Call {
+                dest: _,
+                func: _,
+                args,
+            } => {
                 for arg in args {
                     self.emit_wasm_value(body, arg);
                 }
@@ -1819,7 +1849,7 @@ impl WasmEmitter {
                 body.push(0x41); // i32.const
                 body.push(if *v { 1 } else { 0 });
             }
-            IrValue::Var(name) => {
+            IrValue::Var(_name) => {
                 body.push(0x20); // local.get
                 self.encode_u32(body, 0); // local index placeholder
             }

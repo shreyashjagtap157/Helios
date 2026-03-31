@@ -1,4 +1,4 @@
-/// Project Completeness Audit (HELIOS / Omni stack)
+/// Project Completeness Audit (Omni stack)
 /// Last Updated: 2026-02-28
 ///
 /// Scope reviewed:
@@ -17,7 +17,7 @@
 /// - ovm/: Managed runtime architecture present. Status: PARTIAL (integration path still tied to Rust toolchain).
 /// - std/: Broad Omni stdlib surface plus Rust-backed audit/benchmark artifacts. Status: PARTIAL.
 /// - omni/: Language bootstrap/runtime/test scaffolding present. Status: PARTIAL to IMPLEMENTED depending on module.
-/// - core/, helios/, brain/, app/: Rich Omni module definitions. Status: API/logic coverage strong; runtime independence incomplete.
+/// - core/, brain/, app/: Rich Omni module definitions. Status: API/logic coverage strong; runtime independence incomplete.
 /// - tools/: LSP/formatter/package-manager style tool dirs present, mostly Rust ecosystem oriented. Status: PARTIAL.
 ///
 /// Key inconsistency findings (language self-consistency):

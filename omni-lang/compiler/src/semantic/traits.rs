@@ -307,7 +307,7 @@ impl TraitResolver {
     /// Resolve a trait method
     pub fn resolve_method(
         &self,
-        ty: &Type,
+        _ty: &Type,
         trait_name: &str,
         method_name: &str,
     ) -> Result<TraitMethodDef, String> {

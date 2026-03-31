@@ -1,0 +1,34 @@
+module ovm::runtime
+
+// Minimal runtime module to satisfy imports
+// This provides basic OVM runtime functionality needed by the compiler
+
+pub fn init() {
+    // Initialize OVM runtime
+    pass
+}
+
+pub fn shutdown() {
+    // Shutdown OVM runtime
+    pass
+}
+
+pub fn allocate(size: int) -> int {
+    // Allocate memory
+    return 0
+}
+
+pub fn deallocate(ptr: int) {
+    // Deallocate memory
+    pass
+}
+
+pub fn load_bytecode(path: str) -> int {
+    // Load bytecode from file
+    return 0
+}
+
+pub fn execute(function_ptr: int) -> int {
+    // Execute function
+    return 0
+}

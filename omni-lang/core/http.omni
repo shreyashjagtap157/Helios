@@ -1,4 +1,4 @@
-// HELIOS HTTP Client
+// Omni HTTP Client
 // Web requests for learning and updates
 
 module core::http
