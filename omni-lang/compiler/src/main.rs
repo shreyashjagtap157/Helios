@@ -641,7 +641,9 @@ fn resolve_imports_impl(
     fn normalized_import_paths(path: &[String]) -> Vec<Vec<String>> {
         // `import foo::bar` is parsed as ["foo", "bar"].
         // `import foo::{A, B}` is parsed as ["foo::A", "foo::B"].
-        if path.iter().any(|p| p.contains("::")) {
+        // For symbol-style imports (e.g. std::collections::HashMap), also
+        // try the parent module path as a fallback (`std::collections`).
+        let mut variants: Vec<Vec<String>> = if path.iter().any(|p| p.contains("::")) {
             path.iter()
                 .map(|p| {
                     p.split("::")
@@ -652,7 +654,25 @@ fn resolve_imports_impl(
                 .collect()
         } else {
             vec![path.to_vec()]
+        };
+
+        let mut with_fallbacks = Vec::new();
+        for variant in variants.drain(..) {
+            if variant.is_empty() {
+                continue;
+            }
+            with_fallbacks.push(variant.clone());
+            if variant.len() > 1 {
+                with_fallbacks.push(variant[..variant.len() - 1].to_vec());
+            }
         }
+
+        // Keep deterministic order while removing duplicates.
+        let mut seen = HashSet::new();
+        with_fallbacks
+            .into_iter()
+            .filter(|v| seen.insert(v.clone()))
+            .collect()
     }
 
     fn detect_project_root(current_file: &std::path::Path) -> Option<std::path::PathBuf> {
@@ -734,15 +754,17 @@ fn resolve_imports_impl(
             Item::Import(ImportDecl { path, alias }) => {
                 let path_variants = normalized_import_paths(path);
                 let mut had_unresolved = false;
+                let mut found_any_candidate_file = false;
+                let mut searched_candidates: Vec<std::path::PathBuf> = Vec::new();
 
                 for variant in &path_variants {
-                    let relative = variant.join("/");
                     let candidate_files =
                         candidate_import_files(base_dir, variant, project_root.as_deref());
 
                     let file_path = candidate_files.iter().find(|p| p.exists()).cloned();
 
                     if let Some(file_path) = file_path {
+                        found_any_candidate_file = true;
                         // Check for circular imports: normalize the path and check if already visited.
                         // We use absolute path resolution to avoid issues with relative paths that
                         // may compare differently despite pointing to the same file.
@@ -821,25 +843,38 @@ fn resolve_imports_impl(
                             }
                         }
                     } else {
-                        // File not found — warn but don't fail compilation
-                        if let Some(alias) = alias {
-                            eprintln!(
-                                "warning: unresolved import '{}' (as '{}'): searched {:?}",
-                                relative, alias, candidate_files
-                            );
-                        } else {
-                            eprintln!(
-                                "warning: unresolved import '{}': searched {:?}",
-                                relative, candidate_files
-                            );
-                        }
-                        log::warn!(
-                            "Unresolved import: {:?} — searched {:?}",
-                            variant,
-                            candidate_files
-                        );
-                        had_unresolved = true;
+                        searched_candidates.extend(candidate_files);
                     }
+                }
+
+                if !found_any_candidate_file {
+                    // None of the import path variants resolved to a file.
+                    // Emit one warning for the original import path to keep
+                    // diagnostics concise and focused.
+                    let mut seen = HashSet::new();
+                    let searched_candidates: Vec<std::path::PathBuf> = searched_candidates
+                        .into_iter()
+                        .filter(|p| seen.insert(p.clone()))
+                        .collect();
+                    let relative = path.join("/");
+
+                    if let Some(alias) = alias {
+                        eprintln!(
+                            "warning: unresolved import '{}' (as '{}'): searched {:?}",
+                            relative, alias, searched_candidates
+                        );
+                    } else {
+                        eprintln!(
+                            "warning: unresolved import '{}': searched {:?}",
+                            relative, searched_candidates
+                        );
+                    }
+                    log::warn!(
+                        "Unresolved import: {:?} — searched {:?}",
+                        path,
+                        searched_candidates
+                    );
+                    had_unresolved = true;
                 }
 
                 if had_unresolved {
