@@ -18,11 +18,15 @@
 //! Supports multiple backends: LLVM (native), OVM (bytecode), and hybrid.
 //! Features hardware-adaptive compilation and universal execution model.
 
+#[path = "codegen/mod.rs"]
 mod codegen;
+#[path = "ir/mod.rs"]
 mod ir;
+#[path = "lexer/mod.rs"]
 mod lexer;
 mod modes;
 mod monitor;
+#[path = "parser/mod.rs"]
 mod parser;
 mod resolver;
 mod runtime;
@@ -35,6 +39,37 @@ use pprof::ProfilerGuard;
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
 use std::path::PathBuf;
+use std::time::Instant;
+
+fn stage_trace_enabled() -> bool {
+    std::env::var("OMNI_STAGE_TRACE")
+        .map(|v| {
+            let t = v.trim().to_ascii_lowercase();
+            matches!(t.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(false)
+}
+
+fn stage_enter(name: &str) -> Instant {
+    if stage_trace_enabled() {
+        eprintln!("STAGE_ENTER {}", name);
+    }
+    monitor::update_heartbeat();
+    Instant::now()
+}
+
+fn stage_exit(name: &str, started: Instant) {
+    if stage_trace_enabled() {
+        eprintln!("STAGE_EXIT {} ms={}", name, started.elapsed().as_millis());
+    }
+    monitor::update_heartbeat();
+}
+
+fn import_guard_limit() -> Option<usize> {
+    std::env::var("OMNI_IMPORT_MAX")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+}
 
 /// Code generation target
 #[derive(Debug, Clone, Copy, ValueEnum, Default, PartialEq)]
@@ -387,7 +422,9 @@ fn compile(source: &str, args: &Args) -> Result<()> {
 
     // Phase 1: Lexical analysis
     log::debug!("Phase 1: Lexical analysis");
+    let lex_t0 = stage_enter("phase1.lex");
     let tokens = lexer::tokenize(source)?;
+    stage_exit("phase1.lex", lex_t0);
     // If requested, write tokens to file and exit early
     if args.emit_tokens {
         let out_path = args
@@ -410,12 +447,15 @@ fn compile(source: &str, args: &Args) -> Result<()> {
 
     // Phase 2: Parsing
     log::debug!("Phase 2: Parsing");
-    monitor::update_heartbeat();
+    let parse_t0 = stage_enter("phase2.parse");
     let ast = parser::parse(tokens, args.parser_tick_limit)?;
+    stage_exit("phase2.parse", parse_t0);
 
     // Phase 2.0: Import resolution
     log::debug!("Phase 2.0: Import resolution");
+    let import_t0 = stage_enter("phase2.import_resolution");
     let ast = resolve_imports(ast, &args.input, args.parser_tick_limit)?;
+    stage_exit("phase2.import_resolution", import_t0);
 
     // Phase 2.0.1: Conditional compilation (#[cfg(...)] filtering)
     log::debug!("Phase 2.0.1: Conditional compilation (cfg filtering)");
@@ -459,7 +499,7 @@ fn compile(source: &str, args: &Args) -> Result<()> {
 
     // Phase 2.5: Type inference (fatal for concrete mismatches)
     log::debug!("Phase 2.5: Type inference");
-    monitor::update_heartbeat();
+    let type_t0 = stage_enter("phase2_5.type_inference");
     let type_result = semantic::type_inference::check_types(&ast);
     match type_result {
         Ok(result) => {
@@ -484,6 +524,7 @@ fn compile(source: &str, args: &Args) -> Result<()> {
             }
         }
     }
+    stage_exit("phase2_5.type_inference", type_t0);
 
     // Phase 2.6: Borrow checking (warnings for ownership violations)
     log::debug!("Phase 2.6: Borrow checking");
@@ -497,8 +538,9 @@ fn compile(source: &str, args: &Args) -> Result<()> {
 
     // Phase 3: Semantic analysis
     log::debug!("Phase 3: Semantic analysis");
-    monitor::update_heartbeat();
+    let sem_t0 = stage_enter("phase3.semantic_analysis");
     let typed_ast = semantic::analyze(ast)?;
+    stage_exit("phase3.semantic_analysis", sem_t0);
 
     // --emit-typed-ast: dump typed AST and exit
     if args.emit_typed_ast {
@@ -525,9 +567,11 @@ fn compile(source: &str, args: &Args) -> Result<()> {
     // For OVM target, use direct typed AST → OVM bytecode (bypasses IR)
     if args.target == Target::Ovm && !args.emit_ir {
         log::debug!("Phase 4-5: Direct OVM codegen from typed AST");
-        monitor::update_heartbeat();
-        return codegen::ovm_direct::generate_ovm_direct(&typed_ast, &output_path)
+        let ovm_t0 = stage_enter("phase4_5.ovm_direct_codegen");
+        let out = codegen::ovm_direct::generate_ovm_direct(&typed_ast, &output_path)
             .map_err(|e| anyhow::anyhow!("{}", e));
+        stage_exit("phase4_5.ovm_direct_codegen", ovm_t0);
+        return out;
     }
 
     // Phase 4: IR generation (for LLVM/native targets or --emit-ir)
@@ -578,6 +622,18 @@ fn resolve_imports(
     module: parser::ast::Module,
     current_file: &std::path::Path,
     tick_limit: Option<usize>,
+) -> Result<parser::ast::Module> {
+    use std::collections::HashSet;
+    let mut visited = HashSet::new();
+    resolve_imports_impl(module, current_file, tick_limit, &mut visited)
+}
+
+/// Internal implementation of resolve_imports with circular import detection.
+fn resolve_imports_impl(
+    module: parser::ast::Module,
+    current_file: &std::path::Path,
+    tick_limit: Option<usize>,
+    visited: &mut std::collections::HashSet<std::path::PathBuf>,
 ) -> Result<parser::ast::Module> {
     use parser::ast::{ImportDecl, Item, Module};
     use std::collections::HashSet;
@@ -687,6 +743,49 @@ fn resolve_imports(
                     let file_path = candidate_files.iter().find(|p| p.exists()).cloned();
 
                     if let Some(file_path) = file_path {
+                        // Check for circular imports: normalize the path and check if already visited.
+                        // We use absolute path resolution to avoid issues with relative paths that
+                        // may compare differently despite pointing to the same file.
+                        let normalized_path = if file_path.is_absolute() {
+                            file_path.clone()
+                        } else {
+                            match std::env::current_dir() {
+                                Ok(cwd) => cwd.join(&file_path),
+                                Err(_) => file_path.clone(),
+                            }
+                        };
+    
+                        if visited.contains(&normalized_path) {
+                            log::debug!(
+                                "Skipping circular import {:?} (already visited)",
+                                &file_path
+                            );
+                            // Don't add the import again; just continue
+                            continue;
+                        }
+
+                        if let Some(limit) = import_guard_limit() {
+                            if visited.len() >= limit {
+                                return Err(anyhow::anyhow!(
+                                    "import expansion guard tripped: visited={} limit={} last={}",
+                                    visited.len(),
+                                    limit,
+                                    file_path.display()
+                                ));
+                            }
+                        }
+    
+                        // Mark as visited before processing to detect cycles
+                        visited.insert(normalized_path.clone());
+
+                        if stage_trace_enabled() && visited.len() % 100 == 0 {
+                            eprintln!(
+                                "IMPORT_PROGRESS visited={} current={}",
+                                visited.len(),
+                                file_path.display()
+                            );
+                        }
+                        
                         log::debug!("Resolving import {:?} → {:?}", variant, file_path);
                         match std::fs::read_to_string(&file_path) {
                             Ok(src) => match lexer::tokenize(&src) {
@@ -694,7 +793,7 @@ fn resolve_imports(
                                     Ok(mut imported) => {
                                         // Recursively resolve imports in the imported module
                                         imported =
-                                            resolve_imports(imported, &file_path, tick_limit)?;
+                                            resolve_imports_impl(imported, &file_path, tick_limit, visited)?;
                                         resolved_items.extend(imported.items);
                                     }
                                     Err(e) => {

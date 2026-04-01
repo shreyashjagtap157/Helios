@@ -1,0 +1,8 @@
+// Phase 3 gate: basic generics support
+
+fn identity[T](x: T) -> T:
+    return x
+
+fn main():
+    let value = 42
+    println("generics gate")

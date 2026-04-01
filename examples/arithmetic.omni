@@ -1,0 +1,14 @@
+// Variable and simple arithmetic example
+
+fn main() -> i64 {
+    let x: i64 = 5;
+    let y: i64 = 10;
+    let sum = x + y;
+    let product = x * y;
+    
+    if sum > 10 {
+        return product;
+    } else {
+        return sum;
+    }
+}

@@ -12,10 +12,29 @@ module bootstrap
 //
 // This proves the compiler correctly compiles itself.
 
-import std::core::{Option, Some, None, Result, Ok, Err, String, Iterator}
-import std::collections::{Vector}
-import std::io::{File, Read, read_to_string, write_string, path_exists, is_dir, create_dir_all, current_dir}
-import std::ffi::{CString, c_int, c_char, c_void, env_get, args}
+import std::core::Option
+import std::core::Some
+import std::core::None
+import std::core::Result
+import std::core::Ok
+import std::core::Err
+import std::core::String
+import std::core::Iterator
+import std::collections::Vector
+import std::io::File
+import std::io::Read
+import std::io::read_to_string
+import std::io::write_string
+import std::io::path_exists
+import std::io::is_dir
+import std::io::create_dir_all
+import std::io::current_dir
+import std::ffi::CString
+import std::ffi::c_int
+import std::ffi::c_char
+import std::ffi::c_void
+import std::ffi::env_get
+import std::ffi::args
 
 // ============================================================================
 // Platform FFI

@@ -19,14 +19,54 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 SOURCE_DIR="$SCRIPT_DIR/omni"
 BUILD_DIR="$SCRIPT_DIR/build"
 ALLOW_INFRA_PLACEHOLDERS=0
+STAGE1_TIMEOUT_SECONDS=120
+STAGE1_SOURCE_RELATIVE="compiler/main.omni"
 STAGE1_COMPILATION_OK=0
+STAGE1_TIMEOUT_HIT=0
 STAGE2_MODE="not-run"
 VERIFY_IDENTICAL=0
 STATUS_FILE="$BUILD_DIR/bootstrap_status.env"
 
-if [ "${1:-}" = "--allow-infra-placeholders" ]; then
-    ALLOW_INFRA_PLACEHOLDERS=1
-fi
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --allow-infra-placeholders)
+            ALLOW_INFRA_PLACEHOLDERS=1
+            ;;
+        --stage1-timeout-seconds)
+            if [ -z "${2:-}" ]; then
+                echo "missing value for --stage1-timeout-seconds" >&2
+                exit 2
+            fi
+            STAGE1_TIMEOUT_SECONDS="$2"
+            shift
+            ;;
+        --stage1-source)
+            if [ -z "${2:-}" ]; then
+                echo "missing value for --stage1-source" >&2
+                exit 2
+            fi
+            STAGE1_SOURCE_RELATIVE="$2"
+            shift
+            ;;
+        *)
+            echo "unknown option: $1" >&2
+            echo "usage: bootstrap.sh [--allow-infra-placeholders] [--stage1-timeout-seconds N] [--stage1-source PATH]" >&2
+            exit 2
+            ;;
+    esac
+    shift
+done
+
+case "$STAGE1_TIMEOUT_SECONDS" in
+    ''|*[!0-9]*)
+        echo "--stage1-timeout-seconds must be a positive integer" >&2
+        exit 2
+        ;;
+    0)
+        echo "--stage1-timeout-seconds must be >= 1" >&2
+        exit 2
+        ;;
+esac
 
 write_status_file() {
     local exit_code="$1"
@@ -44,6 +84,9 @@ write_status_file() {
     mkdir -p "$BUILD_DIR"
     cat > "$STATUS_FILE" <<EOF
 BOOTSTRAP_MODE=$mode
+STAGE1_TIMEOUT_SECONDS=$STAGE1_TIMEOUT_SECONDS
+STAGE1_TIMEOUT_HIT=$STAGE1_TIMEOUT_HIT
+STAGE1_SOURCE=$STAGE1_SOURCE_RELATIVE
 STAGE1_COMPILATION_OK=$STAGE1_COMPILATION_OK
 STAGE1_ARTIFACT=$BUILD_DIR/omnc-stage1.ovm
 STAGE1_ARTIFACT_SIZE=$stage1_size
@@ -148,8 +191,9 @@ stage1_compile() {
     fi
 
     # Check if self-hosted compiler source exists
-    if [ ! -f "$SOURCE_DIR/compiler/main.omni" ]; then
-        log_error "Self-hosted compiler source not found at $SOURCE_DIR/compiler/"
+    STAGE1_SOURCE="$SOURCE_DIR/$STAGE1_SOURCE_RELATIVE"
+    if [ ! -f "$STAGE1_SOURCE" ]; then
+        log_error "Self-hosted compiler source not found at $STAGE1_SOURCE"
         exit 1
     fi
 
@@ -163,15 +207,47 @@ stage1_compile() {
     log_info "Attempting to compile self-hosted compiler to OVM bytecode..."
     
     STAGE1_OUTPUT="$BUILD_DIR/omni-compiler-stage1.ovm"
+    STAGE1_LOG="$BUILD_DIR/stage1-compile.log"
+    STAGE1_TIMEOUT_HIT=0
     
-    # Compile the actual self-hosted compiler entrypoint.
-    STAGE1_SOURCE="$SOURCE_DIR/compiler/main.omni"
-    if "$COMPILER" "$STAGE1_SOURCE" -o "$STAGE1_OUTPUT" 2>&1; then
+    log_info "Stage 1 source: $STAGE1_SOURCE_RELATIVE"
+    # Compile the configured Stage 1 self-hosted compiler entrypoint.
+
+    if command -v timeout >/dev/null 2>&1; then
+        if timeout "$STAGE1_TIMEOUT_SECONDS" "$COMPILER" "$STAGE1_SOURCE" -o "$STAGE1_OUTPUT" >"$STAGE1_LOG" 2>&1; then
+            STAGE1_EXIT=0
+        else
+            STAGE1_EXIT=$?
+        fi
+    else
+        log_warn "'timeout' command unavailable; running Stage 1 compile without hard timeout"
+        if "$COMPILER" "$STAGE1_SOURCE" -o "$STAGE1_OUTPUT" >"$STAGE1_LOG" 2>&1; then
+            STAGE1_EXIT=0
+        else
+            STAGE1_EXIT=$?
+        fi
+    fi
+
+    if [ "$STAGE1_EXIT" -eq 124 ]; then
+        STAGE1_TIMEOUT_HIT=1
+        STAGE1_COMPILATION_OK=0
+        log_warn "Stage 1 compile timed out after ${STAGE1_TIMEOUT_SECONDS}s; see $STAGE1_LOG"
+        if [ "$ALLOW_INFRA_PLACEHOLDERS" -eq 1 ]; then
+            touch "$BUILD_DIR/omnc-stage1.ovm"
+            log_warn "Stage 1 placeholder created due to timeout (--allow-infra-placeholders enabled)"
+            return 0
+        fi
+        log_error "Stage 1 compilation timed out in strict mode"
+        exit 1
+    fi
+
+    if [ "$STAGE1_EXIT" -eq 0 ]; then
         log_ok "Self-hosted compiler source compiled to OVM bytecode"
         cp "$STAGE1_OUTPUT" "$BUILD_DIR/omnc-stage1.ovm"
         STAGE1_COMPILATION_OK=1
     else
         log_error "Self-hosted compiler failed in Stage 1"
+        log_error "See: $STAGE1_LOG"
         log_error "This is a real blocker for self-hosting; see ISSUES.md"
         if [ "$ALLOW_INFRA_PLACEHOLDERS" -eq 1 ]; then
             touch "$BUILD_DIR/omnc-stage1.ovm"

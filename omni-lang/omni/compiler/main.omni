@@ -6,7 +6,8 @@ module compiler::main
 // Entry point for the self-hosted Omni compiler. Orchestrates the full
 // compilation pipeline from source to executable.
 
-import std::collections::{Vector, HashMap}
+import std::collections::Vector
+import std::collections::HashMap
 
 import compiler::lexer::token::{Token}
 import compiler::lexer::{tokenize}
@@ -23,6 +24,8 @@ import compiler::codegen::llvm::{generate_llvm, generate_llvm_ir}
 import compiler::codegen::ovm::{generate_ovm, generate_ovm_bytecode}
 import compiler::codegen::gpu::{generate_spirv, generate_ptx}
 import compiler::linker::{link_executable, link_shared_library, LinkerConfig}
+
+const VERSION: str = "0.1.0"
 
 // ============================================================================
 // Compiler Configuration
@@ -290,8 +293,6 @@ fn print_usage():
 // Compilation Pipeline
 // ============================================================================
 
-const VERSION: str = "0.1.0"
-
 struct CompilationResult:
     success: bool
     errors: Vector<str>
@@ -305,8 +306,8 @@ struct CompilationResult:
             warnings: Vector::new(),
             timings: HashMap::new(),
         }
-    // Helper: report semantic errors into the compilation result
-    fn report_sem_errors(sem_errors: &Vector<SemanticError>, config: &CompilerConfig, result: &mut CompilationResult):
+// Helper: report semantic errors into the compilation result
+fn report_sem_errors(sem_errors: &Vector<SemanticError>, config: &CompilerConfig, result: &mut CompilationResult):
         for err in &sem_errors:
             match err.severity:
                 Severity::Error =>
@@ -320,228 +321,228 @@ struct CompilationResult:
                     if config.verbose:
                         println("  info: {}", err.message)
 
-    fn compile(config: &CompilerConfig) -> CompilationResult:
+fn compile(config: &CompilerConfig) -> CompilationResult:
         let mut result = CompilationResult::new()
         let start_time = std::time::now()
 
-    if config.verbose:
-        println("omnc {} — Omni Compiler", VERSION)
-        println("input files: {}", config.input_files.join(", "))
-        println("output: {}", config.output_path.as_ref().unwrap_or(&"<none>".to_string()))
-        println("optimization: {:?}", config.opt_level)
+        if config.verbose:
+            println("omnc {} — Omni Compiler", VERSION)
+            println("input files: {}", config.input_files.join(", "))
+            println("output: {}", config.output_path.as_ref().unwrap_or(&"<none>".to_string()))
+            println("optimization: {:?}", config.opt_level)
 
-    // ================================================================
-    // Phase 1: Lexing
-    // ================================================================
-    let lex_start = std::time::now()
-    let mut all_tokens = Vector::new()
+        // ================================================================
+        // Phase 1: Lexing
+        // ================================================================
+        let lex_start = std::time::now()
+        let mut all_tokens = Vector::new()
 
-    for (file_id, input_path) in config.input_files.iter().enumerate():
-        let source = match std::fs::read_to_string(input_path):
-            Ok(s) => s
-            Err(e) =>
-                result.errors.push(format("error reading {}: {}", input_path, e))
-                result.success = false
+        for (file_id, input_path) in config.input_files.iter().enumerate():
+            let source = match std::fs::read_to_string(input_path):
+                Ok(s) => s
+                Err(e) =>
+                    result.errors.push(format("error reading {}: {}", input_path, e))
+                    result.success = false
+                    return result
+
+            if config.verbose:
+                println("  lexing {}...", input_path)
+
+            let (tokens, lex_errors) = tokenize(&source, file_id as u32)
+
+            if not lex_errors.is_empty():
+                for err in &lex_errors:
+                    result.errors.push(format("{}:{}: {}", input_path, err.span.line, err.message))
+                if result.errors.len() >= config.max_errors as usize:
+                    result.success = false
+                    return result
+
+            // Emit tokens if requested
+            if config.emit == EmitTarget::Tokens:
+                let output = config.output_path.as_ref().unwrap()
+                let mut token_str = String::new()
+                for tok in &tokens:
+                    token_str.push_str(&format("{:?}\n", tok))
+                std::fs::write(output, &token_str).unwrap_or(())
                 return result
 
+            all_tokens.extend(tokens)
+
+        result.timings.insert("lexing".to_string(), elapsed(lex_start))
+
+        // ================================================================
+        // Phase 2: Parsing
+        // ================================================================
+        let parse_start = std::time::now()
+
         if config.verbose:
-            println("  lexing {}...", input_path)
+            println("  parsing...")
 
-        let (tokens, lex_errors) = tokenize(&source, file_id as u32)
+        let (program, parse_errors) = parse(&all_tokens)
 
-        if not lex_errors.is_empty():
-            for err in &lex_errors:
-                result.errors.push(format("{}:{}: {}", input_path, err.span.line, err.message))
+        if not parse_errors.is_empty():
+            for err in &parse_errors:
+                result.errors.push(format("parse error: {}", err.message))
             if result.errors.len() >= config.max_errors as usize:
                 result.success = false
                 return result
 
-        // Emit tokens if requested
-        if config.emit == EmitTarget::Tokens:
-            let output = config.output_path.as_ref().unwrap()
-            let mut token_str = String::new()
-            for tok in &tokens:
-                token_str.push_str(&format("{:?}\n", tok))
-            std::fs::write(output, &token_str).unwrap_or(())
-            return result
+        // Emit AST if requested
+        if config.emit == EmitTarget::AST or config.dump_ast:
+            let ast_str = format("{:#?}", program)
+            if config.emit == EmitTarget::AST:
+                let output = config.output_path.as_ref().unwrap()
+                std::fs::write(output, &ast_str).unwrap_or(())
+                return result
+            if config.dump_ast:
+                eprintln("{}", ast_str)
 
-        all_tokens.extend(tokens)
+        result.timings.insert("parsing".to_string(), elapsed(parse_start))
 
-    result.timings.insert("lexing".to_string(), elapsed(lex_start))
+        // ================================================================
+        // Phase 3: Semantic Analysis
+        // ================================================================
+        let sem_start = std::time::now()
 
-    // ================================================================
-    // Phase 2: Parsing
-    // ================================================================
-    let parse_start = std::time::now()
+        if config.verbose:
+            println("  analyzing...")
 
-    if config.verbose:
-        println("  parsing...")
+        let (type_table, sem_errors) = analyze(&program)
 
-    let (program, parse_errors) = parse(&all_tokens)
+        report_sem_errors(&sem_errors, &config, &mut result)
 
-    if not parse_errors.is_empty():
-        for err in &parse_errors:
-            result.errors.push(format("parse error: {}", err.message))
-        if result.errors.len() >= config.max_errors as usize:
+        if not result.errors.is_empty():
             result.success = false
-            return result
-
-    // Emit AST if requested
-    if config.emit == EmitTarget::AST or config.dump_ast:
-        let ast_str = format("{:#?}", program)
-        if config.emit == EmitTarget::AST:
-            let output = config.output_path.as_ref().unwrap()
-            std::fs::write(output, &ast_str).unwrap_or(())
-            return result
-        if config.dump_ast:
-            eprintln("{}", ast_str)
-
-    result.timings.insert("parsing".to_string(), elapsed(parse_start))
-
-    // ================================================================
-    // Phase 3: Semantic Analysis
-    // ================================================================
-    let sem_start = std::time::now()
-
-    if config.verbose:
-        println("  analyzing...")
-
-    let (type_table, sem_errors) = analyze(&program)
-
-    report_sem_errors(&sem_errors, &config, &mut result)
-
-    if not result.errors.is_empty():
-        result.success = false
-        if config.check_only:
-            return result
-
-    if config.check_only:
-        println("✓ type-check passed ({} warnings)", result.warnings.len())
-        return result
-
-    result.timings.insert("semantic".to_string(), elapsed(sem_start))
-
-    // ================================================================
-    // Phase 4: IR Generation
-    // ================================================================
-    let ir_start = std::time::now()
-
-    if config.verbose:
-        println("  generating IR...")
-
-    let mut ir_module = build_ir(&program, &type_table)
-
-    // Emit raw IR if requested
-    if config.emit == EmitTarget::IR or config.dump_ir:
-        let ir_str = format("{:#?}", ir_module)
-        if config.emit == EmitTarget::IR:
-            let output = config.output_path.as_ref().unwrap()
-            std::fs::write(output, &ir_str).unwrap_or(())
-            return result
-        else:
-            eprintln("{}", ir_str)
-
-    result.timings.insert("ir_gen".to_string(), elapsed(ir_start))
-
-    // ================================================================
-    // Phase 5: Optimization
-    // ================================================================
-    let opt_start = std::time::now()
-
-    if config.verbose:
-        println("  optimizing (level {:?})...", config.opt_level)
-
-    let opt_results = optimize_with_level(&mut ir_module, config.opt_level.to_int())
-
-    if config.verbose:
-        for r in &opt_results:
-            if r.changed:
-                println("    {:?}: {} removed, {} added",
-                    r.pass_kind, r.stats.instructions_removed, r.stats.instructions_added)
-
-    result.timings.insert("optimization".to_string(), elapsed(opt_start))
-
-    // ================================================================
-    // Phase 6: Code Generation
-    // ================================================================
-    let codegen_start = std::time::now()
-
-    if config.verbose:
-        println("  generating code...")
-
-    let output_path = config.output_path.as_ref().unwrap().clone()
-
-    if config.emit == EmitTarget::Executable or config.emit == EmitTarget::Object:
-        let obj_path = if config.emit == EmitTarget::Executable:
-            format("{}.o", output_path)
-        else:
-            output_path.clone()
-
-        match generate_llvm(&ir_module, obj_path.clone(), config.opt_level.to_int() as i32):
-            Ok(()) => pass
-            Err(e) =>
-                result.errors.push(format("codegen error: {}", e))
-                result.success = false
+            if config.check_only:
                 return result
 
-        if config.emit == EmitTarget::Executable:
-            // Link
-            let link_start = std::time::now()
-            if config.verbose:
-                println("  linking...")
+        if config.check_only:
+            println("✓ type-check passed ({} warnings)", result.warnings.len())
+            return result
 
-            let objects = Vector::from([obj_path.clone()])
-            match link_executable(&objects, output_path.clone(), config.debug_info):
+        result.timings.insert("semantic".to_string(), elapsed(sem_start))
+
+        // ================================================================
+        // Phase 4: IR Generation
+        // ================================================================
+        let ir_start = std::time::now()
+
+        if config.verbose:
+            println("  generating IR...")
+
+        let mut ir_module = build_ir(&program, &type_table)
+
+        // Emit raw IR if requested
+        if config.emit == EmitTarget::IR or config.dump_ir:
+            let ir_str = format("{:#?}", ir_module)
+            if config.emit == EmitTarget::IR:
+                let output = config.output_path.as_ref().unwrap()
+                std::fs::write(output, &ir_str).unwrap_or(())
+                return result
+            else:
+                eprintln("{}", ir_str)
+
+        result.timings.insert("ir_gen".to_string(), elapsed(ir_start))
+
+        // ================================================================
+        // Phase 5: Optimization
+        // ================================================================
+        let opt_start = std::time::now()
+
+        if config.verbose:
+            println("  optimizing (level {:?})...", config.opt_level)
+
+        let opt_results = optimize_with_level(&mut ir_module, config.opt_level.to_int())
+
+        if config.verbose:
+            for r in &opt_results:
+                if r.changed:
+                    println("    {:?}: {} removed, {} added",
+                        r.pass_kind, r.stats.instructions_removed, r.stats.instructions_added)
+
+        result.timings.insert("optimization".to_string(), elapsed(opt_start))
+
+        // ================================================================
+        // Phase 6: Code Generation
+        // ================================================================
+        let codegen_start = std::time::now()
+
+        if config.verbose:
+            println("  generating code...")
+
+        let output_path = config.output_path.as_ref().unwrap().clone()
+
+        if config.emit == EmitTarget::Executable or config.emit == EmitTarget::Object:
+            let obj_path = if config.emit == EmitTarget::Executable:
+                format("{}.o", output_path)
+            else:
+                output_path.clone()
+
+            match generate_llvm(&ir_module, obj_path.clone(), config.opt_level.to_int() as i32):
                 Ok(()) => pass
                 Err(e) =>
-                    result.errors.push(format("linker error: {}", e))
+                    result.errors.push(format("codegen error: {}", e))
                     result.success = false
                     return result
 
-            // Clean up temporary object file
-            std::fs::remove(obj_path).unwrap_or(())
+            if config.emit == EmitTarget::Executable:
+                // Link
+                let link_start = std::time::now()
+                if config.verbose:
+                    println("  linking...")
 
-            result.timings.insert("linking".to_string(), elapsed(link_start))
-
-    else:
-        if config.emit == EmitTarget::LLVMIR:
-            let ir_str = generate_llvm_ir(&ir_module)
-            std::fs::write(&output_path, &ir_str).unwrap_or(())
-        else:
-            if config.emit == EmitTarget::Assembly:
-                match generate_llvm(&ir_module, output_path.clone(), config.opt_level.to_int() as i32):
+                let objects = Vector::from([obj_path.clone()])
+                match link_executable(&objects, output_path.clone(), config.debug_info):
                     Ok(()) => pass
                     Err(e) =>
-                        result.errors.push(format("codegen error: {}", e))
+                        result.errors.push(format("linker error: {}", e))
                         result.success = false
+                        return result
+
+                // Clean up temporary object file
+                std::fs::remove(obj_path).unwrap_or(())
+
+                result.timings.insert("linking".to_string(), elapsed(link_start))
+
+        else:
+            if config.emit == EmitTarget::LLVMIR:
+                let ir_str = generate_llvm_ir(&ir_module)
+                std::fs::write(&output_path, &ir_str).unwrap_or(())
             else:
-                if config.emit == EmitTarget::Bytecode:
-                    match generate_ovm_bytecode(&ir_module, output_path.clone()):
+                if config.emit == EmitTarget::Assembly:
+                    match generate_llvm(&ir_module, output_path.clone(), config.opt_level.to_int() as i32):
                         Ok(()) => pass
                         Err(e) =>
-                            result.errors.push(format("bytecode gen error: {}", e))
+                            result.errors.push(format("codegen error: {}", e))
                             result.success = false
                 else:
-                    pass
+                    if config.emit == EmitTarget::Bytecode:
+                        match generate_ovm_bytecode(&ir_module, output_path.clone()):
+                            Ok(()) => pass
+                            Err(e) =>
+                                result.errors.push(format("bytecode gen error: {}", e))
+                                result.success = false
+                    else:
+                        pass
 
-    result.timings.insert("codegen".to_string(), elapsed(codegen_start))
+        result.timings.insert("codegen".to_string(), elapsed(codegen_start))
 
-    // ================================================================
-    // Summary
-    // ================================================================
-    let total_time = elapsed(start_time)
-    result.timings.insert("total".to_string(), total_time)
+        // ================================================================
+        // Summary
+        // ================================================================
+        let total_time = elapsed(start_time)
+        result.timings.insert("total".to_string(), total_time)
 
-    if config.print_timings:
-        println("\nCompilation timings:")
-        for (phase, time) in &result.timings:
-            println("  {:<15} {:>8.3}s", phase, time)
-        println("  {:<15} {:>8.3}s", "total", total_time)
+        if config.print_timings:
+            println("\nCompilation timings:")
+            for (phase, time) in &result.timings:
+                println("  {:<15} {:>8.3}s", phase, time)
+            println("  {:<15} {:>8.3}s", "total", total_time)
 
-    if result.success and config.verbose:
-        println("✓ compiled successfully -> {}", output_path)
+        if result.success and config.verbose:
+            println("✓ compiled successfully -> {}", output_path)
 
-    return result
+        return result
 
 fn elapsed(start: f64) -> f64:
     return std::time::now() - start

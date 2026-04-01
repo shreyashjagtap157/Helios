@@ -1,0 +1,16 @@
+// Simple Fibonacci example
+// Demonstrates: functions, recursion, variables, return statements
+
+fn fib(n: i64) -> i64 {
+    if n <= 1 {
+        return n;
+    } else {
+        let a = fib(n - 1);
+        let b = fib(n - 2);
+        return a + b;
+    }
+}
+
+fn main() -> i64 {
+    return fib(10);
+}

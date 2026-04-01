@@ -777,7 +777,7 @@ impl InferenceEngine {
             .collect();
         let ret_ty = match &func.return_type {
             Some(t) => self.from_ast_type(t),
-            None => Type::Void,
+            None => self.fresh_var(),
         };
 
         let func_ty = Type::Function(param_tys.clone(), Box::new(ret_ty.clone()));
@@ -804,7 +804,7 @@ impl InferenceEngine {
 
         let expected_ret = match &func.return_type {
             Some(t) => self.from_ast_type(t),
-            None => Type::Void,
+            None => self.fresh_var(),
         };
 
         // Infer each statement in the body
@@ -1130,6 +1130,11 @@ impl InferenceEngine {
             // -- Index --
             ast::Expression::Index(base, index) => {
                 let base_ty = self.infer_expr(base, env);
+                if matches!(index.as_ref(), ast::Expression::Range { .. }) {
+                    // Slicing returns a collection-like value rather than a scalar element.
+                    return base_ty;
+                }
+
                 let idx_ty = self.infer_expr(index, env);
                 self.constrain_numeric(&idx_ty, "array index");
                 let elem_ty = self.fresh_var();

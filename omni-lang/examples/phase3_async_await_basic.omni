@@ -1,0 +1,11 @@
+// Phase 3 gate: basic async/await support
+
+async fn compute() -> int:
+    return 42
+
+async fn fetch() -> int:
+    let v = await compute()
+    return v
+
+fn main():
+    println("async gate")

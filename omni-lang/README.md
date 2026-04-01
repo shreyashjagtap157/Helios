@@ -44,6 +44,29 @@ Omni is in **Phase 2: Core Functionality**. The language has:
 
 ## Quick Start
 
+### Deployable Stage-1 Compiler (Recommended Current Path)
+
+```bash
+# Build the standalone stage1 compiler
+cd stage1-compiler
+cargo build --release
+
+# Validate an Omni file through lexer/parser/semantics/IR
+./target/release/omni_stage1 check ../../examples/arithmetic.omni
+
+# Emit debug IR artifact
+./target/release/omni_stage1 emit-ir ../../examples/fibonacci.omni -o ../../build/fibonacci_stage1.oir
+```
+
+This path is currently the deployable baseline while advanced modules in `compiler/` are being stabilized.
+
+Stage1 regression test command:
+
+```bash
+cd stage1-compiler
+cargo test --release
+```
+
 ### Installation
 
 ```bash

@@ -1,0 +1,9 @@
+module compiler::main_minimal
+
+// Test: Add imports - using module-level instead of specific symbols
+import std::core
+import std::collections
+
+fn main():
+    print("Stage1: Minimal compiler started")
+    // TODO: Add minimal compiler logic

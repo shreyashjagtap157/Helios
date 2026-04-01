@@ -4,6 +4,8 @@
 
 # --- Rust Build Artifacts ---
 target/
+target_alt/
+**/target_alt/
 *.rlib
 *.rmeta
 Cargo.lock

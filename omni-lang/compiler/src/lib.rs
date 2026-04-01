@@ -28,14 +28,18 @@
 )]
 
 pub mod brain;
+#[path = "codegen/mod.rs"]
 pub mod codegen;
 pub mod diagnostics;
 pub mod enhancements;
+#[path = "ir/mod.rs"]
 pub mod ir;
+#[path = "lexer/mod.rs"]
 pub mod lexer;
 pub mod modes;
 pub mod monitor;
 pub mod optimizer;
+#[path = "parser/mod.rs"]
 pub mod parser;
 pub mod resolver;
 pub mod runtime;

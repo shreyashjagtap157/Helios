@@ -281,14 +281,20 @@ impl Parser {
             if &token.kind == kind {
                 Ok(self.advance().unwrap())
             } else {
-                let _hint = Self::suggest_hint(&token.lexeme);
+                let hint = if matches!(kind, TokenKind::RBracket)
+                    && matches!(token.kind, TokenKind::Semicolon)
+                {
+                    Some("Ensure array size is followed by ']'".to_string())
+                } else {
+                    Self::suggest_hint(&token.lexeme)
+                };
                 Err(ParseError::UnexpectedToken {
                     line: self.tokens[self.current].line,
                     column: self.tokens[self.current].column,
-                    expected: "]".to_string(),
-                    got: ";".to_string(),
+                    expected: format!("{:?}", kind),
+                    got: format!("{:?}", token.kind),
                     code: ParseErrorCode::UnexpectedToken,
-                    hint: Some("Ensure array size is followed by ']'".to_string()),
+                    hint,
                 })
             }
         } else {
@@ -507,6 +513,7 @@ impl Parser {
             Some(TokenKind::Struct) => self.parse_struct(attributes),
             Some(TokenKind::Enum) => self.parse_enum(attributes),
             Some(TokenKind::Fn) => self.parse_function(attributes),
+            Some(TokenKind::Async) => self.parse_function(attributes),
             Some(TokenKind::Trait) => self.parse_trait(attributes),
             Some(TokenKind::Impl) => self.parse_impl(attributes),
             Some(TokenKind::Import) => self.parse_import(),
@@ -699,15 +706,23 @@ impl Parser {
 
             while !matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
                 self.skip_newlines();
+                if self.peek().is_none() {
+                    break;
+                }
                 if matches!(self.peek_kind(), Some(TokenKind::Fn)) {
                     methods.push(self.parse_method()?);
                 } else if matches!(self.peek_kind(), Some(TokenKind::Identifier)) {
                     fields.push(self.parse_field()?);
                 } else if matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
                     break;
+                } else {
+                    // Forward progress on unsupported/unknown members.
+                    self.advance();
                 }
             }
-            self.expect(&TokenKind::Dedent)?;
+            if matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+                self.expect(&TokenKind::Dedent)?;
+            }
         }
 
         Ok(Item::Struct(StructDef {
@@ -889,6 +904,7 @@ impl Parser {
 
         self.expect(&TokenKind::Fn)?;
         let name = self.parse_identifier()?;
+        self.skip_fn_generic_params()?;
         self.expect(&TokenKind::LParen)?;
         let params = self.parse_params()?;
         self.expect(&TokenKind::RParen)?;
@@ -942,6 +958,7 @@ impl Parser {
 
         self.expect(&TokenKind::Fn)?;
         let name = self.parse_identifier()?;
+        self.skip_fn_generic_params()?;
 
         self.expect(&TokenKind::LParen)?;
         let params = self.parse_params()?;
@@ -986,6 +1003,50 @@ impl Parser {
             return_type,
             body,
         })
+    }
+
+    /// Consume optional function generic parameter list: `fn name[T, U: Trait](...)`
+    ///
+    /// Current phase support is syntax-level only: generic parameter constraints are
+    /// accepted and skipped so parser can progress while semantic implementation evolves.
+    fn skip_fn_generic_params(&mut self) -> Result<(), ParseError> {
+        if !matches!(self.peek_kind(), Some(TokenKind::LBracket)) {
+            return Ok(());
+        }
+
+        self.expect(&TokenKind::LBracket)?;
+        let mut depth = 1usize;
+
+        while depth > 0 {
+            match self.peek_kind() {
+                Some(TokenKind::LBracket) => {
+                    self.advance();
+                    depth += 1;
+                }
+                Some(TokenKind::RBracket) => {
+                    self.advance();
+                    depth -= 1;
+                }
+                Some(_) => {
+                    self.advance();
+                }
+                None => {
+                    let (line, column) = self
+                        .peek()
+                        .map(|t| (t.line, t.column))
+                        .unwrap_or((0, 0));
+                    return Err(ParseError::InvalidSyntax {
+                        line,
+                        column,
+                        message: "Unterminated function generic parameter list".to_string(),
+                        code: ParseErrorCode::InvalidSyntax,
+                        hint: Some("close generic parameters with ']'".to_string()),
+                    });
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Parse function parameters
@@ -1096,6 +1157,12 @@ impl Parser {
             }
             Some(TokenKind::U16) => {
                 self.advance();
+                if self.peek().is_none() {
+                    return Err(ParseError::UnexpectedEof {
+                        code: ParseErrorCode::UnexpectedEof,
+                        hint: Some("expected item declaration before end of file".to_string()),
+                    });
+                }
                 Ok(Type::U16)
             }
             Some(TokenKind::U32) => {
@@ -1371,6 +1438,20 @@ impl Parser {
         Ok(Block { statements })
     }
 
+    /// Parse a control-flow block body that may be either:
+    /// - `{ ... }` brace-delimited, or
+    /// - `:\n` followed by an indented block.
+    fn parse_statement_body(&mut self) -> Result<Block, ParseError> {
+        if matches!(self.peek_kind(), Some(TokenKind::LBrace)) {
+            self.advance(); // consume '{'
+            self.parse_brace_block()
+        } else {
+            self.expect(&TokenKind::Colon)?;
+            self.expect(&TokenKind::Newline)?;
+            self.parse_block()
+        }
+    }
+
     /// Parse a statement
     fn parse_statement(&mut self) -> Result<Statement, ParseError> {
         self.skip_newlines();
@@ -1478,7 +1559,22 @@ impl Parser {
     /// Parse var statement (mutable variable declaration)
     fn parse_var(&mut self) -> Result<Statement, ParseError> {
         self.expect(&TokenKind::Var)?;
-        let name = self.parse_identifier()?;
+        let name = if matches!(self.peek_kind(), Some(TokenKind::LParen)) {
+            self.advance();
+            let mut names = Vec::new();
+            while !matches!(self.peek_kind(), Some(TokenKind::RParen)) {
+                names.push(self.parse_identifier()?);
+                if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            self.expect(&TokenKind::RParen)?;
+            format!("({})", names.join(", "))
+        } else {
+            self.parse_identifier()?
+        };
 
         let ty = if matches!(self.peek_kind(), Some(TokenKind::Colon)) {
             self.advance();
@@ -1501,9 +1597,7 @@ impl Parser {
     /// Parse loop statement
     fn parse_loop(&mut self) -> Result<Statement, ParseError> {
         self.expect(&TokenKind::Loop)?;
-        self.expect(&TokenKind::Colon)?;
-        self.expect(&TokenKind::Newline)?;
-        let body = self.parse_block()?;
+        let body = self.parse_statement_body()?;
         Ok(Statement::Loop { body })
     }
 
@@ -1582,7 +1676,22 @@ impl Parser {
             self.advance();
         }
 
-        let name = self.parse_identifier()?;
+        let name = if matches!(self.peek_kind(), Some(TokenKind::LParen)) {
+            self.advance();
+            let mut names = Vec::new();
+            while !matches!(self.peek_kind(), Some(TokenKind::RParen)) {
+                names.push(self.parse_identifier()?);
+                if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            self.expect(&TokenKind::RParen)?;
+            format!("({})", names.join(", "))
+        } else {
+            self.parse_identifier()?
+        };
 
         let ty = if matches!(self.peek_kind(), Some(TokenKind::Colon)) {
             self.advance();
@@ -1623,17 +1732,15 @@ impl Parser {
     fn parse_if(&mut self) -> Result<Statement, ParseError> {
         self.expect(&TokenKind::If)?;
         let condition = self.parse_expression()?;
-        self.expect(&TokenKind::Colon)?;
-        self.expect(&TokenKind::Newline)?;
-        let then_block = self.parse_block()?;
+        let then_block = self.parse_statement_body()?;
+        self.skip_newlines();
 
         // O-004: Handle elif chains by desugaring to nested else { if ... }
         let else_block = if matches!(self.peek_kind(), Some(TokenKind::Elif)) {
             self.advance(); // consume 'elif'
             let elif_condition = self.parse_expression()?;
-            self.expect(&TokenKind::Colon)?;
-            self.expect(&TokenKind::Newline)?;
-            let elif_then = self.parse_block()?;
+            let elif_then = self.parse_statement_body()?;
+            self.skip_newlines();
 
             // Recursively handle further elif/else chains
             let elif_else = if matches!(self.peek_kind(), Some(TokenKind::Elif)) {
@@ -1646,9 +1753,7 @@ impl Parser {
                 })
             } else if matches!(self.peek_kind(), Some(TokenKind::Else)) {
                 self.advance();
-                self.expect(&TokenKind::Colon)?;
-                self.expect(&TokenKind::Newline)?;
-                Some(self.parse_block()?)
+                Some(self.parse_statement_body()?)
             } else {
                 None
             };
@@ -1662,9 +1767,7 @@ impl Parser {
             })
         } else if matches!(self.peek_kind(), Some(TokenKind::Else)) {
             self.advance();
-            self.expect(&TokenKind::Colon)?;
-            self.expect(&TokenKind::Newline)?;
-            Some(self.parse_block()?)
+            Some(self.parse_statement_body()?)
         } else {
             None
         };
@@ -1680,9 +1783,8 @@ impl Parser {
     fn parse_elif_chain(&mut self) -> Result<Statement, ParseError> {
         self.expect(&TokenKind::Elif)?;
         let condition = self.parse_expression()?;
-        self.expect(&TokenKind::Colon)?;
-        self.expect(&TokenKind::Newline)?;
-        let then_block = self.parse_block()?;
+        let then_block = self.parse_statement_body()?;
+        self.skip_newlines();
 
         let else_block = if matches!(self.peek_kind(), Some(TokenKind::Elif)) {
             let inner = self.parse_elif_chain()?;
@@ -1691,9 +1793,7 @@ impl Parser {
             })
         } else if matches!(self.peek_kind(), Some(TokenKind::Else)) {
             self.advance();
-            self.expect(&TokenKind::Colon)?;
-            self.expect(&TokenKind::Newline)?;
-            Some(self.parse_block()?)
+            Some(self.parse_statement_body()?)
         } else {
             None
         };
@@ -1728,9 +1828,7 @@ impl Parser {
         };
         self.expect(&TokenKind::In)?;
         let iter = self.parse_expression()?;
-        self.expect(&TokenKind::Colon)?;
-        self.expect(&TokenKind::Newline)?;
-        let body = self.parse_block()?;
+        let body = self.parse_statement_body()?;
 
         Ok(Statement::For { var, iter, body })
     }
@@ -1739,9 +1837,7 @@ impl Parser {
     fn parse_while(&mut self) -> Result<Statement, ParseError> {
         self.expect(&TokenKind::While)?;
         let condition = self.parse_expression()?;
-        self.expect(&TokenKind::Colon)?;
-        self.expect(&TokenKind::Newline)?;
-        let body = self.parse_block()?;
+        let body = self.parse_statement_body()?;
 
         Ok(Statement::While { condition, body })
     }
@@ -1782,12 +1878,17 @@ impl Parser {
             match self.peek_kind() {
                 Some(TokenKind::FatArrow) => {
                     self.advance();
-                    let expr = self.parse_expression()?;
-                    self.skip_newlines();
-                    arms.push(MatchArm {
-                        pattern,
-                        body: MatchBody::Expr(expr),
-                    });
+                    if matches!(self.peek_kind(), Some(TokenKind::Newline)) {
+                        self.advance();
+                        let body = self.parse_block()?;
+                        arms.push(MatchArm {
+                            pattern,
+                            body: MatchBody::Block(body),
+                        });
+                    } else {
+                        let body = self.parse_inline_match_arm_body()?;
+                        arms.push(MatchArm { pattern, body });
+                    }
                 }
                 Some(TokenKind::Colon) => {
                     self.advance();
@@ -1800,12 +1901,8 @@ impl Parser {
                             body: MatchBody::Block(body),
                         });
                     } else {
-                        let expr = self.parse_expression()?;
-                        self.skip_newlines();
-                        arms.push(MatchArm {
-                            pattern,
-                            body: MatchBody::Expr(expr),
-                        });
+                        let body = self.parse_inline_match_arm_body()?;
+                        arms.push(MatchArm { pattern, body });
                     }
                 }
                 _ => {
@@ -1825,12 +1922,112 @@ impl Parser {
         Ok(Statement::Match { expr, arms })
     }
 
+    fn parse_inline_match_arm_body(&mut self) -> Result<MatchBody, ParseError> {
+        let starts_stmt = matches!(
+            self.peek_kind(),
+            Some(TokenKind::Let)
+                | Some(TokenKind::Var)
+                | Some(TokenKind::Return)
+                | Some(TokenKind::If)
+                | Some(TokenKind::For)
+                | Some(TokenKind::While)
+                | Some(TokenKind::Loop)
+                | Some(TokenKind::Match)
+                | Some(TokenKind::Defer)
+                | Some(TokenKind::Break)
+                | Some(TokenKind::Continue)
+                | Some(TokenKind::Pass)
+                | Some(TokenKind::Yield)
+                | Some(TokenKind::Spawn)
+                | Some(TokenKind::Select)
+        );
+
+        if starts_stmt {
+            let stmt = self.parse_statement()?;
+            return Ok(MatchBody::Block(Block {
+                statements: vec![stmt],
+            }));
+        }
+
+        let expr = self.parse_expression()?;
+        match self.peek_kind() {
+            Some(TokenKind::Eq) => {
+                self.advance();
+                let value = self.parse_expression()?;
+                self.skip_newlines();
+                Ok(MatchBody::Block(Block {
+                    statements: vec![Statement::Assignment {
+                        target: expr,
+                        op: None,
+                        value,
+                    }],
+                }))
+            }
+            Some(TokenKind::PlusEq) => {
+                self.advance();
+                let value = self.parse_expression()?;
+                self.skip_newlines();
+                Ok(MatchBody::Block(Block {
+                    statements: vec![Statement::Assignment {
+                        target: expr,
+                        op: Some(BinaryOp::Add),
+                        value,
+                    }],
+                }))
+            }
+            Some(TokenKind::MinusEq) => {
+                self.advance();
+                let value = self.parse_expression()?;
+                self.skip_newlines();
+                Ok(MatchBody::Block(Block {
+                    statements: vec![Statement::Assignment {
+                        target: expr,
+                        op: Some(BinaryOp::Sub),
+                        value,
+                    }],
+                }))
+            }
+            Some(TokenKind::StarEq) => {
+                self.advance();
+                let value = self.parse_expression()?;
+                self.skip_newlines();
+                Ok(MatchBody::Block(Block {
+                    statements: vec![Statement::Assignment {
+                        target: expr,
+                        op: Some(BinaryOp::Mul),
+                        value,
+                    }],
+                }))
+            }
+            Some(TokenKind::SlashEq) => {
+                self.advance();
+                let value = self.parse_expression()?;
+                self.skip_newlines();
+                Ok(MatchBody::Block(Block {
+                    statements: vec![Statement::Assignment {
+                        target: expr,
+                        op: Some(BinaryOp::Div),
+                        value,
+                    }],
+                }))
+            }
+            _ => {
+                self.skip_newlines();
+                Ok(MatchBody::Expr(expr))
+            }
+        }
+    }
+
     /// Parse a pattern
     fn parse_pattern(&mut self) -> Result<Pattern, ParseError> {
         match self.peek_kind() {
             Some(TokenKind::LParen) => {
                 // Parenthesized pattern: (pat)
                 self.advance();
+                if matches!(self.peek_kind(), Some(TokenKind::RParen)) {
+                    self.advance();
+                    return Ok(Pattern::Constructor("()".to_string(), vec![]));
+                }
                 let pat = self.parse_pattern()?;
                 self.expect(&TokenKind::RParen)?;
                 // Optional `as Type` cast in patterns — consume for now
@@ -1851,6 +2048,12 @@ impl Parser {
                     } else if matches!(self.peek_kind(), Some(TokenKind::None_)) {
                         self.advance();
                         name = format!("{}::{}", name, "None");
+                    } else if matches!(self.peek_kind(), Some(TokenKind::Ok_)) {
+                        self.advance();
+                        name = format!("{}::{}", name, "Ok");
+                    } else if matches!(self.peek_kind(), Some(TokenKind::Err_)) {
+                        self.advance();
+                        name = format!("{}::{}", name, "Err");
                     } else {
                         let member = self.parse_identifier()?;
                         name = format!("{}::{}", name, member);
@@ -1869,6 +2072,9 @@ impl Parser {
                     self.expect(&TokenKind::RParen)?;
                     Ok(Pattern::Constructor(name, fields))
                 } else {
+                    if name == "_" {
+                        return Ok(Pattern::Wildcard);
+                    }
                     // Optional `as Type` cast in binding patterns
                     if matches!(self.peek_kind(), Some(TokenKind::As)) {
                         self.advance();
@@ -1936,6 +2142,40 @@ impl Parser {
                 self.advance();
                 Ok(Pattern::Constructor("None".to_string(), vec![]))
             }
+            Some(TokenKind::Ok_) => {
+                self.advance();
+                if matches!(self.peek_kind(), Some(TokenKind::LParen)) {
+                    self.advance();
+                    let mut fields = Vec::new();
+                    while !matches!(self.peek_kind(), Some(TokenKind::RParen)) {
+                        fields.push(self.parse_pattern()?);
+                        if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+                            self.advance();
+                        }
+                    }
+                    self.expect(&TokenKind::RParen)?;
+                    Ok(Pattern::Constructor("Ok".to_string(), fields))
+                } else {
+                    Ok(Pattern::Constructor("Ok".to_string(), vec![]))
+                }
+            }
+            Some(TokenKind::Err_) => {
+                self.advance();
+                if matches!(self.peek_kind(), Some(TokenKind::LParen)) {
+                    self.advance();
+                    let mut fields = Vec::new();
+                    while !matches!(self.peek_kind(), Some(TokenKind::RParen)) {
+                        fields.push(self.parse_pattern()?);
+                        if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+                            self.advance();
+                        }
+                    }
+                    self.expect(&TokenKind::RParen)?;
+                    Ok(Pattern::Constructor("Err".to_string(), fields))
+                } else {
+                    Ok(Pattern::Constructor("Err".to_string(), vec![]))
+                }
+            }
             _ => {
                 let token = self.peek().unwrap();
                 Err(ParseError::InvalidSyntax {
@@ -1954,6 +2194,124 @@ impl Parser {
         self.parse_binary(0)
     }
 
+    fn parse_if_expression(&mut self) -> Result<Expression, ParseError> {
+        self.expect(&TokenKind::If)?;
+        let condition = self.parse_expression()?;
+        self.expect(&TokenKind::Colon)?;
+
+        let then_expr = if matches!(self.peek_kind(), Some(TokenKind::Newline)) {
+            self.advance();
+            self.expect(&TokenKind::Indent)?;
+            let expr = self.parse_expression()?;
+            self.skip_newlines();
+            self.expect(&TokenKind::Dedent)?;
+            expr
+        } else {
+            self.parse_expression()?
+        };
+
+        let else_expr = if matches!(self.peek_kind(), Some(TokenKind::Else)) {
+            self.advance();
+            self.expect(&TokenKind::Colon)?;
+            let expr = if matches!(self.peek_kind(), Some(TokenKind::Newline)) {
+                self.advance();
+                self.expect(&TokenKind::Indent)?;
+                let e = self.parse_expression()?;
+                self.skip_newlines();
+                self.expect(&TokenKind::Dedent)?;
+                e
+            } else {
+                self.parse_expression()?
+            };
+            Some(Box::new(expr))
+        } else {
+            None
+        };
+
+        Ok(Expression::If {
+            condition: Box::new(condition),
+            then_expr: Box::new(then_expr),
+            else_expr,
+        })
+    }
+
+    fn parse_match_expression(&mut self) -> Result<Expression, ParseError> {
+        self.expect(&TokenKind::Match)?;
+        let expr = self.parse_expression()?;
+        self.expect(&TokenKind::Colon)?;
+        self.expect(&TokenKind::Newline)?;
+        self.expect(&TokenKind::Indent)?;
+
+        let mut arms = Vec::new();
+        while !matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+            self.skip_newlines();
+
+            while matches!(self.peek_kind(), Some(TokenKind::Hash)) {
+                let _ = self.parse_attribute()?;
+                self.skip_newlines();
+            }
+
+            let pattern = self.parse_pattern()?;
+            let pattern = if matches!(self.peek_kind(), Some(TokenKind::Pipe)) {
+                let mut alternatives = vec![pattern];
+                while matches!(self.peek_kind(), Some(TokenKind::Pipe)) {
+                    self.advance();
+                    alternatives.push(self.parse_pattern()?);
+                }
+                Pattern::Or(alternatives)
+            } else {
+                pattern
+            };
+
+            match self.peek_kind() {
+                Some(TokenKind::FatArrow) => {
+                    self.advance();
+                    if matches!(self.peek_kind(), Some(TokenKind::Newline)) {
+                        self.advance();
+                        let body = self.parse_block()?;
+                        arms.push(MatchArm {
+                            pattern,
+                            body: MatchBody::Block(body),
+                        });
+                    } else {
+                        let body = self.parse_inline_match_arm_body()?;
+                        arms.push(MatchArm { pattern, body });
+                    }
+                }
+                Some(TokenKind::Colon) => {
+                    self.advance();
+                    if matches!(self.peek_kind(), Some(TokenKind::Newline)) {
+                        self.advance();
+                        let body = self.parse_block()?;
+                        arms.push(MatchArm {
+                            pattern,
+                            body: MatchBody::Block(body),
+                        });
+                    } else {
+                        let body = self.parse_inline_match_arm_body()?;
+                        arms.push(MatchArm { pattern, body });
+                    }
+                }
+                _ => {
+                    let token = self.peek().unwrap();
+                    return Err(ParseError::InvalidSyntax {
+                        line: token.line,
+                        column: token.column,
+                        message: format!("Expected ':' or '=>', got {:?}", token.kind),
+                        code: ParseErrorCode::InvalidSyntax,
+                        hint: None,
+                    });
+                }
+            }
+        }
+
+        self.expect(&TokenKind::Dedent)?;
+        Ok(Expression::Match {
+            expr: Box::new(expr),
+            arms,
+        })
+    }
+
     fn parse_binary(&mut self, min_prec: u8) -> Result<Expression, ParseError> {
         let mut left = self.parse_unary()?;
 
@@ -1963,6 +2321,25 @@ impl Parser {
                 break;
             }
             self.advance();
+            if matches!(op, BinaryOp::Range | BinaryOp::RangeInclusive)
+                && matches!(
+                    self.peek_kind(),
+                    Some(TokenKind::RBracket)
+                        | Some(TokenKind::RParen)
+                        | Some(TokenKind::Comma)
+                        | Some(TokenKind::Colon)
+                        | Some(TokenKind::Newline)
+                        | Some(TokenKind::Dedent)
+                        | None
+                )
+            {
+                left = Expression::Range {
+                    start: Some(Box::new(left)),
+                    end: None,
+                    inclusive: matches!(op, BinaryOp::RangeInclusive),
+                };
+                continue;
+            }
             let right = self.parse_binary(prec + 1)?;
             left = Expression::Binary(Box::new(left), op, Box::new(right));
         }
@@ -2020,14 +2397,50 @@ impl Parser {
                 let expr = self.parse_unary()?;
                 Ok(Expression::Deref(Box::new(expr)))
             }
+            Some(TokenKind::Await) => {
+                self.advance();
+                let expr = self.parse_unary()?;
+                Ok(Expression::Await(Box::new(expr)))
+            }
             _ => self.parse_postfix(),
         }
     }
 
     fn parse_postfix(&mut self) -> Result<Expression, ParseError> {
         let mut expr = self.parse_primary()?;
+        let mut continuation_indent_depth = 0usize;
 
         loop {
+            if matches!(self.peek_kind(), Some(TokenKind::Newline)) {
+                let mut lookahead = self.current;
+                while matches!(self.tokens.get(lookahead).map(|t| &t.kind), Some(TokenKind::Newline))
+                {
+                    lookahead += 1;
+                }
+                let mut extra_indent = 0usize;
+                while matches!(self.tokens.get(lookahead).map(|t| &t.kind), Some(TokenKind::Indent)) {
+                    lookahead += 1;
+                    extra_indent += 1;
+                }
+                let continues_postfix = matches!(
+                    self.tokens.get(lookahead).map(|t| &t.kind),
+                    Some(TokenKind::Dot)
+                        | Some(TokenKind::LParen)
+                        | Some(TokenKind::LBracket)
+                        | Some(TokenKind::DoubleColon)
+                );
+                if continues_postfix {
+                    while matches!(self.peek_kind(), Some(TokenKind::Newline)) {
+                        self.advance();
+                    }
+                    for _ in 0..extra_indent {
+                        self.expect(&TokenKind::Indent)?;
+                    }
+                    continuation_indent_depth += extra_indent;
+                    continue;
+                }
+            }
+
             match self.peek_kind() {
                 Some(TokenKind::Dot) => {
                     self.advance();
@@ -2042,8 +2455,25 @@ impl Parser {
                     if matches!(self.peek_kind(), Some(TokenKind::LParen)) {
                         // Method call
                         self.advance();
-                        let args = self.parse_call_args()?;
+                        let (args, mut call_indent_depth) = self.parse_call_args()?;
+                        loop {
+                            self.skip_newlines();
+                            if matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+                                self.advance();
+                                continue;
+                            }
+                            break;
+                        }
                         self.expect(&TokenKind::RParen)?;
+                        while call_indent_depth > 0 {
+                            self.skip_newlines();
+                            if matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+                                self.advance();
+                                call_indent_depth -= 1;
+                                continue;
+                            }
+                            break;
+                        }
                         expr = Expression::MethodCall {
                             receiver: Box::new(expr),
                             method: field,
@@ -2055,8 +2485,25 @@ impl Parser {
                 }
                 Some(TokenKind::LParen) => {
                     self.advance();
-                    let args = self.parse_call_args()?;
+                    let (args, mut call_indent_depth) = self.parse_call_args()?;
+                    loop {
+                        self.skip_newlines();
+                        if matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+                            self.advance();
+                            continue;
+                        }
+                        break;
+                    }
                     self.expect(&TokenKind::RParen)?;
+                    while call_indent_depth > 0 {
+                        self.skip_newlines();
+                        if matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+                            self.advance();
+                            call_indent_depth -= 1;
+                            continue;
+                        }
+                        break;
+                    }
                     expr = Expression::Call(Box::new(expr), args);
                 }
                 Some(TokenKind::LBracket) => {
@@ -2067,25 +2514,103 @@ impl Parser {
                 }
                 Some(TokenKind::DoubleColon) => {
                     self.advance();
+                    if matches!(self.peek_kind(), Some(TokenKind::Lt)) {
+                        self.skip_turbofish_args()?;
+                        continue;
+                    }
                     let member = self.parse_identifier()?;
                     expr = Expression::Path(Box::new(expr), member);
                 }
+                Some(TokenKind::As) => {
+                    // Syntax-level cast support: consume `as Type` and keep
+                    // the expression unchanged until semantic cast lowering is added.
+                    self.advance();
+                    let _ = self.parse_type()?;
+                }
                 _ => break,
+            }
+        }
+
+        if continuation_indent_depth > 0 {
+            while matches!(self.peek_kind(), Some(TokenKind::Newline)) {
+                self.advance();
+            }
+            while continuation_indent_depth > 0
+                && matches!(self.peek_kind(), Some(TokenKind::Dedent))
+            {
+                self.advance();
+                continuation_indent_depth -= 1;
             }
         }
 
         Ok(expr)
     }
 
-    fn parse_call_args(&mut self) -> Result<Vec<Expression>, ParseError> {
-        let mut args = Vec::new();
-        while !matches!(self.peek_kind(), Some(TokenKind::RParen)) {
-            args.push(self.parse_expression()?);
-            if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
-                self.advance();
+    fn skip_turbofish_args(&mut self) -> Result<(), ParseError> {
+        self.expect(&TokenKind::Lt)?;
+        let mut depth = 1usize;
+
+        while depth > 0 {
+            match self.peek_kind() {
+                Some(TokenKind::Lt) => {
+                    self.advance();
+                    depth += 1;
+                }
+                Some(TokenKind::Gt) => {
+                    self.advance();
+                    depth -= 1;
+                }
+                Some(TokenKind::Shr) => {
+                    self.advance();
+                    if depth >= 2 {
+                        depth -= 2;
+                    } else {
+                        depth = 0;
+                    }
+                }
+                Some(_) => {
+                    self.advance();
+                }
+                None => {
+                    return Err(ParseError::UnexpectedEof {
+                        code: ParseErrorCode::UnexpectedEof,
+                        hint: Some("unterminated generic argument list after '::<'".to_string()),
+                    });
+                }
             }
         }
-        Ok(args)
+
+        Ok(())
+    }
+
+    fn parse_call_args(&mut self) -> Result<(Vec<Expression>, usize), ParseError> {
+        let mut args = Vec::new();
+        let mut continuation_indent_depth = 0usize;
+        loop {
+            self.skip_newlines();
+            while matches!(self.peek_kind(), Some(TokenKind::Indent)) {
+                self.advance();
+                continuation_indent_depth += 1;
+                self.skip_newlines();
+            }
+            if matches!(self.peek_kind(), Some(TokenKind::RParen)) {
+                break;
+            }
+            args.push(self.parse_expression()?);
+            self.skip_newlines();
+            while matches!(self.peek_kind(), Some(TokenKind::Indent)) {
+                self.advance();
+                continuation_indent_depth += 1;
+                self.skip_newlines();
+            }
+            if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+                self.advance();
+                self.skip_newlines();
+                continue;
+            }
+            break;
+        }
+        Ok((args, continuation_indent_depth))
     }
 
     fn parse_primary(&mut self) -> Result<Expression, ParseError> {
@@ -2132,6 +2657,8 @@ impl Parser {
                 self.advance();
                 Ok(Expression::Literal(Literal::Bool(false)))
             }
+            Some(TokenKind::If) => self.parse_if_expression(),
+            Some(TokenKind::Match) => self.parse_match_expression(),
             Some(TokenKind::None_) => {
                 self.advance();
                 Ok(Expression::Literal(Literal::Null))
@@ -2329,6 +2856,44 @@ impl Parser {
                 let expr = self.parse_unary()?;
                 Ok(Expression::Own(Box::new(expr)))
             }
+            Some(TokenKind::DotDot) => {
+                self.advance();
+                let end = if matches!(self.peek_kind(), Some(TokenKind::RBracket))
+                    || matches!(self.peek_kind(), Some(TokenKind::RParen))
+                    || matches!(self.peek_kind(), Some(TokenKind::Comma))
+                    || matches!(self.peek_kind(), Some(TokenKind::Newline))
+                    || matches!(self.peek_kind(), Some(TokenKind::Dedent))
+                    || self.peek().is_none()
+                {
+                    None
+                } else {
+                    Some(Box::new(self.parse_expression()?))
+                };
+                Ok(Expression::Range {
+                    start: None,
+                    end,
+                    inclusive: false,
+                })
+            }
+            Some(TokenKind::DotDotEq) => {
+                self.advance();
+                let end = if matches!(self.peek_kind(), Some(TokenKind::RBracket))
+                    || matches!(self.peek_kind(), Some(TokenKind::RParen))
+                    || matches!(self.peek_kind(), Some(TokenKind::Comma))
+                    || matches!(self.peek_kind(), Some(TokenKind::Newline))
+                    || matches!(self.peek_kind(), Some(TokenKind::Dedent))
+                    || self.peek().is_none()
+                {
+                    None
+                } else {
+                    Some(Box::new(self.parse_expression()?))
+                };
+                Ok(Expression::Range {
+                    start: None,
+                    end,
+                    inclusive: true,
+                })
+            }
             _ => {
                 if let Some(token) = self.peek() {
                     let hint = Self::suggest_hint(&token.lexeme);
@@ -2420,11 +2985,21 @@ impl Parser {
 
             while !matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
                 self.skip_newlines();
+                if self.peek().is_none() {
+                    break;
+                }
                 if matches!(self.peek_kind(), Some(TokenKind::Fn)) {
                     methods.push(self.parse_method()?);
+                } else if matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+                    break;
+                } else {
+                    // Forward progress on unsupported/unknown members.
+                    self.advance();
                 }
             }
-            self.expect(&TokenKind::Dedent)?;
+            if matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+                self.expect(&TokenKind::Dedent)?;
+            }
         }
 
         Ok(Item::Trait(TraitDef {
@@ -2491,11 +3066,21 @@ impl Parser {
 
             while !matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
                 self.skip_newlines();
+                if self.peek().is_none() {
+                    break;
+                }
                 if matches!(self.peek_kind(), Some(TokenKind::Fn)) {
                     methods.push(self.parse_method()?);
+                } else if matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+                    break;
+                } else {
+                    // Forward progress on unsupported/unknown members.
+                    self.advance();
                 }
             }
-            self.expect(&TokenKind::Dedent)?;
+            if matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+                self.expect(&TokenKind::Dedent)?;
+            }
         }
 
         Ok(Item::Impl(ImplBlock {
@@ -2787,4 +3372,319 @@ pub fn parse_with_recovery(
         }
     };
     (module, parser.errors)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lexer::tokenize;
+
+    fn parse_src(source: &str) -> (Module, Vec<ParseError>) {
+        let tokens = tokenize(source).expect("tokenize should succeed");
+        parse_with_recovery(tokens, None)
+    }
+
+    #[test]
+    fn multiline_postfix_chain_with_indent_parses() {
+        let source = r#"module test
+
+fn chain() -> str:
+    let base = "a/b.omni"
+        .rsplit('/')
+        .next()
+        .unwrap_or("x")
+    return base
+"#;
+
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "unexpected parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn statement_match_fatarrow_block_arm_parses() {
+        let source = r#"module test
+
+fn stmt_match(x: str) -> i32:
+    let mut y = 0
+    match x:
+        "a" =>
+            y += 1
+            y += 2
+        "b" => y
+    return y
+"#;
+
+        let (module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "unexpected parse errors: {:?}", errors);
+
+        let mut saw_block_arm = false;
+        for item in module.items {
+            if let Item::Function(func) = item {
+                for stmt in func.body.statements {
+                    if let Statement::Match { arms, .. } = stmt {
+                        saw_block_arm = arms.iter().any(|a| matches!(a.body, MatchBody::Block(_)));
+                    }
+                }
+            }
+        }
+
+        assert!(saw_block_arm, "expected at least one block-bodied match arm");
+    }
+
+    #[test]
+    fn expression_match_in_assignment_parses() {
+        let source = r#"module test
+
+fn expr_match(x: str) -> i32:
+    let y = match x:
+        "a" => 1
+        "b" => 2
+    return y
+"#;
+
+        let (module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "unexpected parse errors: {:?}", errors);
+
+        let mut found_expr_match = false;
+        for item in module.items {
+            if let Item::Function(func) = item {
+                for stmt in func.body.statements {
+                    if let Statement::Let { value, .. } = stmt {
+                        if matches!(value, Some(Expression::Match { .. })) {
+                            found_expr_match = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(
+            found_expr_match,
+            "expected let-binding value parsed as Expression::Match"
+        );
+    }
+
+    #[test]
+    fn if_expression_multiline_branches_parses() {
+        let source = r#"module test
+
+fn if_expr(x: i32) -> i32:
+    let y = if x == 1:
+        10
+    else:
+        20
+    return y
+"#;
+
+        let (module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "unexpected parse errors: {:?}", errors);
+
+        let mut found_if_expr = false;
+        for item in module.items {
+            if let Item::Function(func) = item {
+                for stmt in func.body.statements {
+                    if let Statement::Let { value, .. } = stmt {
+                        if matches!(value, Some(Expression::If { .. })) {
+                            found_if_expr = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(
+            found_if_expr,
+            "expected let-binding value parsed as Expression::If"
+        );
+    }
+
+    #[test]
+    fn prefix_range_index_parses() {
+        let source = r#"module test
+
+fn slice_like(base: str, n: i32) -> str:
+    let out = base[..n]
+    return out
+"#;
+
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "unexpected parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn match_alternative_patterns_with_fatarrow_block_parses() {
+        let source = r#"module test
+
+fn parse_flag(arg: str) -> i32:
+    match arg:
+        "-o" | "--output" =>
+            1
+        "-O0" => 0
+    return 0
+"#;
+
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "unexpected parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn match_expr_inline_assignment_and_return_arm_parses() {
+        let source = r#"module test
+
+fn parse_flag(arg: str) -> i32:
+    let mut out = 0
+    let _r = match arg:
+        "-O0" => out = 0
+        _ => return 1
+    return out
+"#;
+
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "unexpected parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn turbofish_method_call_parses() {
+        let source = r#"module test
+
+fn parse_num(s: str) -> i32:
+    let n = s.parse::<u32>().unwrap_or(0)
+    return n
+"#;
+
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "unexpected parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn match_result_constructor_patterns_parse() {
+        let source = r#"module test
+
+fn parse_val(s: str) -> i32:
+    let out = match parse(s):
+        Ok(v) => v
+        Err(_) => 0
+    return out
+"#;
+
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "unexpected parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn tuple_let_destructure_parses() {
+        let source = r#"module test
+
+fn parse_pair(s: str) -> i32:
+    let (a, b) = split_pair(s)
+    return a
+"#;
+
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "unexpected parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn expression_as_cast_parses() {
+        let source = r#"module test
+
+fn f(n: i32) -> i32:
+    let limit = n as usize
+    return n
+"#;
+
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "unexpected parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn multiline_call_arguments_parse() {
+        let source = r#"module test
+
+fn f() -> i32:
+    log(
+        1,
+        2
+    )
+    return 0
+"#;
+
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "unexpected parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn nested_for_if_multiline_call_parses() {
+        let source = r#"module test
+
+fn f(opt_results: Vec<i32>, result: i32) -> i32:
+    if true:
+        for r in &opt_results:
+            if r.changed:
+                println("    {:?}: {} removed, {} added",
+                    r.pass_kind, r.stats.instructions_removed, r.stats.instructions_added)
+    result.timings.insert("optimization".to_string(), elapsed(0))
+    return 0
+"#;
+
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "unexpected parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn match_ok_unit_pattern_parses() {
+        let source = r#"module test
+
+fn g() -> i32:
+    match do_work():
+        Ok(()) => 0
+        Err(e) => 1
+    return 0
+"#;
+
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "unexpected parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn statement_if_else_block_parses() {
+        let source = r#"module test
+
+fn h(x: i32) -> i32:
+    if x == 1:
+        return 1
+    else:
+        return 2
+"#;
+
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "unexpected parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn suffix_range_index_parses() {
+        let source = r#"module test
+
+fn slice_tail(args: str) -> str:
+    let tail = args[1..]
+    return tail
+"#;
+
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "unexpected parse errors: {:?}", errors);
+    }
+
+    #[test]
+    fn wildcard_match_pattern_parses() {
+        let source = r#"module test
+
+fn classify(x: i32) -> i32:
+    match x:
+        0 => 0
+        _ => 1
+"#;
+
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "unexpected parse errors: {:?}", errors);
+    }
 }
