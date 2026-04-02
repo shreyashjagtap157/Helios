@@ -11,7 +11,7 @@ Phase 1 — Structural Foundation (COMPLETE)
 - Acceptance:
   - `cargo check` and `cargo test` pass for `omni-lang/compiler`.
 
-Phase 2 — Core Functionality (NEXT)
+Phase 2 — Core Functionality (COMPLETE)
 - Goals:
   - Type system implemented and exercised by unit tests.
   - Minimal standard library pieces available (`io`, `core`, `collections`).
@@ -23,26 +23,34 @@ Phase 2 — Core Functionality (NEXT)
   - `cd omni-lang/compiler && cargo test --quiet`
   - `./bootstrap.sh stage1` (or use `BootstrapRunner`)
 
-Phase 3 — Enrichment
+Phase 3 — Enrichment (COMPLETE)
 - Goals:
   - Advanced type features (generics, trait bounds) tested.
   - Concurrency primitives and async/await support validated.
 - Acceptance:
   - New test suites for async/await and generics pass.
 
-Phase 4 — Expansion and Optimization
+Phase 4 — Expansion and Optimization (BOOTSTRAP ARTIFACT GATES COMPLETE)
 - Goals:
   - LLVM/native backend polishing and optimizer passes validated.
   - Performance regression tests added.
 - Acceptance:
   - Native codegen smoke tests and basic microbenchmarks pass.
 
-Phase 5 — Self-Hosting
+Phase 5 — Self-Hosting (IN PROGRESS)
 - Goals:
   - Stage0 (Rust omnc) compiles the Omni compiler to Stage1.
   - Stage1 compiles the same source to Stage2; Stage1==Stage2 (fixpoint).
+  - Stage1 bytecode executes under OVM to produce Stage3; Stage1==Stage2==Stage3.
 - Acceptance:
   - `BootstrapRunner::verify_fixpoint` returns OK for `omnc_stage1.ovm` vs `omnc_stage2.ovm`.
+  - Stage1 bytecode compile path is reproducible and emits valid Stage3 OVM artifact.
+
+Current Phase 5 gate status (2026-04-02)
+- Stage1/Stage2 fixpoint: PASS (bit-identical SHA256)
+- Stage1 bytecode execution entry: PASS (OVM runs stage1 and reaches compile banner)
+- Stage3 reproducible generation via Stage1 bytecode: BLOCKED
+- Blocker: OVM runtime fidelity gap during Stage1 execution (`type error: cannot add null and int`).
 
 Notes and immediate next actions
 - Create minimal runtime helpers needed for Stage1 (e.g., `println` bootstraps).

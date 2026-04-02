@@ -5,7 +5,7 @@
 > **Active Development:** This project focuses on the Omni programming language (`omni-lang/`). The Helios framework (`helios-framework/`) is maintained separately.
 
 [![CI](https://github.com/shreyashjagtap157/Helios/actions/workflows/ci.yml/badge.svg)](https://github.com/shreyashjagtap157/Helios/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-1%2C019%20passing-brightgreen)](#testing)
+[![Tests](https://img.shields.io/badge/tests-1%2C059%20passing-brightgreen)](#testing)
 [![Rust](https://img.shields.io/badge/rust-2021-orange)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
 
@@ -28,7 +28,7 @@ Existing systems languages force a choice: **performance** (C/C++) or **safety**
 | **Omni Compiler** | ✅ Active | Focus area for development |
 | **Omni Runtime** | ✅ Working | OVM bytecode interpreter |
 | **Omni Standard Library** | ✅ Working | 37 modules |
-| **Omni Self-Hosting** | 🔄 In Progress | Phase 5 target |
+| **Omni Self-Hosting** | 🔄 In Progress | Stage1==Stage2 verified; Stage1-bytecode->Stage3 gate blocked in OVM runtime |
 | **Helios Framework** | 📋 Separate | Not part of current work |
 
 ---
@@ -72,7 +72,7 @@ cargo run --bin omnc -- --run ../examples/hello.omni
 | Component | Status | Details |
 |-----------|--------|---------|
 | **Compiler (omnc)** | Working | Full pipeline: lexer → parser → semantic → IR → codegen/runtime |
-| **Tests** | 1,019 passing | 547 integration + 472 unit, 0 failures |
+| **Tests** | 1,059 passing | Verified in Phase 3/4 closure runs |
 | **OVM Bytecode** | Working | Default runtime target; interpreter + bytecode VM |
 | **LLVM Native** | Feature-gated | `--features llvm` (requires LLVM 17) |
 | **GPU Backend** | Feature-gated | `--features gpu` (CUDA/OpenCL/Vulkan) |

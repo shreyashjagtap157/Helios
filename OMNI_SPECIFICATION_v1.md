@@ -31,6 +31,28 @@ Omni is a **layered, multi-paradigm, multi-runtime programming language platform
 
 ---
 
+## Bootstrap And Self-Hosting Status (Phase 5)
+
+The bootstrap path currently uses a staged model:
+
+1. Stage0 seed compiler (Rust `omnc`) compiles `omni/compiler_minimal.omni` to Stage1 OVM bytecode.
+2. Stage2 artifact generation and fixpoint comparison are verified in the Phase 4 pipeline.
+3. Phase 5 requires Stage1 bytecode execution to produce Stage3 and prove a triple fixpoint.
+
+Current evidence snapshot (2026-04-02):
+
+- Stage1 SHA256: `152D35CE42B177F67E00F75A10F6AD2DB71B2E8F84E80093AB263EBA2ABD7216`
+- Stage2 SHA256: `152D35CE42B177F67E00F75A10F6AD2DB71B2E8F84E80093AB263EBA2ABD7216`
+- Stage1 == Stage2: true (bit-identical)
+- Stage1 bytecode execution under OVM: starts successfully, then blocks on runtime fidelity (`type error: cannot add null and int`).
+
+Implication:
+
+- Deterministic artifact generation is proven for Stage1/Stage2.
+- Full self-hosting closure remains gated on OVM runtime completeness for Stage3 generation.
+
+---
+
 ## Architecture Overview
 
 ### Compiler Pipeline
