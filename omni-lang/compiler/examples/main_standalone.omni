@@ -1,0 +1,20 @@
+// Main program using math module functions directly
+
+module main
+
+fn add(a: i64, b: i64) -> i64:
+    return a + b
+
+fn sub(a: i64, b: i64) -> i64:
+    return a - b
+
+fn mul(a: i64, b: i64) -> i64:
+    return a * b
+
+fn main():
+    let sum = add(5, 3)
+    let diff = sub(10, 4)
+    let product = mul(3, 7)
+    println(sum)
+    println(diff)
+    println(product)

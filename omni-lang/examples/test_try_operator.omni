@@ -1,0 +1,16 @@
+module test_try_operator
+
+fn divide(a: int, b: int) -> Result<int, string>:
+    if b == 0:
+        return Err("Division by zero")
+    return Ok(a / b)
+
+fn main():
+    let result = divide(10, 2)
+    match result:
+        Ok(value) => 
+            println("Division result: ")
+            println(value)
+        Err(e) =>
+            println("Error: ")
+            println(e)

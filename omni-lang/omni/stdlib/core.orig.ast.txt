@@ -1,0 +1,11 @@
+Module {
+    items: [
+        Module(
+            ModuleDecl {
+                name: "std::core",
+                attributes: [],
+                items: [],
+            },
+        ),
+    ],
+}

@@ -80,6 +80,7 @@ pub enum Target {
     Ovm, // OVM bytecode for managed execution
     #[cfg(feature = "llvm")]
     Hybrid, // Both native and managed
+    #[cfg(feature = "experimental")]
     Native, // Direct native code via built-in codegen (no LLVM required)
 }
 
@@ -91,6 +92,7 @@ impl From<Target> for codegen::CodegenTarget {
             Target::Ovm => codegen::CodegenTarget::Ovm,
             #[cfg(feature = "llvm")]
             Target::Hybrid => codegen::CodegenTarget::Hybrid,
+            #[cfg(feature = "experimental")]
             Target::Native => codegen::CodegenTarget::Native,
         }
     }
@@ -526,14 +528,18 @@ fn compile(source: &str, args: &Args) -> Result<()> {
     }
     stage_exit("phase2_5.type_inference", type_t0);
 
-    // Phase 2.6: Borrow checking (warnings for ownership violations)
+    // Phase 2.6: Borrow checking (errors for ownership violations)
     log::debug!("Phase 2.6: Borrow checking");
     monitor::update_heartbeat();
     let borrow_errors = semantic::borrow_check::BorrowChecker::check_module(&ast);
     if !borrow_errors.is_empty() {
         for e in &borrow_errors {
-            eprintln!("warning[E006]: borrow check: {}", e);
+            eprintln!("error[E006]: borrow check: {}", e);
         }
+        anyhow::bail!(
+            "{} borrow checking error(s) — ownership violations must be fixed",
+            borrow_errors.len()
+        );
     }
 
     // Phase 3: Semantic analysis

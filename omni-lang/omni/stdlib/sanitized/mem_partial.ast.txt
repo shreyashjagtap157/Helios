@@ -1,0 +1,157 @@
+Module {
+    items: [
+        Module(
+            ModuleDecl {
+                name: "std::mem",
+                attributes: [],
+                items: [],
+            },
+        ),
+        Function(
+            Function {
+                name: "size_of",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [],
+                return_type: Some(
+                    Usize,
+                ),
+                body: Block {
+                    statements: [
+                        Return(
+                            Some(
+                                Literal(
+                                    Int(
+                                        0,
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+            },
+        ),
+        Function(
+            Function {
+                name: "alloc",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [
+                    Param {
+                        name: "size",
+                        ty: Usize,
+                    },
+                ],
+                return_type: Some(
+                    U64,
+                ),
+                body: Block {
+                    statements: [
+                        Return(
+                            Some(
+                                Literal(
+                                    Int(
+                                        0,
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+            },
+        ),
+        Function(
+            Function {
+                name: "dealloc",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [
+                    Param {
+                        name: "ptr",
+                        ty: U64,
+                    },
+                    Param {
+                        name: "size",
+                        ty: Usize,
+                    },
+                ],
+                return_type: Some(
+                    Tuple(
+                        [],
+                    ),
+                ),
+                body: Block {
+                    statements: [
+                        Return(
+                            None,
+                        ),
+                    ],
+                },
+            },
+        ),
+        Struct(
+            StructDef {
+                name: "Box",
+                attributes: [],
+                implements: None,
+                fields: [
+                    Field {
+                        name: "ptr",
+                        ty: U64,
+                    },
+                ],
+                methods: [],
+            },
+        ),
+        Function(
+            Function {
+                name: "box_new",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [
+                    Param {
+                        name: "val",
+                        ty: Named(
+                            "T",
+                        ),
+                    },
+                ],
+                return_type: Some(
+                    Generic(
+                        "Box",
+                        [
+                            Named(
+                                "T",
+                            ),
+                        ],
+                    ),
+                ),
+                body: Block {
+                    statements: [
+                        Return(
+                            Some(
+                                StructLiteral {
+                                    name: "Box",
+                                    fields: [
+                                        (
+                                            "ptr",
+                                            Literal(
+                                                Int(
+                                                    0,
+                                                ),
+                                            ),
+                                        ),
+                                    ],
+                                },
+                            ),
+                        ),
+                    ],
+                },
+            },
+        ),
+    ],
+}

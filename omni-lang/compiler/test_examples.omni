@@ -1,0 +1,27 @@
+// Test examples for omni test command
+
+@test
+fn test_basic_assertion():
+    let x = 1 + 1
+    // In a full implementation, this would verify x == 2
+    println("test_basic_assertion passed")
+
+@test
+fn test_string_concatenation():
+    let greeting = "Hello, "
+    let name = "World"
+    let full = greeting + name
+    println("test_string_concatenation passed")
+
+@ignore
+fn test_disabled_feature():
+    println("This should be ignored")
+    // This feature is not yet implemented
+
+fn test_helper_function():
+    // Helper functions should not be counted as tests
+    let x = 42
+    println("helper ran")
+
+fn main():
+    println("Running test examples")

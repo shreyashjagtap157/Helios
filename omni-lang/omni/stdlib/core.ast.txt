@@ -1,0 +1,2027 @@
+Module {
+    items: [
+        Module(
+            ModuleDecl {
+                name: "std::core",
+                attributes: [],
+                items: [],
+            },
+        ),
+        Enum(
+            EnumDef {
+                name: "Option",
+                attributes: [],
+                variants: [
+                    EnumVariant {
+                        name: "VariantNone",
+                        fields: None,
+                    },
+                    EnumVariant {
+                        name: "VariantSome",
+                        fields: None,
+                    },
+                ],
+            },
+        ),
+        Impl(
+            ImplBlock {
+                trait_name: "",
+                type_name: "Option",
+                attributes: [],
+                methods: [
+                    Function {
+                        name: "is_some",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: false,
+                                },
+                            },
+                        ],
+                        return_type: Some(
+                            Bool,
+                        ),
+                        body: Block {
+                            statements: [
+                                Return(
+                                    Some(
+                                        Literal(
+                                            Bool(
+                                                false,
+                                            ),
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                    Function {
+                        name: "is_none",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: false,
+                                },
+                            },
+                        ],
+                        return_type: Some(
+                            Bool,
+                        ),
+                        body: Block {
+                            statements: [
+                                Return(
+                                    Some(
+                                        Unary(
+                                            Not,
+                                            MethodCall {
+                                                receiver: Identifier(
+                                                    "self",
+                                                ),
+                                                method: "is_some",
+                                                args: [],
+                                            },
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                    Function {
+                        name: "unwrap_or",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: false,
+                                },
+                            },
+                            Param {
+                                name: "default",
+                                ty: WithOwnership(
+                                    Str,
+                                    Borrow,
+                                ),
+                            },
+                        ],
+                        return_type: Some(
+                            WithOwnership(
+                                Str,
+                                Borrow,
+                            ),
+                        ),
+                        body: Block {
+                            statements: [
+                                Return(
+                                    Some(
+                                        Identifier(
+                                            "default",
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                    Function {
+                        name: "map",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: false,
+                                },
+                            },
+                            Param {
+                                name: "f",
+                                ty: Function(
+                                    [
+                                        WithOwnership(
+                                            Str,
+                                            Borrow,
+                                        ),
+                                    ],
+                                    Some(
+                                        WithOwnership(
+                                            Str,
+                                            Borrow,
+                                        ),
+                                    ),
+                                ),
+                            },
+                        ],
+                        return_type: Some(
+                            Named(
+                                "Option",
+                            ),
+                        ),
+                        body: Block {
+                            statements: [
+                                Return(
+                                    Some(
+                                        Identifier(
+                                            "VariantNone",
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                ],
+            },
+        ),
+        Impl(
+            ImplBlock {
+                trait_name: "",
+                type_name: "Result",
+                attributes: [],
+                methods: [
+                    Function {
+                        name: "is_ok",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: false,
+                                },
+                            },
+                        ],
+                        return_type: Some(
+                            Bool,
+                        ),
+                        body: Block {
+                            statements: [
+                                Return(
+                                    Some(
+                                        Literal(
+                                            Bool(
+                                                false,
+                                            ),
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                    Function {
+                        name: "is_err",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: false,
+                                },
+                            },
+                        ],
+                        return_type: Some(
+                            Bool,
+                        ),
+                        body: Block {
+                            statements: [
+                                Return(
+                                    Some(
+                                        Unary(
+                                            Not,
+                                            MethodCall {
+                                                receiver: Identifier(
+                                                    "self",
+                                                ),
+                                                method: "is_ok",
+                                                args: [],
+                                            },
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                    Function {
+                        name: "unwrap",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: false,
+                                },
+                            },
+                        ],
+                        return_type: Some(
+                            WithOwnership(
+                                Str,
+                                Borrow,
+                            ),
+                        ),
+                        body: Block {
+                            statements: [
+                                Return(
+                                    Some(
+                                        Literal(
+                                            String(
+                                                "",
+                                            ),
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                ],
+            },
+        ),
+        Enum(
+            EnumDef {
+                name: "Result",
+                attributes: [],
+                variants: [
+                    EnumVariant {
+                        name: "VariantOk",
+                        fields: None,
+                    },
+                    EnumVariant {
+                        name: "VariantErr",
+                        fields: None,
+                    },
+                ],
+            },
+        ),
+        Struct(
+            StructDef {
+                name: "String",
+                attributes: [],
+                implements: None,
+                fields: [
+                    Field {
+                        name: "len",
+                        ty: Usize,
+                    },
+                ],
+                methods: [],
+            },
+        ),
+        Function(
+            Function {
+                name: "panic",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [
+                    Param {
+                        name: "msg",
+                        ty: WithOwnership(
+                            Str,
+                            Borrow,
+                        ),
+                    },
+                ],
+                return_type: None,
+                body: Block {
+                    statements: [
+                        Expression(
+                            Identifier(
+                                "unreachable",
+                            ),
+                        ),
+                    ],
+                },
+            },
+        ),
+        Enum(
+            EnumDef {
+                name: "Ordering",
+                attributes: [],
+                variants: [
+                    EnumVariant {
+                        name: "Less",
+                        fields: None,
+                    },
+                    EnumVariant {
+                        name: "Equal",
+                        fields: None,
+                    },
+                    EnumVariant {
+                        name: "Greater",
+                        fields: None,
+                    },
+                ],
+            },
+        ),
+        Trait(
+            TraitDef {
+                name: "Iterator",
+                attributes: [],
+                methods: [
+                    Function {
+                        name: "next",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: true,
+                                },
+                            },
+                        ],
+                        return_type: Some(
+                            Named(
+                                "Option",
+                            ),
+                        ),
+                        body: Block {
+                            statements: [
+                                Return(
+                                    Some(
+                                        Literal(
+                                            Null,
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                ],
+            },
+        ),
+        Trait(
+            TraitDef {
+                name: "Clone",
+                attributes: [],
+                methods: [
+                    Function {
+                        name: "clone",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: false,
+                                },
+                            },
+                        ],
+                        return_type: Some(
+                            Named(
+                                "Self",
+                            ),
+                        ),
+                        body: Block {
+                            statements: [
+                                Expression(
+                                    Identifier(
+                                        "unreachable",
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                ],
+            },
+        ),
+        Trait(
+            TraitDef {
+                name: "Drop",
+                attributes: [],
+                methods: [
+                    Function {
+                        name: "drop",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: true,
+                                },
+                            },
+                        ],
+                        return_type: None,
+                        body: Block {
+                            statements: [
+                                Expression(
+                                    Identifier(
+                                        "unreachable",
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                ],
+            },
+        ),
+        Trait(
+            TraitDef {
+                name: "Default",
+                attributes: [],
+                methods: [
+                    Function {
+                        name: "default",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [],
+                        return_type: Some(
+                            Named(
+                                "Self",
+                            ),
+                        ),
+                        body: Block {
+                            statements: [
+                                Expression(
+                                    Identifier(
+                                        "unreachable",
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                ],
+            },
+        ),
+        Trait(
+            TraitDef {
+                name: "Debug",
+                attributes: [],
+                methods: [
+                    Function {
+                        name: "fmt",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: false,
+                                },
+                            },
+                        ],
+                        return_type: Some(
+                            Named(
+                                "String",
+                            ),
+                        ),
+                        body: Block {
+                            statements: [
+                                Return(
+                                    Some(
+                                        Literal(
+                                            String(
+                                                "",
+                                            ),
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                ],
+            },
+        ),
+        Trait(
+            TraitDef {
+                name: "Display",
+                attributes: [],
+                methods: [
+                    Function {
+                        name: "to_string",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: false,
+                                },
+                            },
+                        ],
+                        return_type: Some(
+                            Named(
+                                "String",
+                            ),
+                        ),
+                        body: Block {
+                            statements: [
+                                Return(
+                                    Some(
+                                        Literal(
+                                            String(
+                                                "",
+                                            ),
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                ],
+            },
+        ),
+        Trait(
+            TraitDef {
+                name: "PartialEq",
+                attributes: [],
+                methods: [
+                    Function {
+                        name: "eq",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: false,
+                                },
+                            },
+                            Param {
+                                name: "other",
+                                ty: WithOwnership(
+                                    Named(
+                                        "Self",
+                                    ),
+                                    Borrow,
+                                ),
+                            },
+                        ],
+                        return_type: Some(
+                            Bool,
+                        ),
+                        body: Block {
+                            statements: [
+                                Return(
+                                    Some(
+                                        Literal(
+                                            Bool(
+                                                false,
+                                            ),
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                    Function {
+                        name: "ne",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: false,
+                                },
+                            },
+                            Param {
+                                name: "other",
+                                ty: WithOwnership(
+                                    Named(
+                                        "Self",
+                                    ),
+                                    Borrow,
+                                ),
+                            },
+                        ],
+                        return_type: Some(
+                            Bool,
+                        ),
+                        body: Block {
+                            statements: [
+                                Return(
+                                    Some(
+                                        Unary(
+                                            Not,
+                                            MethodCall {
+                                                receiver: Identifier(
+                                                    "self",
+                                                ),
+                                                method: "eq",
+                                                args: [
+                                                    Identifier(
+                                                        "other",
+                                                    ),
+                                                ],
+                                            },
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                ],
+            },
+        ),
+        Trait(
+            TraitDef {
+                name: "Copy",
+                attributes: [],
+                methods: [],
+            },
+        ),
+        Trait(
+            TraitDef {
+                name: "Eq",
+                attributes: [],
+                methods: [],
+            },
+        ),
+        Trait(
+            TraitDef {
+                name: "PartialOrd",
+                attributes: [],
+                methods: [
+                    Function {
+                        name: "partial_cmp",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: false,
+                                },
+                            },
+                            Param {
+                                name: "other",
+                                ty: WithOwnership(
+                                    Named(
+                                        "Self",
+                                    ),
+                                    Borrow,
+                                ),
+                            },
+                        ],
+                        return_type: Some(
+                            Named(
+                                "Option",
+                            ),
+                        ),
+                        body: Block {
+                            statements: [
+                                Return(
+                                    Some(
+                                        Literal(
+                                            Null,
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                    Function {
+                        name: "lt",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: false,
+                                },
+                            },
+                            Param {
+                                name: "other",
+                                ty: WithOwnership(
+                                    Named(
+                                        "Self",
+                                    ),
+                                    Borrow,
+                                ),
+                            },
+                        ],
+                        return_type: Some(
+                            Bool,
+                        ),
+                        body: Block {
+                            statements: [
+                                Return(
+                                    Some(
+                                        Binary(
+                                            MethodCall {
+                                                receiver: Identifier(
+                                                    "self",
+                                                ),
+                                                method: "partial_cmp",
+                                                args: [
+                                                    Identifier(
+                                                        "other",
+                                                    ),
+                                                ],
+                                            },
+                                            Eq,
+                                            Some(
+                                                Path(
+                                                    Identifier(
+                                                        "Ordering",
+                                                    ),
+                                                    "Less",
+                                                ),
+                                            ),
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                    Function {
+                        name: "le",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: false,
+                                },
+                            },
+                            Param {
+                                name: "other",
+                                ty: WithOwnership(
+                                    Named(
+                                        "Self",
+                                    ),
+                                    Borrow,
+                                ),
+                            },
+                        ],
+                        return_type: Some(
+                            Bool,
+                        ),
+                        body: Block {
+                            statements: [
+                                Let {
+                                    name: "c",
+                                    mutable: false,
+                                    ty: None,
+                                    value: Some(
+                                        MethodCall {
+                                            receiver: Identifier(
+                                                "self",
+                                            ),
+                                            method: "partial_cmp",
+                                            args: [
+                                                Identifier(
+                                                    "other",
+                                                ),
+                                            ],
+                                        },
+                                    ),
+                                },
+                                Return(
+                                    Some(
+                                        Binary(
+                                            Binary(
+                                                Identifier(
+                                                    "c",
+                                                ),
+                                                Eq,
+                                                Some(
+                                                    Path(
+                                                        Identifier(
+                                                            "Ordering",
+                                                        ),
+                                                        "Less",
+                                                    ),
+                                                ),
+                                            ),
+                                            Or,
+                                            Binary(
+                                                Identifier(
+                                                    "c",
+                                                ),
+                                                Eq,
+                                                Some(
+                                                    Path(
+                                                        Identifier(
+                                                            "Ordering",
+                                                        ),
+                                                        "Equal",
+                                                    ),
+                                                ),
+                                            ),
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                    Function {
+                        name: "gt",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: false,
+                                },
+                            },
+                            Param {
+                                name: "other",
+                                ty: WithOwnership(
+                                    Named(
+                                        "Self",
+                                    ),
+                                    Borrow,
+                                ),
+                            },
+                        ],
+                        return_type: Some(
+                            Bool,
+                        ),
+                        body: Block {
+                            statements: [
+                                Return(
+                                    Some(
+                                        Binary(
+                                            MethodCall {
+                                                receiver: Identifier(
+                                                    "self",
+                                                ),
+                                                method: "partial_cmp",
+                                                args: [
+                                                    Identifier(
+                                                        "other",
+                                                    ),
+                                                ],
+                                            },
+                                            Eq,
+                                            Some(
+                                                Path(
+                                                    Identifier(
+                                                        "Ordering",
+                                                    ),
+                                                    "Greater",
+                                                ),
+                                            ),
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                    Function {
+                        name: "ge",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: false,
+                                },
+                            },
+                            Param {
+                                name: "other",
+                                ty: WithOwnership(
+                                    Named(
+                                        "Self",
+                                    ),
+                                    Borrow,
+                                ),
+                            },
+                        ],
+                        return_type: Some(
+                            Bool,
+                        ),
+                        body: Block {
+                            statements: [
+                                Let {
+                                    name: "c",
+                                    mutable: false,
+                                    ty: None,
+                                    value: Some(
+                                        MethodCall {
+                                            receiver: Identifier(
+                                                "self",
+                                            ),
+                                            method: "partial_cmp",
+                                            args: [
+                                                Identifier(
+                                                    "other",
+                                                ),
+                                            ],
+                                        },
+                                    ),
+                                },
+                                Return(
+                                    Some(
+                                        Binary(
+                                            Binary(
+                                                Identifier(
+                                                    "c",
+                                                ),
+                                                Eq,
+                                                Some(
+                                                    Path(
+                                                        Identifier(
+                                                            "Ordering",
+                                                        ),
+                                                        "Greater",
+                                                    ),
+                                                ),
+                                            ),
+                                            Or,
+                                            Binary(
+                                                Identifier(
+                                                    "c",
+                                                ),
+                                                Eq,
+                                                Some(
+                                                    Path(
+                                                        Identifier(
+                                                            "Ordering",
+                                                        ),
+                                                        "Equal",
+                                                    ),
+                                                ),
+                                            ),
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                ],
+            },
+        ),
+        Trait(
+            TraitDef {
+                name: "Ord",
+                attributes: [],
+                methods: [
+                    Function {
+                        name: "cmp",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: false,
+                                },
+                            },
+                            Param {
+                                name: "other",
+                                ty: WithOwnership(
+                                    Named(
+                                        "Self",
+                                    ),
+                                    Borrow,
+                                ),
+                            },
+                        ],
+                        return_type: Some(
+                            Named(
+                                "Ordering",
+                            ),
+                        ),
+                        body: Block {
+                            statements: [
+                                Return(
+                                    Some(
+                                        Path(
+                                            Identifier(
+                                                "Ordering",
+                                            ),
+                                            "Equal",
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                ],
+            },
+        ),
+        Struct(
+            StructDef {
+                name: "Formatter",
+                attributes: [],
+                implements: None,
+                fields: [],
+                methods: [],
+            },
+        ),
+        Struct(
+            StructDef {
+                name: "FmtError",
+                attributes: [],
+                implements: None,
+                fields: [],
+                methods: [],
+            },
+        ),
+        Struct(
+            StructDef {
+                name: "Hasher",
+                attributes: [],
+                implements: None,
+                fields: [],
+                methods: [],
+            },
+        ),
+        Trait(
+            TraitDef {
+                name: "Hash",
+                attributes: [],
+                methods: [
+                    Function {
+                        name: "hash",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: false,
+                                },
+                            },
+                            Param {
+                                name: "state",
+                                ty: WithOwnership(
+                                    Named(
+                                        "Hasher",
+                                    ),
+                                    BorrowMut,
+                                ),
+                            },
+                        ],
+                        return_type: None,
+                        body: Block {
+                            statements: [
+                                Return(
+                                    None,
+                                ),
+                            ],
+                        },
+                    },
+                ],
+            },
+        ),
+        Impl(
+            ImplBlock {
+                trait_name: "",
+                type_name: "String",
+                attributes: [],
+                methods: [
+                    Function {
+                        name: "len",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: false,
+                                },
+                            },
+                        ],
+                        return_type: Some(
+                            Usize,
+                        ),
+                        body: Block {
+                            statements: [
+                                Return(
+                                    Some(
+                                        Field(
+                                            Identifier(
+                                                "self",
+                                            ),
+                                            "len",
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                    Function {
+                        name: "is_empty",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: false,
+                                },
+                            },
+                        ],
+                        return_type: Some(
+                            Bool,
+                        ),
+                        body: Block {
+                            statements: [
+                                Return(
+                                    Some(
+                                        Binary(
+                                            Field(
+                                                Identifier(
+                                                    "self",
+                                                ),
+                                                "len",
+                                            ),
+                                            Eq,
+                                            Literal(
+                                                Int(
+                                                    0,
+                                                ),
+                                            ),
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                    Function {
+                        name: "capacity",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: false,
+                                },
+                            },
+                        ],
+                        return_type: Some(
+                            Usize,
+                        ),
+                        body: Block {
+                            statements: [
+                                Return(
+                                    Some(
+                                        Field(
+                                            Identifier(
+                                                "self",
+                                            ),
+                                            "len",
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                    Function {
+                        name: "as_str",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: false,
+                                },
+                            },
+                        ],
+                        return_type: Some(
+                            WithOwnership(
+                                Str,
+                                Borrow,
+                            ),
+                        ),
+                        body: Block {
+                            statements: [
+                                Return(
+                                    Some(
+                                        Literal(
+                                            String(
+                                                "",
+                                            ),
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                    Function {
+                        name: "push_str",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: true,
+                                },
+                            },
+                            Param {
+                                name: "s",
+                                ty: WithOwnership(
+                                    Str,
+                                    Borrow,
+                                ),
+                            },
+                        ],
+                        return_type: None,
+                        body: Block {
+                            statements: [
+                                Return(
+                                    None,
+                                ),
+                            ],
+                        },
+                    },
+                    Function {
+                        name: "push_string",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: true,
+                                },
+                            },
+                            Param {
+                                name: "s",
+                                ty: WithOwnership(
+                                    Named(
+                                        "String",
+                                    ),
+                                    Borrow,
+                                ),
+                            },
+                        ],
+                        return_type: None,
+                        body: Block {
+                            statements: [
+                                Expression(
+                                    MethodCall {
+                                        receiver: Identifier(
+                                            "self",
+                                        ),
+                                        method: "push_str",
+                                        args: [
+                                            MethodCall {
+                                                receiver: Identifier(
+                                                    "s",
+                                                ),
+                                                method: "as_str",
+                                                args: [],
+                                            },
+                                        ],
+                                    },
+                                ),
+                            ],
+                        },
+                    },
+                    Function {
+                        name: "pop",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: true,
+                                },
+                            },
+                        ],
+                        return_type: Some(
+                            Named(
+                                "Option",
+                            ),
+                        ),
+                        body: Block {
+                            statements: [
+                                Return(
+                                    Some(
+                                        Identifier(
+                                            "VariantNone",
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                    Function {
+                        name: "as_bytes",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: false,
+                                },
+                            },
+                        ],
+                        return_type: Some(
+                            WithOwnership(
+                                Slice(
+                                    U8,
+                                ),
+                                Borrow,
+                            ),
+                        ),
+                        body: Block {
+                            statements: [
+                                Return(
+                                    Some(
+                                        Borrow {
+                                            mutable: false,
+                                            expr: Array(
+                                                [],
+                                            ),
+                                        },
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                    Function {
+                        name: "as_mut_bytes",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: true,
+                                },
+                            },
+                        ],
+                        return_type: Some(
+                            WithOwnership(
+                                Slice(
+                                    U8,
+                                ),
+                                BorrowMut,
+                            ),
+                        ),
+                        body: Block {
+                            statements: [
+                                Return(
+                                    Some(
+                                        Borrow {
+                                            mutable: true,
+                                            expr: Array(
+                                                [],
+                                            ),
+                                        },
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                    Function {
+                        name: "push",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: true,
+                                },
+                            },
+                            Param {
+                                name: "ch",
+                                ty: Named(
+                                    "char",
+                                ),
+                            },
+                        ],
+                        return_type: None,
+                        body: Block {
+                            statements: [
+                                Return(
+                                    None,
+                                ),
+                            ],
+                        },
+                    },
+                ],
+            },
+        ),
+        Struct(
+            StructDef {
+                name: "Box",
+                attributes: [],
+                implements: None,
+                fields: [
+                    Field {
+                        name: "ptr",
+                        ty: Usize,
+                    },
+                ],
+                methods: [],
+            },
+        ),
+        Struct(
+            StructDef {
+                name: "Vec",
+                attributes: [],
+                implements: None,
+                fields: [
+                    Field {
+                        name: "len",
+                        ty: Usize,
+                    },
+                ],
+                methods: [],
+            },
+        ),
+        Function(
+            Function {
+                name: "new_vec",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [],
+                return_type: Some(
+                    Named(
+                        "Vec",
+                    ),
+                ),
+                body: Block {
+                    statements: [
+                        Expression(
+                            StructLiteral {
+                                name: "Vec",
+                                fields: [
+                                    (
+                                        "len",
+                                        Literal(
+                                            Int(
+                                                0,
+                                            ),
+                                        ),
+                                    ),
+                                ],
+                            },
+                        ),
+                    ],
+                },
+            },
+        ),
+        Struct(
+            StructDef {
+                name: "HashMap",
+                attributes: [],
+                implements: None,
+                fields: [
+                    Field {
+                        name: "len",
+                        ty: Usize,
+                    },
+                ],
+                methods: [],
+            },
+        ),
+        Function(
+            Function {
+                name: "new_hash_map",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [],
+                return_type: Some(
+                    Named(
+                        "HashMap",
+                    ),
+                ),
+                body: Block {
+                    statements: [
+                        Expression(
+                            StructLiteral {
+                                name: "HashMap",
+                                fields: [
+                                    (
+                                        "len",
+                                        Literal(
+                                            Int(
+                                                0,
+                                            ),
+                                        ),
+                                    ),
+                                ],
+                            },
+                        ),
+                    ],
+                },
+            },
+        ),
+        Struct(
+            StructDef {
+                name: "Range",
+                attributes: [],
+                implements: None,
+                fields: [
+                    Field {
+                        name: "start",
+                        ty: I32,
+                    },
+                    Field {
+                        name: "end",
+                        ty: I32,
+                    },
+                ],
+                methods: [],
+            },
+        ),
+        Struct(
+            StructDef {
+                name: "RangeInclusive",
+                attributes: [],
+                implements: None,
+                fields: [
+                    Field {
+                        name: "start",
+                        ty: I32,
+                    },
+                    Field {
+                        name: "end",
+                        ty: I32,
+                    },
+                    Field {
+                        name: "exhausted",
+                        ty: Bool,
+                    },
+                ],
+                methods: [],
+            },
+        ),
+        Function(
+            Function {
+                name: "range",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [
+                    Param {
+                        name: "start",
+                        ty: I32,
+                    },
+                    Param {
+                        name: "end",
+                        ty: I32,
+                    },
+                ],
+                return_type: Some(
+                    Named(
+                        "Range",
+                    ),
+                ),
+                body: Block {
+                    statements: [
+                        Expression(
+                            StructLiteral {
+                                name: "Range",
+                                fields: [
+                                    (
+                                        "start",
+                                        Identifier(
+                                            "start",
+                                        ),
+                                    ),
+                                    (
+                                        "end",
+                                        Identifier(
+                                            "end",
+                                        ),
+                                    ),
+                                ],
+                            },
+                        ),
+                    ],
+                },
+            },
+        ),
+        Function(
+            Function {
+                name: "range_inclusive",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [
+                    Param {
+                        name: "start",
+                        ty: I32,
+                    },
+                    Param {
+                        name: "end",
+                        ty: I32,
+                    },
+                ],
+                return_type: Some(
+                    Named(
+                        "RangeInclusive",
+                    ),
+                ),
+                body: Block {
+                    statements: [
+                        Return(
+                            Some(
+                                StructLiteral {
+                                    name: "RangeInclusive",
+                                    fields: [
+                                        (
+                                            "start",
+                                            Identifier(
+                                                "start",
+                                            ),
+                                        ),
+                                        (
+                                            "end",
+                                            Identifier(
+                                                "end",
+                                            ),
+                                        ),
+                                        (
+                                            "exhausted",
+                                            Literal(
+                                                Bool(
+                                                    false,
+                                                ),
+                                            ),
+                                        ),
+                                    ],
+                                },
+                            ),
+                        ),
+                    ],
+                },
+            },
+        ),
+        Impl(
+            ImplBlock {
+                trait_name: "",
+                type_name: "Vec",
+                attributes: [],
+                methods: [
+                    Function {
+                        name: "len",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: false,
+                                },
+                            },
+                        ],
+                        return_type: Some(
+                            Usize,
+                        ),
+                        body: Block {
+                            statements: [
+                                Return(
+                                    Some(
+                                        Field(
+                                            Identifier(
+                                                "self",
+                                            ),
+                                            "len",
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                    Function {
+                        name: "is_empty",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: false,
+                                },
+                            },
+                        ],
+                        return_type: Some(
+                            Bool,
+                        ),
+                        body: Block {
+                            statements: [
+                                Return(
+                                    Some(
+                                        Binary(
+                                            Field(
+                                                Identifier(
+                                                    "self",
+                                                ),
+                                                "len",
+                                            ),
+                                            Eq,
+                                            Literal(
+                                                Int(
+                                                    0,
+                                                ),
+                                            ),
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                    Function {
+                        name: "push",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: true,
+                                },
+                            },
+                            Param {
+                                name: "_item",
+                                ty: WithOwnership(
+                                    Str,
+                                    Borrow,
+                                ),
+                            },
+                        ],
+                        return_type: None,
+                        body: Block {
+                            statements: [
+                                Return(
+                                    None,
+                                ),
+                            ],
+                        },
+                    },
+                    Function {
+                        name: "pop",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: true,
+                                },
+                            },
+                        ],
+                        return_type: Some(
+                            Named(
+                                "Option",
+                            ),
+                        ),
+                        body: Block {
+                            statements: [
+                                Return(
+                                    Some(
+                                        Identifier(
+                                            "VariantNone",
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                    Function {
+                        name: "with_capacity",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "_n",
+                                ty: Usize,
+                            },
+                        ],
+                        return_type: Some(
+                            Named(
+                                "Vec",
+                            ),
+                        ),
+                        body: Block {
+                            statements: [
+                                Return(
+                                    Some(
+                                        StructLiteral {
+                                            name: "Vec",
+                                            fields: [
+                                                (
+                                                    "len",
+                                                    Literal(
+                                                        Int(
+                                                            0,
+                                                        ),
+                                                    ),
+                                                ),
+                                            ],
+                                        },
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                ],
+            },
+        ),
+        Impl(
+            ImplBlock {
+                trait_name: "",
+                type_name: "HashMap",
+                attributes: [],
+                methods: [
+                    Function {
+                        name: "insert",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: true,
+                                },
+                            },
+                            Param {
+                                name: "_k",
+                                ty: WithOwnership(
+                                    Str,
+                                    Borrow,
+                                ),
+                            },
+                            Param {
+                                name: "_v",
+                                ty: WithOwnership(
+                                    Str,
+                                    Borrow,
+                                ),
+                            },
+                        ],
+                        return_type: None,
+                        body: Block {
+                            statements: [
+                                Return(
+                                    None,
+                                ),
+                            ],
+                        },
+                    },
+                    Function {
+                        name: "get",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: false,
+                                },
+                            },
+                            Param {
+                                name: "_k",
+                                ty: WithOwnership(
+                                    Str,
+                                    Borrow,
+                                ),
+                            },
+                        ],
+                        return_type: Some(
+                            Named(
+                                "Option",
+                            ),
+                        ),
+                        body: Block {
+                            statements: [
+                                Return(
+                                    Some(
+                                        Identifier(
+                                            "VariantNone",
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                    Function {
+                        name: "contains_key",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: false,
+                                },
+                            },
+                            Param {
+                                name: "_k",
+                                ty: WithOwnership(
+                                    Str,
+                                    Borrow,
+                                ),
+                            },
+                        ],
+                        return_type: Some(
+                            Bool,
+                        ),
+                        body: Block {
+                            statements: [
+                                Return(
+                                    Some(
+                                        Literal(
+                                            Bool(
+                                                false,
+                                            ),
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                ],
+            },
+        ),
+    ],
+}

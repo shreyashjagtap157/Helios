@@ -1,0 +1,146 @@
+Module {
+    items: [
+        Module(
+            ModuleDecl {
+                name: "test_question_op",
+                attributes: [],
+                items: [],
+            },
+        ),
+        Function(
+            Function {
+                name: "try_parse",
+                is_async: false,
+                attributes: [],
+                params: [
+                    Param {
+                        name: "x",
+                        ty: Named(
+                            "int",
+                        ),
+                    },
+                ],
+                return_type: Some(
+                    Generic(
+                        "Result",
+                        [
+                            Named(
+                                "int",
+                            ),
+                            Named(
+                                "string",
+                            ),
+                        ],
+                    ),
+                ),
+                body: Block {
+                    statements: [
+                        If {
+                            condition: Binary(
+                                Identifier(
+                                    "x",
+                                ),
+                                Gt,
+                                Literal(
+                                    Int(
+                                        0,
+                                    ),
+                                ),
+                            ),
+                            then_block: Block {
+                                statements: [
+                                    Return(
+                                        Some(
+                                            Ok(
+                                                Identifier(
+                                                    "x",
+                                                ),
+                                            ),
+                                        ),
+                                    ),
+                                ],
+                            },
+                            else_block: Some(
+                                Block {
+                                    statements: [
+                                        Return(
+                                            Some(
+                                                Err(
+                                                    Literal(
+                                                        String(
+                                                            "negative",
+                                                        ),
+                                                    ),
+                                                ),
+                                            ),
+                                        ),
+                                    ],
+                                },
+                            ),
+                        },
+                    ],
+                },
+            },
+        ),
+        Function(
+            Function {
+                name: "main",
+                is_async: false,
+                attributes: [],
+                params: [],
+                return_type: None,
+                body: Block {
+                    statements: [
+                        Let {
+                            name: "result",
+                            mutable: false,
+                            ty: None,
+                            value: Some(
+                                Try(
+                                    Call(
+                                        Identifier(
+                                            "try_parse",
+                                        ),
+                                        [
+                                            Literal(
+                                                Int(
+                                                    5,
+                                                ),
+                                            ),
+                                        ],
+                                    ),
+                                ),
+                            ),
+                        },
+                        Expression(
+                            Call(
+                                Identifier(
+                                    "println",
+                                ),
+                                [
+                                    Literal(
+                                        String(
+                                            "Result: ",
+                                        ),
+                                    ),
+                                ],
+                            ),
+                        ),
+                        Expression(
+                            Call(
+                                Identifier(
+                                    "println",
+                                ),
+                                [
+                                    Identifier(
+                                        "result",
+                                    ),
+                                ],
+                            ),
+                        ),
+                    ],
+                },
+            },
+        ),
+    ],
+}

@@ -1,0 +1,225 @@
+Module {
+    items: [
+        Module(
+            ModuleDecl {
+                name: "std::io",
+                attributes: [],
+                items: [],
+            },
+        ),
+        Struct(
+            StructDef {
+                name: "Error",
+                attributes: [],
+                implements: None,
+                fields: [
+                    Field {
+                        name: "code",
+                        ty: I32,
+                    },
+                    Field {
+                        name: "message",
+                        ty: Str,
+                    },
+                ],
+                methods: [],
+            },
+        ),
+        Function(
+            Function {
+                name: "read",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [
+                    Param {
+                        name: "buf",
+                        ty: WithOwnership(
+                            Slice(
+                                U8,
+                            ),
+                            BorrowMut,
+                        ),
+                    },
+                ],
+                return_type: Some(
+                    Usize,
+                ),
+                body: Block {
+                    statements: [
+                        Return(
+                            Some(
+                                Literal(
+                                    Int(
+                                        0,
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+            },
+        ),
+        Function(
+            Function {
+                name: "write",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [
+                    Param {
+                        name: "buf",
+                        ty: WithOwnership(
+                            Slice(
+                                U8,
+                            ),
+                            Borrow,
+                        ),
+                    },
+                ],
+                return_type: Some(
+                    Usize,
+                ),
+                body: Block {
+                    statements: [
+                        Return(
+                            Some(
+                                Literal(
+                                    Int(
+                                        0,
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+            },
+        ),
+        Function(
+            Function {
+                name: "flush",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [],
+                return_type: Some(
+                    Tuple(
+                        [],
+                    ),
+                ),
+                body: Block {
+                    statements: [
+                        Return(
+                            None,
+                        ),
+                    ],
+                },
+            },
+        ),
+        Struct(
+            StructDef {
+                name: "Stdin",
+                attributes: [],
+                implements: None,
+                fields: [],
+                methods: [],
+            },
+        ),
+        Struct(
+            StructDef {
+                name: "Stdout",
+                attributes: [],
+                implements: None,
+                fields: [],
+                methods: [],
+            },
+        ),
+        Function(
+            Function {
+                name: "stdin",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [],
+                return_type: Some(
+                    Named(
+                        "Stdin",
+                    ),
+                ),
+                body: Block {
+                    statements: [
+                        Return(
+                            Some(
+                                StructLiteral {
+                                    name: "Stdin",
+                                    fields: [],
+                                },
+                            ),
+                        ),
+                    ],
+                },
+            },
+        ),
+        Function(
+            Function {
+                name: "stdout",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [],
+                return_type: Some(
+                    Named(
+                        "Stdout",
+                    ),
+                ),
+                body: Block {
+                    statements: [
+                        Return(
+                            Some(
+                                StructLiteral {
+                                    name: "Stdout",
+                                    fields: [],
+                                },
+                            ),
+                        ),
+                    ],
+                },
+            },
+        ),
+        Function(
+            Function {
+                name: "read_to_string",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [
+                    Param {
+                        name: "r",
+                        ty: WithOwnership(
+                            Named(
+                                "R",
+                            ),
+                            BorrowMut,
+                        ),
+                    },
+                ],
+                return_type: Some(
+                    Str,
+                ),
+                body: Block {
+                    statements: [
+                        Return(
+                            Some(
+                                Literal(
+                                    String(
+                                        "",
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+            },
+        ),
+    ],
+}

@@ -16,34 +16,57 @@
 //! Code Generation
 //! Supports multiple backends: LLVM IR, OVM bytecode, and native code.
 
-pub mod cognitive;
-#[cfg(test)]
-pub mod comprehensive_tests;
-pub mod cpp_interop;
-pub mod dwarf;
-pub mod exception_handling;
-pub mod gpu_advanced;
-pub mod gpu_binary;
-pub mod gpu_dispatch;
-pub mod gpu_fusion;
-pub mod gpu_hardware;
-#[cfg(test)]
-pub mod gpu_tests;
-pub mod jit;
-pub mod jit_complete;
-pub mod linker;
-pub mod mlir;
-pub mod native_codegen;
-pub mod native_extended;
-pub mod native_linker;
-pub mod opt;
-pub mod optimizer;
-pub mod optimizing_jit;
+// ── Core modules (always compiled) ──────────────────────────────────────
 pub mod ovm;
 pub mod ovm_direct;
-pub mod python_buffer;
-pub mod python_interop;
+pub mod opt;
+pub mod optimizer;
 pub mod self_hosting;
+
+// ── Experimental / Phase 7-13 modules (gated behind feature flag) ───────
+#[cfg(feature = "experimental")]
+pub mod cognitive;
+#[cfg(feature = "experimental")]
+pub mod cpp_interop;
+#[cfg(feature = "experimental")]
+pub mod dwarf;
+#[cfg(feature = "experimental")]
+pub mod exception_handling;
+#[cfg(feature = "experimental")]
+pub mod gpu_advanced;
+#[cfg(feature = "experimental")]
+pub mod gpu_binary;
+#[cfg(feature = "experimental")]
+pub mod gpu_dispatch;
+#[cfg(feature = "experimental")]
+pub mod gpu_fusion;
+#[cfg(feature = "experimental")]
+pub mod gpu_hardware;
+#[cfg(feature = "experimental")]
+pub mod jit;
+#[cfg(feature = "experimental")]
+pub mod jit_complete;
+#[cfg(feature = "experimental")]
+pub mod linker;
+#[cfg(feature = "experimental")]
+pub mod mlir;
+#[cfg(feature = "experimental")]
+pub mod native_codegen;
+#[cfg(feature = "experimental")]
+pub mod native_extended;
+#[cfg(feature = "experimental")]
+pub mod native_linker;
+#[cfg(feature = "experimental")]
+pub mod optimizing_jit;
+#[cfg(feature = "experimental")]
+pub mod python_buffer;
+#[cfg(feature = "experimental")]
+pub mod python_interop;
+
+#[cfg(test)]
+pub mod comprehensive_tests;
+#[cfg(test)]
+pub mod gpu_tests;
 
 #[cfg(feature = "llvm")]
 pub mod llvm_backend;
@@ -61,6 +84,7 @@ pub enum CodegenTarget {
     Llvm, // LLVM IR -> native code
     #[cfg(feature = "llvm")]
     Hybrid, // Both native and managed
+    #[cfg(feature = "experimental")]
     Native, // Direct native code via built-in codegen (no LLVM required)
 }
 
@@ -81,6 +105,7 @@ pub fn generate_with_target(
             ovm::generate_ovm(ir.clone(), &output.with_extension("ovm"))?;
             llvm_backend::generate_llvm(&ir, output, opt_level)
         }
+        #[cfg(feature = "experimental")]
         CodegenTarget::Native => generate_native(&ir, output, opt_level),
     }
 }
@@ -89,6 +114,7 @@ pub fn generate_with_target(
 ///
 /// Uses the built-in `native_codegen` module (x86-64 / ARM64 / WASM emitters) and the
 /// `linker` module (ELF / PE / Mach-O) to produce executables without requiring LLVM.
+#[cfg(feature = "experimental")]
 fn generate_native(ir: &IrModule, output: &Path, opt_level: u8) -> Result<(), String> {
     info!("Native codegen pipeline: IR → machine code → linker → executable");
 
@@ -153,6 +179,7 @@ fn generate_native(ir: &IrModule, output: &Path, opt_level: u8) -> Result<(), St
 
 /// Pick the best entry-point symbol from the native codegen output.
 /// Prefers "main", then "_start", then falls back to the first symbol.
+#[cfg(feature = "experimental")]
 fn find_entry_symbol(symbols: &[native_codegen::NativeSymbol]) -> String {
     // Prefer "main" as entry (the linker on Windows will map it to mainCRTStartup)
     for sym in symbols {

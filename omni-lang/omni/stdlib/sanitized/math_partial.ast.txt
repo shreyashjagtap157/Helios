@@ -1,0 +1,241 @@
+Module {
+    items: [
+        Module(
+            ModuleDecl {
+                name: "std::math",
+                attributes: [],
+                items: [],
+            },
+        ),
+        Function(
+            Function {
+                name: "pi",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [],
+                return_type: Some(
+                    F64,
+                ),
+                body: Block {
+                    statements: [
+                        Return(
+                            Some(
+                                Literal(
+                                    Float(
+                                        3.141592653589793,
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+            },
+        ),
+        Function(
+            Function {
+                name: "e",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [],
+                return_type: Some(
+                    F64,
+                ),
+                body: Block {
+                    statements: [
+                        Return(
+                            Some(
+                                Literal(
+                                    Float(
+                                        2.718281828459045,
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+            },
+        ),
+        Function(
+            Function {
+                name: "sin",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [
+                    Param {
+                        name: "x",
+                        ty: F64,
+                    },
+                ],
+                return_type: Some(
+                    F64,
+                ),
+                body: Block {
+                    statements: [
+                        Return(
+                            Some(
+                                Literal(
+                                    Float(
+                                        0.0,
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+            },
+        ),
+        Function(
+            Function {
+                name: "cos",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [
+                    Param {
+                        name: "x",
+                        ty: F64,
+                    },
+                ],
+                return_type: Some(
+                    F64,
+                ),
+                body: Block {
+                    statements: [
+                        Return(
+                            Some(
+                                Literal(
+                                    Float(
+                                        1.0,
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+            },
+        ),
+        Function(
+            Function {
+                name: "tan",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [
+                    Param {
+                        name: "x",
+                        ty: F64,
+                    },
+                ],
+                return_type: Some(
+                    F64,
+                ),
+                body: Block {
+                    statements: [
+                        Return(
+                            Some(
+                                Literal(
+                                    Float(
+                                        0.0,
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+            },
+        ),
+        Function(
+            Function {
+                name: "powf",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [
+                    Param {
+                        name: "x",
+                        ty: F64,
+                    },
+                    Param {
+                        name: "y",
+                        ty: F64,
+                    },
+                ],
+                return_type: Some(
+                    F64,
+                ),
+                body: Block {
+                    statements: [
+                        Return(
+                            Some(
+                                Literal(
+                                    Float(
+                                        1.0,
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+            },
+        ),
+        Function(
+            Function {
+                name: "abs_i64",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [
+                    Param {
+                        name: "x",
+                        ty: I64,
+                    },
+                ],
+                return_type: Some(
+                    I64,
+                ),
+                body: Block {
+                    statements: [
+                        If {
+                            condition: Binary(
+                                Identifier(
+                                    "x",
+                                ),
+                                Lt,
+                                Literal(
+                                    Int(
+                                        0,
+                                    ),
+                                ),
+                            ),
+                            then_block: Block {
+                                statements: [
+                                    Return(
+                                        Some(
+                                            Unary(
+                                                Neg,
+                                                Identifier(
+                                                    "x",
+                                                ),
+                                            ),
+                                        ),
+                                    ),
+                                ],
+                            },
+                            else_block: None,
+                        },
+                        Return(
+                            Some(
+                                Identifier(
+                                    "x",
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+            },
+        ),
+    ],
+}

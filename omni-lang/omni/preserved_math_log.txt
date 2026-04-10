@@ -1,0 +1,374 @@
+[2026-04-06T04:49:36Z INFO  omnc] Omni Compiler/Runtime v2.0.0
+[2026-04-06T04:49:36Z INFO  omnc] Target: Ovm
+[2026-04-06T04:49:36Z INFO  omnc] Compiling: "..\\omni\\stdlib\\preserved_full\\math.omni"
+[2026-04-06T04:49:36Z DEBUG omnc] Phase 0: Resolver engines (mode: bare_metal)
+[2026-04-06T04:49:36Z INFO  omnc] Resolver: exec=AOT_STATIC, mem=OWNERSHIP, conc=COOPERATIVE
+[2026-04-06T04:49:36Z DEBUG omnc] Phase 1: Lexical analysis
+[2026-04-06T04:49:36Z DEBUG omnc] Phase 2: Parsing
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E006] Invalid syntax at line 50, column 19: Invalid integer literal '9223372036854775808': number too large to fit in target type
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E006] Invalid syntax at line 52, column 18: Invalid integer literal '18446744073709551615': number too large to fit in target type
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E006] Invalid syntax at line 53, column 22: Invalid integer literal '18446744073709551615': number too large to fit in target type
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E006] Invalid syntax at line 94, column 19: Expected type, got Star
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=695
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=695 iter=0 next=Some(Star)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=696 iter=1 next=Some(Mut)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=697 iter=2 next=Some(I32)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=698 iter=3 next=Some(RParen)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=699 iter=4 next=Some(Arrow)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=700 iter=5 next=Some(F64)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=701 iter=6 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E006] Invalid syntax at line 95, column 19: Expected type, got Star
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=711
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=711 iter=0 next=Some(Star)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=712 iter=1 next=Some(Mut)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=713 iter=2 next=Some(F64)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=714 iter=3 next=Some(RParen)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=715 iter=4 next=Some(Arrow)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=716 iter=5 next=Some(F64)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=717 iter=6 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 96, column 18: expected Colon, got Newline
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=727
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=727 iter=0 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 97, column 19: expected Colon, got Newline
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=737
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=737 iter=0 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 98, column 21: expected Colon, got Newline
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=747
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=747 iter=0 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 99, column 21: expected Colon, got Newline
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=757
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=757 iter=0 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 100, column 20: expected Colon, got Newline
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=767
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=767 iter=0 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 101, column 20: expected Colon, got Newline
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=777
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=777 iter=0 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 102, column 23: expected Colon, got Newline
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=787
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=787 iter=0 next=Some(Newline)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=788 iter=1 next=Some(Newline)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=789 iter=2 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 105, column 19: expected Colon, got Newline
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=799
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=799 iter=0 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 106, column 19: expected Colon, got Newline
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=809
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=809 iter=0 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 107, column 19: expected Colon, got Newline
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=819
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=819 iter=0 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 108, column 20: expected Colon, got Newline
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=829
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=829 iter=0 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 109, column 20: expected Colon, got Newline
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=839
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=839 iter=0 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 110, column 20: expected Colon, got Newline
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=849
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=849 iter=0 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 111, column 27: expected Colon, got Newline
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=863
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=863 iter=0 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 112, column 19: expected Colon, got Newline
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=873
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=873 iter=0 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 113, column 19: expected Colon, got Newline
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=883
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=883 iter=0 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 114, column 30: expected Colon, got Newline
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=897
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=897 iter=0 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 115, column 20: expected Colon, got Newline
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=907
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=907 iter=0 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 116, column 20: expected Colon, got Newline
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=917
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=917 iter=0 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 117, column 21: expected Colon, got Newline
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=927
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=927 iter=0 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 118, column 21: expected Colon, got Newline
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=937
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=937 iter=0 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 119, column 20: expected Colon, got Newline
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=947
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=947 iter=0 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 120, column 26: expected Colon, got Newline
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=961
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=961 iter=0 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 121, column 26: expected Colon, got Newline
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=975
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=975 iter=0 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 122, column 26: expected Colon, got Newline
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=989
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=989 iter=0 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 123, column 20: expected Colon, got Newline
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=999
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=999 iter=0 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 124, column 27: expected Colon, got Newline
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=1013
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=1013 iter=0 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 323, column 7: expected Identifier, got Mut
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=2406
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2406 iter=0 next=Some(Mut)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2407 iter=1 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2408 iter=2 next=Some(Colon)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2409 iter=3 next=Some(I64)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2410 iter=4 next=Some(Comma)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2411 iter=5 next=Some(Mut)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2412 iter=6 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2413 iter=7 next=Some(Colon)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2414 iter=8 next=Some(I64)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2415 iter=9 next=Some(RParen)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2416 iter=10 next=Some(Arrow)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2417 iter=11 next=Some(I64)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2418 iter=12 next=Some(Colon)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2419 iter=13 next=Some(Newline)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2420 iter=14 next=Some(Indent)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2421 iter=15 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2422 iter=16 next=Some(Eq)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2423 iter=17 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2424 iter=18 next=Some(LParen)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2425 iter=19 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2426 iter=20 next=Some(RParen)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2427 iter=21 next=Some(Newline)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2428 iter=22 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2429 iter=23 next=Some(Eq)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2430 iter=24 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2431 iter=25 next=Some(LParen)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2432 iter=26 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2433 iter=27 next=Some(RParen)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2434 iter=28 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E007] Invalid syntax at line 326, column 1: Expected item, got While
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2435 iter=0 next=Some(While)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2436 iter=1 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2437 iter=2 next=Some(NotEq)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2438 iter=3 next=Some(IntLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2439 iter=4 next=Some(Colon)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2440 iter=5 next=Some(Newline)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2441 iter=6 next=Some(Indent)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2442 iter=7 next=Some(Let)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2443 iter=8 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2444 iter=9 next=Some(Eq)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2445 iter=10 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2446 iter=11 next=Some(Newline)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2447 iter=12 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2448 iter=13 next=Some(Eq)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2449 iter=14 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2450 iter=15 next=Some(Percent)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2451 iter=16 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2452 iter=17 next=Some(Newline)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2453 iter=18 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2454 iter=19 next=Some(Eq)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2455 iter=20 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2456 iter=21 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E007] Invalid syntax at line 330, column 1: Expected item, got Return
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2458 iter=0 next=Some(Return)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2459 iter=1 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2460 iter=2 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 338, column 16: expected RParen, got Ampersand
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2530 iter=0 next=Some(Ampersand)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2531 iter=1 next=Some(LParen)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2532 iter=2 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2533 iter=3 next=Some(Minus)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2534 iter=4 next=Some(IntLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2535 iter=5 next=Some(RParen)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2536 iter=6 next=Some(RParen)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2537 iter=7 next=Some(EqEq)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2538 iter=8 next=Some(IntLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2539 iter=9 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E002] Invalid syntax at line 345, column 2: Expected expression, got Shl
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2581 iter=0 next=Some(Shl)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2582 iter=1 next=Some(Eq)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2583 iter=2 next=Some(IntLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2584 iter=3 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 353, column 6: expected Colon, got Ampersand
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2630 iter=0 next=Some(Ampersand)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2631 iter=1 next=Some(HexLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2632 iter=2 next=Some(EqEq)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2633 iter=3 next=Some(IntLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2634 iter=4 next=Some(Colon)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2635 iter=5 next=Some(Newline)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2636 iter=6 next=Some(Indent)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2637 iter=7 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2638 iter=8 next=Some(PlusEq)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2639 iter=9 next=Some(IntLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2640 iter=10 next=Some(Newline)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2641 iter=11 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2642 iter=12 next=Some(Shl)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2643 iter=13 next=Some(Eq)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2644 iter=14 next=Some(IntLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2645 iter=15 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E007] Invalid syntax at line 356, column 1: Expected item, got If
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2647 iter=0 next=Some(If)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2648 iter=1 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2649 iter=2 next=Some(Ampersand)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2650 iter=3 next=Some(HexLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2651 iter=4 next=Some(EqEq)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2652 iter=5 next=Some(IntLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2653 iter=6 next=Some(Colon)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2654 iter=7 next=Some(Newline)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2655 iter=8 next=Some(Indent)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2656 iter=9 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2657 iter=10 next=Some(PlusEq)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2658 iter=11 next=Some(IntLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2659 iter=12 next=Some(Newline)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2660 iter=13 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2661 iter=14 next=Some(Shl)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2662 iter=15 next=Some(Eq)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2663 iter=16 next=Some(IntLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2664 iter=17 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E007] Invalid syntax at line 359, column 1: Expected item, got If
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2666 iter=0 next=Some(If)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2667 iter=1 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2668 iter=2 next=Some(Ampersand)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2669 iter=3 next=Some(HexLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2670 iter=4 next=Some(EqEq)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2671 iter=5 next=Some(IntLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2672 iter=6 next=Some(Colon)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2673 iter=7 next=Some(Newline)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2674 iter=8 next=Some(Indent)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2675 iter=9 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2676 iter=10 next=Some(PlusEq)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2677 iter=11 next=Some(IntLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2678 iter=12 next=Some(Newline)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2679 iter=13 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2680 iter=14 next=Some(Shl)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2681 iter=15 next=Some(Eq)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2682 iter=16 next=Some(IntLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2683 iter=17 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E007] Invalid syntax at line 362, column 1: Expected item, got If
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2685 iter=0 next=Some(If)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2686 iter=1 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2687 iter=2 next=Some(Ampersand)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2688 iter=3 next=Some(HexLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2689 iter=4 next=Some(EqEq)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2690 iter=5 next=Some(IntLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2691 iter=6 next=Some(Colon)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2692 iter=7 next=Some(Newline)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2693 iter=8 next=Some(Indent)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2694 iter=9 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2695 iter=10 next=Some(PlusEq)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2696 iter=11 next=Some(IntLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2697 iter=12 next=Some(Newline)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2698 iter=13 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2699 iter=14 next=Some(Shl)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2700 iter=15 next=Some(Eq)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2701 iter=16 next=Some(IntLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2702 iter=17 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E007] Invalid syntax at line 365, column 1: Expected item, got If
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2704 iter=0 next=Some(If)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2705 iter=1 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2706 iter=2 next=Some(Ampersand)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2707 iter=3 next=Some(HexLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2708 iter=4 next=Some(EqEq)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2709 iter=5 next=Some(IntLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2710 iter=6 next=Some(Colon)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2711 iter=7 next=Some(Newline)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2712 iter=8 next=Some(Indent)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2713 iter=9 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2714 iter=10 next=Some(PlusEq)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2715 iter=11 next=Some(IntLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2716 iter=12 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E007] Invalid syntax at line 367, column 1: Expected item, got Return
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2718 iter=0 next=Some(Return)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2719 iter=1 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2720 iter=2 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 372, column 9: expected RParen, got Shr
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2751 iter=0 next=Some(Shr)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2752 iter=1 next=Some(IntLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2753 iter=2 next=Some(RParen)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2754 iter=3 next=Some(As)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2755 iter=4 next=Some(U32)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2756 iter=5 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 377, column 18: expected Identifier, got Mut
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=2790
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2790 iter=0 next=Some(Mut)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2791 iter=1 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2792 iter=2 next=Some(Colon)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2793 iter=3 next=Some(U32)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2794 iter=4 next=Some(RParen)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2795 iter=5 next=Some(Arrow)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2796 iter=6 next=Some(U32)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2797 iter=7 next=Some(Colon)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2798 iter=8 next=Some(Newline)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2799 iter=9 next=Some(Indent)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2800 iter=10 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E007] Invalid syntax at line 379, column 1: Expected item, got Let
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2801 iter=0 next=Some(Let)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2802 iter=1 next=Some(Mut)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2803 iter=2 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2804 iter=3 next=Some(Colon)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2805 iter=4 next=Some(U32)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2806 iter=5 next=Some(Eq)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2807 iter=6 next=Some(IntLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2808 iter=7 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E007] Invalid syntax at line 380, column 1: Expected item, got While
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2809 iter=0 next=Some(While)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2810 iter=1 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2811 iter=2 next=Some(NotEq)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2812 iter=3 next=Some(IntLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2813 iter=4 next=Some(Colon)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2814 iter=5 next=Some(Newline)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2815 iter=6 next=Some(Indent)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2816 iter=7 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2817 iter=8 next=Some(Ampersand)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2818 iter=9 next=Some(Eq)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2819 iter=10 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2820 iter=11 next=Some(Minus)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2821 iter=12 next=Some(IntLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2822 iter=13 next=Some(Newline)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2823 iter=14 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2824 iter=15 next=Some(PlusEq)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2825 iter=16 next=Some(IntLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2826 iter=17 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E007] Invalid syntax at line 383, column 1: Expected item, got Return
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2828 iter=0 next=Some(Return)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2829 iter=1 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2830 iter=2 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 385, column 18: expected Identifier, got Mut
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser: record_error -> synchronize at current=2836
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2836 iter=0 next=Some(Mut)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2837 iter=1 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2838 iter=2 next=Some(Colon)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2839 iter=3 next=Some(U64)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2840 iter=4 next=Some(RParen)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2841 iter=5 next=Some(Arrow)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2842 iter=6 next=Some(U64)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2843 iter=7 next=Some(Colon)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2844 iter=8 next=Some(Newline)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2845 iter=9 next=Some(Indent)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2846 iter=10 next=Some(Let)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2847 iter=11 next=Some(Mut)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2848 iter=12 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2849 iter=13 next=Some(Colon)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2850 iter=14 next=Some(U64)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2851 iter=15 next=Some(Eq)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2852 iter=16 next=Some(IntLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2853 iter=17 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E007] Invalid syntax at line 387, column 1: Expected item, got While
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2854 iter=0 next=Some(While)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2855 iter=1 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2856 iter=2 next=Some(NotEq)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2857 iter=3 next=Some(IntLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2858 iter=4 next=Some(Colon)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2859 iter=5 next=Some(Newline)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2860 iter=6 next=Some(Indent)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2861 iter=7 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2862 iter=8 next=Some(Ampersand)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2863 iter=9 next=Some(Eq)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2864 iter=10 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2865 iter=11 next=Some(Minus)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2866 iter=12 next=Some(IntLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2867 iter=13 next=Some(Newline)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2868 iter=14 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2869 iter=15 next=Some(PlusEq)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2870 iter=16 next=Some(IntLiteral)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2871 iter=17 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E007] Invalid syntax at line 390, column 1: Expected item, got Return
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2873 iter=0 next=Some(Return)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2874 iter=1 next=Some(Identifier)
+[2026-04-06T04:49:36Z DEBUG omnc::parser] parser:synchronize tick current=2875 iter=2 next=Some(Newline)
+[2026-04-06T04:49:36Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 397, column 20: expected Identifier, got Mut
+Error: [E009] Too many errors (52), aborting

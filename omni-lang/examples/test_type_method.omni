@@ -1,0 +1,17 @@
+module test_type_method
+
+struct Counter:
+    value: int
+
+impl Counter:
+    fn new() -> Counter:
+        return Counter { value: 0 }
+    
+    fn increment(self) -> Counter:
+        return Counter { value: self.value + 1 }
+
+fn main():
+    let c = Counter::new()
+    let c2 = c.increment()
+    println("Counter value: ")
+    println(c2.value)

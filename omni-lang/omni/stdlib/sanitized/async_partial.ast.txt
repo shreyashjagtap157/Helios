@@ -1,0 +1,96 @@
+Module {
+    items: [
+        Module(
+            ModuleDecl {
+                name: "std::asyncs",
+                attributes: [],
+                items: [],
+            },
+        ),
+        Enum(
+            EnumDef {
+                name: "Poll",
+                attributes: [],
+                variants: [
+                    EnumVariant {
+                        name: "Ready",
+                        fields: None,
+                    },
+                    EnumVariant {
+                        name: "Pending",
+                        fields: None,
+                    },
+                ],
+            },
+        ),
+        Trait(
+            TraitDef {
+                name: "Future",
+                attributes: [],
+                methods: [
+                    Function {
+                        name: "poll",
+                        is_async: false,
+                        attributes: [],
+                        effects: [],
+                        params: [
+                            Param {
+                                name: "self",
+                                ty: SelfRef {
+                                    mutable: true,
+                                },
+                            },
+                        ],
+                        return_type: Some(
+                            Named(
+                                "Poll",
+                            ),
+                        ),
+                        body: Block {
+                            statements: [
+                                Return(
+                                    Some(
+                                        Path(
+                                            Identifier(
+                                                "Poll",
+                                            ),
+                                            "Pending",
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        },
+                    },
+                ],
+            },
+        ),
+        Function(
+            Function {
+                name: "ready",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [],
+                return_type: Some(
+                    Named(
+                        "Poll",
+                    ),
+                ),
+                body: Block {
+                    statements: [
+                        Return(
+                            Some(
+                                Path(
+                                    Identifier(
+                                        "Poll",
+                                    ),
+                                    "Ready",
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+            },
+        ),
+    ],
+}

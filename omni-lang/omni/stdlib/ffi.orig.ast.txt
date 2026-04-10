@@ -1,0 +1,11 @@
+Module {
+    items: [
+        Module(
+            ModuleDecl {
+                name: "std::ffi",
+                attributes: [],
+                items: [],
+            },
+        ),
+    ],
+}

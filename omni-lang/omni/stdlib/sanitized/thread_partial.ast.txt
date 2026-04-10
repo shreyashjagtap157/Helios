@@ -1,0 +1,126 @@
+Module {
+    items: [
+        Module(
+            ModuleDecl {
+                name: "std::thread",
+                attributes: [],
+                items: [],
+            },
+        ),
+        Struct(
+            StructDef {
+                name: "Mutex",
+                attributes: [],
+                implements: None,
+                fields: [],
+                methods: [],
+            },
+        ),
+        Function(
+            Function {
+                name: "mutex_new",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [],
+                return_type: Some(
+                    Generic(
+                        "Mutex",
+                        [
+                            Named(
+                                "T",
+                            ),
+                        ],
+                    ),
+                ),
+                body: Block {
+                    statements: [
+                        Return(
+                            Some(
+                                StructLiteral {
+                                    name: "Mutex",
+                                    fields: [],
+                                },
+                            ),
+                        ),
+                    ],
+                },
+            },
+        ),
+        Struct(
+            StructDef {
+                name: "CondVar",
+                attributes: [],
+                implements: None,
+                fields: [],
+                methods: [],
+            },
+        ),
+        Function(
+            Function {
+                name: "condvar_new",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [],
+                return_type: Some(
+                    Named(
+                        "CondVar",
+                    ),
+                ),
+                body: Block {
+                    statements: [
+                        Return(
+                            Some(
+                                StructLiteral {
+                                    name: "CondVar",
+                                    fields: [],
+                                },
+                            ),
+                        ),
+                    ],
+                },
+            },
+        ),
+        Struct(
+            StructDef {
+                name: "AtomicBool",
+                attributes: [],
+                implements: None,
+                fields: [],
+                methods: [],
+            },
+        ),
+        Function(
+            Function {
+                name: "atomic_bool_new",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [
+                    Param {
+                        name: "v",
+                        ty: Bool,
+                    },
+                ],
+                return_type: Some(
+                    Named(
+                        "AtomicBool",
+                    ),
+                ),
+                body: Block {
+                    statements: [
+                        Return(
+                            Some(
+                                StructLiteral {
+                                    name: "AtomicBool",
+                                    fields: [],
+                                },
+                            ),
+                        ),
+                    ],
+                },
+            },
+        ),
+    ],
+}

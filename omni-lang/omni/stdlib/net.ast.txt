@@ -1,0 +1,143 @@
+Module {
+    items: [
+        Module(
+            ModuleDecl {
+                name: "std::net",
+                attributes: [],
+                items: [],
+            },
+        ),
+        Struct(
+            StructDef {
+                name: "Socket",
+                attributes: [],
+                implements: None,
+                fields: [],
+                methods: [],
+            },
+        ),
+        Function(
+            Function {
+                name: "connect",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [
+                    Param {
+                        name: "addr",
+                        ty: Str,
+                    },
+                    Param {
+                        name: "port",
+                        ty: U16,
+                    },
+                ],
+                return_type: Some(
+                    Named(
+                        "Socket",
+                    ),
+                ),
+                body: Block {
+                    statements: [
+                        Return(
+                            Some(
+                                StructLiteral {
+                                    name: "Socket",
+                                    fields: [],
+                                },
+                            ),
+                        ),
+                    ],
+                },
+            },
+        ),
+        Function(
+            Function {
+                name: "send",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [
+                    Param {
+                        name: "s",
+                        ty: WithOwnership(
+                            Named(
+                                "Socket",
+                            ),
+                            Borrow,
+                        ),
+                    },
+                    Param {
+                        name: "data",
+                        ty: WithOwnership(
+                            Slice(
+                                U8,
+                            ),
+                            Borrow,
+                        ),
+                    },
+                ],
+                return_type: Some(
+                    Usize,
+                ),
+                body: Block {
+                    statements: [
+                        Return(
+                            Some(
+                                Literal(
+                                    Int(
+                                        0,
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+            },
+        ),
+        Function(
+            Function {
+                name: "recv",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [
+                    Param {
+                        name: "s",
+                        ty: WithOwnership(
+                            Named(
+                                "Socket",
+                            ),
+                            Borrow,
+                        ),
+                    },
+                    Param {
+                        name: "buf",
+                        ty: WithOwnership(
+                            Slice(
+                                U8,
+                            ),
+                            BorrowMut,
+                        ),
+                    },
+                ],
+                return_type: Some(
+                    Usize,
+                ),
+                body: Block {
+                    statements: [
+                        Return(
+                            Some(
+                                Literal(
+                                    Int(
+                                        0,
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+            },
+        ),
+    ],
+}

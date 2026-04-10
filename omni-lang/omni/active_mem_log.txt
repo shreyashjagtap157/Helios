@@ -1,0 +1,10 @@
+[2026-04-06T07:42:09Z INFO  omnc] Omni Compiler/Runtime v2.0.0
+[2026-04-06T07:42:09Z INFO  omnc] Target: Ovm
+[2026-04-06T07:42:09Z INFO  omnc] Compiling: "..\\omni\\stdlib\\mem.omni"
+[2026-04-06T07:42:09Z DEBUG omnc] Phase 0: Resolver engines (mode: bare_metal)
+[2026-04-06T07:42:09Z INFO  omnc] Resolver: exec=AOT_STATIC, mem=OWNERSHIP, conc=COOPERATIVE
+[2026-04-06T07:42:09Z DEBUG omnc] Phase 1: Lexical analysis
+[2026-04-06T07:42:09Z DEBUG omnc] Phase 2: Parsing
+[2026-04-06T07:42:09Z DEBUG omnc] Phase 2.0: Import resolution
+[2026-04-06T07:42:09Z DEBUG omnc] Phase 2.0.1: Conditional compilation (cfg filtering)
+[2026-04-06T07:42:09Z INFO  omnc] Wrote parsed AST to "..\\omni\\stdlib\\mem.ast.txt"

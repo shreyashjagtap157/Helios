@@ -1,0 +1,13 @@
+[2026-04-05T16:39:25Z INFO  omnc] Omni Compiler/Runtime v2.0.0
+[2026-04-05T16:39:25Z INFO  omnc] Target: Ovm
+[2026-04-05T16:39:25Z INFO  omnc] Compiling: "..\\omni\\stdlib\\sanitized\\core_partial.omni"
+[2026-04-05T16:39:25Z DEBUG omnc] Phase 0: Resolver engines (mode: bare_metal)
+[2026-04-05T16:39:25Z INFO  omnc] Resolver: exec=AOT_STATIC, mem=OWNERSHIP, conc=COOPERATIVE
+[2026-04-05T16:39:25Z DEBUG omnc] Phase 1: Lexical analysis
+[2026-04-05T16:39:25Z DEBUG omnc] Phase 2: Parsing
+[2026-04-05T16:39:25Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 92, column 12: expected Colon, got Comma
+[2026-04-05T16:39:25Z DEBUG omnc::parser] parser:synchronize tick current=423 iter=0 next=Some(Comma)
+[2026-04-05T16:39:25Z DEBUG omnc::parser] parser:synchronize tick current=424 iter=1 next=Some(Identifier)
+[2026-04-05T16:39:25Z DEBUG omnc::parser] parser:synchronize tick current=425 iter=2 next=Some(RBrace)
+[2026-04-05T16:39:25Z DEBUG omnc::parser] parser:synchronize tick current=426 iter=3 next=Some(Newline)
+Error: [E001] Unexpected token at line 92, column 12: expected Colon, got Comma

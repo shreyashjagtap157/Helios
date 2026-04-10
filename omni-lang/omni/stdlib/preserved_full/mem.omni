@@ -1,0 +1,926 @@
+module std::mem
+
+// ============================================================================
+// Omni Standard Library — Memory Management
+// ============================================================================
+// Low-level memory allocation, manipulation, and smart pointers.
+// Provides the foundation for all heap-allocated types.
+
+import std::core::{Drop, Clone, Default, Debug, Display, PartialEq, Eq, Hash, Hasher, Ordering}
+
+// ============================================================================
+// C Library FFI for Memory Operations
+// ============================================================================
+
+extern "C":
+    fn malloc(size: usize) -> *mut u8
+    fn calloc(count: usize, size: usize) -> *mut u8
+    fn realloc(ptr: *mut u8, size: usize) -> *mut u8
+    fn free(ptr: *mut u8)
+    fn memcpy(dest: *mut u8, src: *const u8, n: usize) -> *mut u8
+    fn memmove(dest: *mut u8, src: *const u8, n: usize) -> *mut u8
+    fn memset(dest: *mut u8, val: i32, n: usize) -> *mut u8
+    fn memcmp(s1: *const u8, s2: *const u8, n: usize) -> i32
+
+// ============================================================================
+// Memory Utilities
+// ============================================================================
+
+fn size_of<T>() -> usize:
+    return __builtin_sizeof::<T>()
+
+fn align_of<T>() -> usize:
+    return __builtin_alignof::<T>()
+
+fn swap<T>(a: &mut T, b: &mut T):
+    unsafe:
+        let tmp = __builtin_read_unaligned::<T>(a as *const T)
+        memcpy(a as *mut u8, b as *const u8, size_of::<T>())
+        memcpy(b as *mut u8, &tmp as *const u8, size_of::<T>())
+        __builtin_forget(tmp)
+
+fn replace<T>(dest: &mut T, src: T) -> T:
+    unsafe:
+        let old = __builtin_read_unaligned::<T>(dest as *const T)
+        memcpy(dest as *mut u8, &src as *const u8, size_of::<T>())
+        __builtin_forget(src)
+        return old
+
+fn take<T: Default>(dest: &mut T) -> T:
+    return replace(dest, T::default())
+
+fn forget<T>(val: T):
+    unsafe:
+        __builtin_forget(val)
+
+fn drop<T>(val: T):
+    // Intentionally let val go out of scope, invoking its destructor
+    pass
+
+fn zeroed<T>() -> T:
+    unsafe:
+        let mut val: T = __builtin_uninit::<T>()
+        memset(&mut val as *mut u8, 0, size_of::<T>())
+        return val
+
+fn align_up(addr: usize, align: usize) -> usize:
+    assert(align > 0 and (align & (align - 1)) == 0, "alignment must be power of 2")
+    return (addr + align - 1) & !(align - 1)
+
+fn align_down(addr: usize, align: usize) -> usize:
+    assert(align > 0 and (align & (align - 1)) == 0, "alignment must be power of 2")
+    return addr & !(align - 1)
+
+fn is_aligned(addr: usize, align: usize) -> bool:
+    return (addr & (align - 1)) == 0
+
+// ============================================================================
+// Raw Pointer Operations
+// ============================================================================
+
+fn null<T>() -> *const T:
+    return 0 as *const T
+
+fn null_mut<T>() -> *mut T:
+    return 0 as *mut T
+
+fn is_null<T>(ptr: *const T) -> bool:
+    return ptr as usize == 0
+
+fn read<T>(src: *const T) -> T:
+    unsafe:
+        return __builtin_read_unaligned::<T>(src)
+
+fn write<T>(dst: *mut T, val: T):
+    unsafe:
+        memcpy(dst as *mut u8, &val as *const u8, size_of::<T>())
+        __builtin_forget(val)
+
+fn copy<T>(src: *const T, dst: *mut T, count: usize):
+    unsafe:
+        memmove(dst as *mut u8, src as *const u8, count * size_of::<T>())
+
+fn copy_nonoverlapping<T>(src: *const T, dst: *mut T, count: usize):
+    unsafe:
+        memcpy(dst as *mut u8, src as *const u8, count * size_of::<T>())
+
+fn write_bytes(dst: *mut u8, val: u8, count: usize):
+    unsafe:
+        memset(dst, val as i32, count)
+
+// ============================================================================
+// Global Allocator
+// ============================================================================
+
+trait Allocator:
+    fn allocate(&self, size: usize, align: usize) -> *mut u8
+    fn deallocate(&self, ptr: *mut u8, size: usize, align: usize)
+    fn reallocate(&self, ptr: *mut u8, old_size: usize, new_size: usize, align: usize) -> *mut u8
+
+struct GlobalAllocator:
+    pass
+
+impl Allocator for GlobalAllocator:
+    fn allocate(&self, size: usize, align: usize) -> *mut u8:
+        if size == 0:
+            return align as *mut u8  // Return aligned dangling pointer
+        let ptr = if align <= 16:
+            malloc(size)
+        else:
+            // Over-allocate to guarantee alignment
+            let total = size + align - 1 + size_of::<usize>()
+            let raw = malloc(total)
+            if is_null(raw):
+                return null_mut()
+            let aligned = align_up(raw as usize + size_of::<usize>(), align)
+            // Store original pointer before aligned region
+            unsafe:
+                let header = (aligned - size_of::<usize>()) as *mut usize
+                *header = raw as usize
+            aligned as *mut u8
+        return ptr
+
+    fn deallocate(&self, ptr: *mut u8, size: usize, align: usize):
+        if size == 0 or is_null(ptr):
+            return
+        if align <= 16:
+            free(ptr)
+        else:
+            unsafe:
+                let header = (ptr as usize - size_of::<usize>()) as *mut usize
+                let original = *header as *mut u8
+                free(original)
+
+    fn reallocate(&self, ptr: *mut u8, old_size: usize, new_size: usize, align: usize) -> *mut u8:
+        if is_null(ptr):
+            return self.allocate(new_size, align)
+        if new_size == 0:
+            self.deallocate(ptr, old_size, align)
+            return null_mut()
+        if align <= 16:
+            return realloc(ptr, new_size)
+        else:
+            let new_ptr = self.allocate(new_size, align)
+            if is_null(new_ptr):
+                return null_mut()
+            let copy_size = if old_size < new_size { old_size } else { new_size }
+            memcpy(new_ptr, ptr as *const u8, copy_size)
+            self.deallocate(ptr, old_size, align)
+            return new_ptr
+
+const GLOBAL_ALLOCATOR: GlobalAllocator = GlobalAllocator {}
+
+fn alloc(size: usize) -> *mut u8:
+    return GLOBAL_ALLOCATOR.allocate(size, 8)
+
+fn alloc_aligned(size: usize, align: usize) -> *mut u8:
+    return GLOBAL_ALLOCATOR.allocate(size, align)
+
+fn dealloc(ptr: *mut u8, size: usize):
+    GLOBAL_ALLOCATOR.deallocate(ptr, size, 8)
+
+fn realloc_mem(ptr: *mut u8, old_size: usize, new_size: usize) -> *mut u8:
+    return GLOBAL_ALLOCATOR.reallocate(ptr, old_size, new_size, 8)
+
+// ============================================================================
+// Box<T> — Unique Heap Allocation
+// ============================================================================
+
+struct Box<T>:
+    ptr: *mut T
+
+    fn new(value: T) -> own Box<T>:
+        let ptr = alloc(size_of::<T>()) as *mut T
+        if is_null(ptr):
+            panic("allocation failed")
+        unsafe:
+            write(ptr, value)
+        return Box { ptr }
+
+    fn from_raw(ptr: *mut T) -> own Box<T>:
+        return Box { ptr }
+
+    fn into_raw(self) -> *mut T:
+        let ptr = self.ptr
+        forget(self)
+        return ptr
+
+    fn as_ref(&self) -> &T:
+        unsafe:
+            return &*self.ptr
+
+    fn as_mut(&mut self) -> &mut T:
+        unsafe:
+            return &mut *self.ptr
+
+    fn into_inner(self) -> T:
+        unsafe:
+            let val = read(self.ptr as *const T)
+            dealloc(self.ptr as *mut u8, size_of::<T>())
+            forget(self)
+            return val
+
+impl<T> Drop for Box<T>:
+    fn drop(&mut self):
+        if not is_null(self.ptr):
+            unsafe:
+                // Drop the inner value
+                let val_ref = &mut *self.ptr
+                val_ref.drop()
+            dealloc(self.ptr as *mut u8, size_of::<T>())
+
+impl<T: Clone> Clone for Box<T>:
+    fn clone(&self) -> own Box<T>:
+        return Box::new(self.as_ref().clone())
+
+impl<T: PartialEq> PartialEq for Box<T>:
+    fn eq(&self, other: &Box<T>) -> bool:
+        return self.as_ref().eq(other.as_ref())
+
+impl<T: Debug> Debug for Box<T>:
+    fn fmt_debug(&self, f: &mut Formatter) -> Result<(), FmtError>:
+        return self.as_ref().fmt_debug(f)
+
+// ============================================================================
+// Rc<T> — Reference-Counted Smart Pointer
+// ============================================================================
+
+struct RcInner<T>:
+    strong_count: u32
+    weak_count: u32
+    value: T
+
+struct Rc<T>:
+    inner: *mut RcInner<T>
+
+    fn new(value: T) -> own Rc<T>:
+        let inner = alloc(size_of::<RcInner<T>>()) as *mut RcInner<T>
+        if is_null(inner):
+            panic("Rc allocation failed")
+        unsafe:
+            (*inner).strong_count = 1
+            (*inner).weak_count = 0
+            write(&mut (*inner).value as *mut T, value)
+        return Rc { inner }
+
+    fn clone(&self) -> own Rc<T>:
+        unsafe:
+            (*self.inner).strong_count += 1
+        return Rc { inner: self.inner }
+
+    fn strong_count(&self) -> u32:
+        unsafe:
+            return (*self.inner).strong_count
+
+    fn weak_count(&self) -> u32:
+        unsafe:
+            return (*self.inner).weak_count
+
+    fn as_ref(&self) -> &T:
+        unsafe:
+            return &(*self.inner).value
+
+    fn get_mut(&mut self) -> Option<&mut T>:
+        if self.strong_count() == 1 and self.weak_count() == 0:
+            unsafe:
+                return Some(&mut (*self.inner).value)
+        return None
+
+    fn downgrade(&self) -> Weak<T>:
+        unsafe:
+            (*self.inner).weak_count += 1
+        return Weak { inner: self.inner }
+
+    fn ptr_eq(a: &Rc<T>, b: &Rc<T>) -> bool:
+        return a.inner == b.inner
+
+impl<T> Drop for Rc<T>:
+    fn drop(&mut self):
+        if is_null(self.inner):
+            return
+        unsafe:
+            (*self.inner).strong_count -= 1
+            if (*self.inner).strong_count == 0:
+                // Drop the inner value
+                let val_ref = &mut (*self.inner).value
+                val_ref.drop()
+                if (*self.inner).weak_count == 0:
+                    dealloc(self.inner as *mut u8, size_of::<RcInner<T>>())
+
+impl<T: PartialEq> PartialEq for Rc<T>:
+    fn eq(&self, other: &Rc<T>) -> bool:
+        return self.as_ref().eq(other.as_ref())
+
+impl<T: Debug> Debug for Rc<T>:
+    fn fmt_debug(&self, f: &mut Formatter) -> Result<(), FmtError>:
+        return self.as_ref().fmt_debug(f)
+
+// ============================================================================
+// Weak<T> — Weak Reference for Rc
+// ============================================================================
+
+struct Weak<T>:
+    inner: *mut RcInner<T>
+
+    fn upgrade(&self) -> Option<Rc<T>>:
+        unsafe:
+            if is_null(self.inner) or (*self.inner).strong_count == 0:
+                return None
+            (*self.inner).strong_count += 1
+            return Some(Rc { inner: self.inner })
+
+    fn strong_count(&self) -> u32:
+        unsafe:
+            if is_null(self.inner):
+                return 0
+            return (*self.inner).strong_count
+
+impl<T> Drop for Weak<T>:
+    fn drop(&mut self):
+        if is_null(self.inner):
+            return
+        unsafe:
+            (*self.inner).weak_count -= 1
+            if (*self.inner).strong_count == 0 and (*self.inner).weak_count == 0:
+                dealloc(self.inner as *mut u8, size_of::<RcInner<T>>())
+
+impl<T> Clone for Weak<T>:
+    fn clone(&self) -> own Weak<T>:
+        unsafe:
+            if not is_null(self.inner):
+                (*self.inner).weak_count += 1
+        return Weak { inner: self.inner }
+
+// ============================================================================
+// Arc<T> — Atomic Reference Counting (Thread-Safe)
+// ============================================================================
+
+struct ArcInner<T>:
+    strong_count: atomic<u32>
+    weak_count: atomic<u32>
+    value: T
+
+struct Arc<T>:
+    inner: *mut ArcInner<T>
+
+    fn new(value: T) -> own Arc<T>:
+        let inner = alloc(size_of::<ArcInner<T>>()) as *mut ArcInner<T>
+        if is_null(inner):
+            panic("Arc allocation failed")
+        unsafe:
+            atomic_store(&mut (*inner).strong_count, 1)
+            atomic_store(&mut (*inner).weak_count, 0)
+            write(&mut (*inner).value as *mut T, value)
+        return Arc { inner }
+
+    fn clone(&self) -> own Arc<T>:
+        unsafe:
+            atomic_fetch_add(&mut (*self.inner).strong_count, 1)
+        return Arc { inner: self.inner }
+
+    fn strong_count(&self) -> u32:
+        unsafe:
+            return atomic_load(&(*self.inner).strong_count)
+
+    fn weak_count(&self) -> u32:
+        unsafe:
+            return atomic_load(&(*self.inner).weak_count)
+
+    fn as_ref(&self) -> &T:
+        unsafe:
+            return &(*self.inner).value
+
+    fn get_mut(&mut self) -> Option<&mut T>:
+        if self.strong_count() == 1 and self.weak_count() == 0:
+            unsafe:
+                return Some(&mut (*self.inner).value)
+        return None
+
+    fn ptr_eq(a: &Arc<T>, b: &Arc<T>) -> bool:
+        return a.inner == b.inner
+
+impl<T> Drop for Arc<T>:
+    fn drop(&mut self):
+        if is_null(self.inner):
+            return
+        unsafe:
+            let prev = atomic_fetch_sub(&mut (*self.inner).strong_count, 1)
+            if prev == 1:
+                // Last strong reference — drop the value
+                atomic_thread_fence_acquire()
+                let val_ref = &mut (*self.inner).value
+                val_ref.drop()
+                if atomic_load(&(*self.inner).weak_count) == 0:
+                    dealloc(self.inner as *mut u8, size_of::<ArcInner<T>>())
+
+impl<T: PartialEq> PartialEq for Arc<T>:
+    fn eq(&self, other: &Arc<T>) -> bool:
+        return self.as_ref().eq(other.as_ref())
+
+// ============================================================================
+// Cell<T> — Interior Mutability (Copy types)
+// ============================================================================
+
+struct Cell<T: Copy>:
+    value: T
+
+    fn new(value: T) -> own Cell<T>:
+        return Cell { value }
+
+    fn get(&self) -> T:
+        return self.value
+
+    fn set(&self, value: T):
+        unsafe:
+            let self_mut = self as *const Cell<T> as *mut Cell<T>
+            (*self_mut).value = value
+
+    fn replace(&self, value: T) -> T:
+        let old = self.get()
+        self.set(value)
+        return old
+
+    fn update<F: Fn(T) -> T>(&self, f: F) -> T:
+        let old = self.get()
+        let new = f(old)
+        self.set(new)
+        return new
+
+// ============================================================================
+// RefCell<T> — Interior Mutability (Dynamic Borrow Checking)
+// ============================================================================
+
+enum BorrowState:
+    Unused
+    Reading(u32)   // Number of active immutable borrows
+    Writing
+
+struct RefCell<T>:
+    value: T
+    borrow_state: Cell<BorrowState>
+
+    fn new(value: T) -> own RefCell<T>:
+        return RefCell {
+            value,
+            borrow_state: Cell::new(BorrowState::Unused),
+        }
+
+    fn borrow(&self) -> Ref<T>:
+        match self.borrow_state.get():
+            BorrowState::Unused =>
+                self.borrow_state.set(BorrowState::Reading(1))
+            BorrowState::Reading(n) =>
+                self.borrow_state.set(BorrowState::Reading(n + 1))
+            BorrowState::Writing =>
+                panic("already mutably borrowed")
+        return Ref { cell: self }
+
+    fn borrow_mut(&self) -> RefMut<T>:
+        match self.borrow_state.get():
+            BorrowState::Unused =>
+                self.borrow_state.set(BorrowState::Writing)
+            _ =>
+                panic("already borrowed")
+        return RefMut { cell: self }
+
+    fn try_borrow(&self) -> Option<Ref<T>>:
+        match self.borrow_state.get():
+            BorrowState::Unused =>
+                self.borrow_state.set(BorrowState::Reading(1))
+                Some(Ref { cell: self })
+            BorrowState::Reading(n) =>
+                self.borrow_state.set(BorrowState::Reading(n + 1))
+                Some(Ref { cell: self })
+            BorrowState::Writing =>
+                None
+
+    fn try_borrow_mut(&self) -> Option<RefMut<T>>:
+        match self.borrow_state.get():
+            BorrowState::Unused =>
+                self.borrow_state.set(BorrowState::Writing)
+                Some(RefMut { cell: self })
+            _ =>
+                None
+
+    fn into_inner(self) -> T:
+        return self.value
+
+struct Ref<T>:
+    cell: &RefCell<T>
+
+    fn as_ref(&self) -> &T:
+        unsafe:
+            return &self.cell.value
+
+impl<T> Drop for Ref<T>:
+    fn drop(&mut self):
+        match self.cell.borrow_state.get():
+            BorrowState::Reading(1) =>
+                self.cell.borrow_state.set(BorrowState::Unused)
+            BorrowState::Reading(n) =>
+                self.cell.borrow_state.set(BorrowState::Reading(n - 1))
+            _ =>
+                panic("invalid borrow state on Ref drop")
+
+struct RefMut<T>:
+    cell: &RefCell<T>
+
+    fn as_ref(&self) -> &T:
+        unsafe:
+            return &self.cell.value
+
+    fn as_mut(&mut self) -> &mut T:
+        unsafe:
+            let cell_mut = self.cell as *const RefCell<T> as *mut RefCell<T>
+            return &mut (*cell_mut).value
+
+impl<T> Drop for RefMut<T>:
+    fn drop(&mut self):
+        self.cell.borrow_state.set(BorrowState::Unused)
+
+// ============================================================================
+// MaybeUninit<T>
+// ============================================================================
+
+struct MaybeUninit<T>:
+    storage: [u8; __builtin_sizeof::<T>()]
+    initialized: bool
+
+    fn uninit() -> own MaybeUninit<T>:
+        return MaybeUninit {
+            storage: [0u8; __builtin_sizeof::<T>()],
+            initialized: false,
+        }
+
+    fn new(value: T) -> own MaybeUninit<T>:
+        let mut mu = MaybeUninit::uninit()
+        unsafe:
+            memcpy(&mut mu.storage as *mut u8, &value as *const u8, size_of::<T>())
+            __builtin_forget(value)
+        mu.initialized = true
+        return mu
+
+    fn write(&mut self, value: T):
+        if self.initialized:
+            unsafe:
+                let ptr = &mut self.storage as *mut u8 as *mut T
+                let ref_val = &mut *ptr
+                ref_val.drop()
+        unsafe:
+            memcpy(&mut self.storage as *mut u8, &value as *const u8, size_of::<T>())
+            __builtin_forget(value)
+        self.initialized = true
+
+    fn assume_init(self) -> T:
+        assert(self.initialized, "MaybeUninit::assume_init on uninit value")
+        unsafe:
+            let val = __builtin_read_unaligned::<T>(&self.storage as *const u8 as *const T)
+            forget(self)
+            return val
+
+    fn as_ptr(&self) -> *const T:
+        return &self.storage as *const u8 as *const T
+
+    fn as_mut_ptr(&mut self) -> *mut T:
+        return &mut self.storage as *mut u8 as *mut T
+
+impl<T> Drop for MaybeUninit<T>:
+    fn drop(&mut self):
+        if self.initialized:
+            unsafe:
+                let ptr = &mut self.storage as *mut u8 as *mut T
+                let ref_val = &mut *ptr
+                ref_val.drop()
+
+// ============================================================================
+// Slice Utilities
+// ============================================================================
+
+fn slice_from_raw_parts<T>(ptr: *const T, len: usize) -> &[T]:
+    unsafe:
+        return __builtin_slice_from_raw(ptr, len)
+
+fn slice_from_raw_parts_mut<T>(ptr: *mut T, len: usize) -> &mut [T]:
+    unsafe:
+        return __builtin_slice_from_raw_mut(ptr, len)
+
+// ============================================================================
+// ManuallyDrop<T>
+// ============================================================================
+
+struct ManuallyDrop<T>:
+    value: T
+
+    fn new(value: T) -> own ManuallyDrop<T>:
+        return ManuallyDrop { value }
+
+    fn into_inner(self) -> T:
+        let val = unsafe { read(&self.value as *const T) }
+        forget(self)
+        return val
+
+    fn as_ref(&self) -> &T:
+        return &self.value
+
+    fn as_mut(&mut self) -> &mut T:
+        return &mut self.value
+
+    fn take(&mut self) -> T:
+        unsafe:
+            return read(&self.value as *const T)
+
+    fn drop_inner(&mut self):
+        unsafe:
+            let val = read(&self.value as *const T)
+            std::mem::drop(val)
+
+// ManuallyDrop intentionally does NOT implement Drop
+
+// ============================================================================
+// Pin<P>
+// ============================================================================
+
+struct Pin<P>:
+    pointer: P
+
+    fn new(pointer: P) -> own Pin<P>:
+        return Pin { pointer }
+
+    fn as_ref(&self) -> &P:
+        return &self.pointer
+
+    fn as_mut(&mut self) -> &mut P:
+        return &mut self.pointer
+
+    fn into_inner(self) -> P:
+        return self.pointer
+
+// ============================================================================
+// Arena Allocator
+// ============================================================================
+
+struct ArenaChunk:
+    data: *mut u8
+    size: usize
+    used: usize
+    next: Option<own Box<ArenaChunk>>
+
+struct Arena:
+    current: own Box<ArenaChunk>
+    chunk_size: usize
+
+    fn new() -> own Arena:
+        return Arena::with_capacity(4096)
+
+    fn with_capacity(chunk_size: usize) -> own Arena:
+        let data = alloc(chunk_size)
+        if is_null(data):
+            panic("arena allocation failed")
+        let chunk = ArenaChunk {
+            data,
+            size: chunk_size,
+            used: 0,
+            next: None,
+        }
+        return Arena {
+            current: Box::new(chunk),
+            chunk_size,
+        }
+
+    fn alloc<T>(&mut self, value: T) -> &mut T:
+        let size = size_of::<T>()
+        let align = align_of::<T>()
+        let ptr = self.alloc_raw(size, align)
+        unsafe:
+            let typed_ptr = ptr as *mut T
+            write(typed_ptr, value)
+            return &mut *typed_ptr
+
+    fn alloc_raw(&mut self, size: usize, align: usize) -> *mut u8:
+        let chunk = self.current.as_mut()
+        let aligned_used = align_up(chunk.used, align)
+
+        if aligned_used + size <= chunk.size:
+            let ptr = unsafe { chunk.data.offset(aligned_used as isize) }
+            chunk.used = aligned_used + size
+            return ptr
+
+        // Need a new chunk
+        let new_chunk_size = if size > self.chunk_size { size * 2 } else { self.chunk_size }
+        let new_data = alloc(new_chunk_size)
+        if is_null(new_data):
+            panic("arena chunk allocation failed")
+
+        let old_chunk = replace(self.current.as_mut(), ArenaChunk {
+            data: new_data,
+            size: new_chunk_size,
+            used: size,
+            next: None,
+        })
+        self.current.as_mut().next = Some(Box::new(old_chunk))
+
+        return new_data
+
+    fn alloc_slice<T: Copy>(&mut self, slice: &[T]) -> &mut [T]:
+        let size = size_of::<T>() * slice.len()
+        let align = align_of::<T>()
+        let ptr = self.alloc_raw(size, align) as *mut T
+        unsafe:
+            copy_nonoverlapping(slice.as_ptr(), ptr, slice.len())
+            return slice_from_raw_parts_mut(ptr, slice.len())
+
+    fn alloc_str(&mut self, s: &str) -> &str:
+        let bytes = self.alloc_slice(s.as_bytes())
+        unsafe:
+            return str::from_utf8_unchecked(bytes)
+
+    fn reset(&mut self):
+        // Walk the chain and free all but the first chunk
+        let chunk = self.current.as_mut()
+        chunk.used = 0
+        // Drop the chain of old chunks
+        chunk.next = None
+
+impl Drop for Arena:
+    fn drop(&mut self):
+        // Free all chunks
+        fn free_chunk(chunk: &mut ArenaChunk):
+            if not is_null(chunk.data):
+                dealloc(chunk.data, chunk.size)
+            if let Some(ref mut next) = chunk.next:
+                free_chunk(next.as_mut())
+        free_chunk(self.current.as_mut())
+
+// ============================================================================
+// Pool Allocator
+// ============================================================================
+
+struct PoolAllocator<T>:
+    chunks: Vector<*mut u8>
+    free_list: *mut PoolNode
+    chunk_size: usize
+    items_per_chunk: usize
+
+struct PoolNode:
+    next: *mut PoolNode
+
+impl<T> PoolAllocator<T>:
+    fn new() -> own PoolAllocator<T>:
+        return PoolAllocator::with_capacity(64)
+
+    fn with_capacity(items_per_chunk: usize) -> own PoolAllocator<T>:
+        let item_size = if size_of::<T>() < size_of::<PoolNode>():
+            size_of::<PoolNode>()
+        else:
+            size_of::<T>()
+
+        let mut pool = PoolAllocator {
+            chunks: Vector::new(),
+            free_list: null_mut(),
+            chunk_size: item_size * items_per_chunk,
+            items_per_chunk,
+        }
+        pool.grow()
+        return pool
+
+    fn alloc(&mut self) -> *mut T:
+        if is_null(self.free_list):
+            self.grow()
+        let node = self.free_list
+        unsafe:
+            self.free_list = (*node).next
+        return node as *mut T
+
+    fn dealloc(&mut self, ptr: *mut T):
+        unsafe:
+            let node = ptr as *mut PoolNode
+            (*node).next = self.free_list
+            self.free_list = node
+
+    fn grow(&mut self):
+        let item_size = if size_of::<T>() < size_of::<PoolNode>():
+            size_of::<PoolNode>()
+        else:
+            size_of::<T>()
+
+        let chunk = alloc(self.chunk_size)
+        if is_null(chunk):
+            panic("pool allocator grow failed")
+        self.chunks.push(chunk)
+
+        // Build free list from new chunk
+        for i in 0..self.items_per_chunk:
+            let node = unsafe { chunk.offset((i * item_size) as isize) as *mut PoolNode }
+            unsafe:
+                (*node).next = self.free_list
+            self.free_list = node
+
+impl<T> Drop for PoolAllocator<T>:
+    fn drop(&mut self):
+        for chunk in &self.chunks:
+            dealloc(*chunk, self.chunk_size)
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[test]
+fn test_box_basic():
+    let b = Box::new(42)
+    assert(*b.as_ref() == 42, "box should contain 42")
+
+#[test]
+fn test_box_into_inner():
+    let b = Box::new(100)
+    let val = b.into_inner()
+    assert(val == 100, "into_inner should return 100")
+
+#[test]
+fn test_rc_basic():
+    let rc1 = Rc::new(42)
+    assert(rc1.strong_count() == 1, "initial count should be 1")
+    let rc2 = rc1.clone()
+    assert(rc1.strong_count() == 2, "count should be 2 after clone")
+    assert(*rc1.as_ref() == 42, "value should be 42")
+
+#[test]
+fn test_rc_weak():
+    let rc = Rc::new(42)
+    let weak = rc.downgrade()
+    assert(weak.strong_count() == 1, "strong count should be 1")
+    let upgraded = weak.upgrade()
+    assert(upgraded.is_some(), "should upgrade successfully")
+    assert(*upgraded.unwrap().as_ref() == 42, "upgraded value should be 42")
+
+#[test]
+fn test_cell():
+    let cell = Cell::new(10)
+    assert(cell.get() == 10, "initial value")
+    cell.set(20)
+    assert(cell.get() == 20, "updated value")
+    let old = cell.replace(30)
+    assert(old == 20, "replaced value")
+    assert(cell.get() == 30, "new value")
+
+#[test]
+fn test_refcell():
+    let rc = RefCell::new(42)
+    {
+        let r = rc.borrow()
+        assert(*r.as_ref() == 42, "immutable borrow should work")
+    }
+    {
+        let mut w = rc.borrow_mut()
+        *w.as_mut() = 100
+    }
+    let r2 = rc.borrow()
+    assert(*r2.as_ref() == 100, "value should be updated")
+
+#[test]
+fn test_swap():
+    let mut a = 10
+    let mut b = 20
+    swap(&mut a, &mut b)
+    assert(a == 20, "a should be 20")
+    assert(b == 10, "b should be 10")
+
+#[test]
+fn test_replace():
+    let mut val = 42
+    let old = replace(&mut val, 100)
+    assert(old == 42, "old should be 42")
+    assert(val == 100, "val should be 100")
+
+#[test]
+fn test_align():
+    assert(align_up(1, 4) == 4, "align up 1 to 4")
+    assert(align_up(4, 4) == 4, "align up 4 to 4")
+    assert(align_up(5, 4) == 8, "align up 5 to 4")
+    assert(align_down(7, 4) == 4, "align down 7 to 4")
+    assert(is_aligned(8, 4), "8 is aligned to 4")
+    assert(not is_aligned(7, 4), "7 is not aligned to 4")
+
+#[test]
+fn test_arena():
+    let mut arena = Arena::new()
+    let x = arena.alloc(42)
+    let y = arena.alloc(100)
+    assert(*x == 42, "arena alloc x")
+    assert(*y == 100, "arena alloc y")
+    let s = arena.alloc_str("hello")
+    assert(s == "hello", "arena alloc str")
+
+#[test]
+fn test_arc():
+    let arc1 = Arc::new(42)
+    assert(arc1.strong_count() == 1, "initial arc count")
+    let arc2 = arc1.clone()
+    assert(arc1.strong_count() == 2, "arc count after clone")
+    assert(*arc1.as_ref() == 42, "arc value")
+
+#[test]
+fn test_maybe_uninit():
+    let mut mu = MaybeUninit::<i32>::uninit()
+    mu.write(42)
+    let val = mu.assume_init()
+    assert(val == 42, "should be 42")

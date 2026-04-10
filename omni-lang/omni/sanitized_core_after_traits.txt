@@ -1,0 +1,26 @@
+[2026-04-05T16:38:13Z INFO  omnc] Omni Compiler/Runtime v2.0.0
+[2026-04-05T16:38:13Z INFO  omnc] Target: Ovm
+[2026-04-05T16:38:13Z INFO  omnc] Compiling: "..\\omni\\stdlib\\sanitized\\core_partial.omni"
+[2026-04-05T16:38:13Z DEBUG omnc] Phase 0: Resolver engines (mode: bare_metal)
+[2026-04-05T16:38:13Z INFO  omnc] Resolver: exec=AOT_STATIC, mem=OWNERSHIP, conc=COOPERATIVE
+[2026-04-05T16:38:13Z DEBUG omnc] Phase 1: Lexical analysis
+[2026-04-05T16:38:14Z DEBUG omnc] Phase 2: Parsing
+[2026-04-05T16:38:14Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 33, column 21: expected Colon, got Newline
+[2026-04-05T16:38:14Z DEBUG omnc::parser] parser: record_error -> synchronize at current=109
+[2026-04-05T16:38:14Z DEBUG omnc::parser] parser:synchronize tick current=109 iter=0 next=Some(Newline)
+[2026-04-05T16:38:14Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 36, column 17: expected Colon, got Newline
+[2026-04-05T16:38:14Z DEBUG omnc::parser] parser: record_error -> synchronize at current=124
+[2026-04-05T16:38:14Z DEBUG omnc::parser] parser:synchronize tick current=124 iter=0 next=Some(Newline)
+[2026-04-05T16:38:14Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 39, column 18: expected Colon, got Newline
+[2026-04-05T16:38:14Z DEBUG omnc::parser] parser: record_error -> synchronize at current=138
+[2026-04-05T16:38:14Z DEBUG omnc::parser] parser:synchronize tick current=138 iter=0 next=Some(Newline)
+[2026-04-05T16:38:14Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 42, column 21: expected Colon, got Newline
+[2026-04-05T16:38:14Z DEBUG omnc::parser] parser: record_error -> synchronize at current=154
+[2026-04-05T16:38:14Z DEBUG omnc::parser] parser:synchronize tick current=154 iter=0 next=Some(Newline)
+[2026-04-05T16:38:14Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 45, column 27: expected Colon, got Newline
+[2026-04-05T16:38:14Z DEBUG omnc::parser] parser: record_error -> synchronize at current=170
+[2026-04-05T16:38:14Z DEBUG omnc::parser] parser:synchronize tick current=170 iter=0 next=Some(Newline)
+[2026-04-05T16:38:14Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 48, column 30: expected Colon, got Newline
+[2026-04-05T16:38:14Z DEBUG omnc::parser] parser: record_error -> synchronize at current=191
+[2026-04-05T16:38:14Z DEBUG omnc::parser] parser:synchronize tick current=191 iter=0 next=Some(Newline)
+Error: [E001] Unexpected token at line 33, column 21: expected Colon, got Newline

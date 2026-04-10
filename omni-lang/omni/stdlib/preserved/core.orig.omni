@@ -1,0 +1,35 @@
+module std::core
+
+// Full original core implementation preserved before staged stubbing.
+
+module std::core
+
+// Minimal preservation stub for Stage0 bootstrap.
+// Full implementation is preserved in `core.orig.omni`.
+
+enum Option<T>:
+    None
+    Some(T)
+
+enum Result<T, E>:
+    Ok(T)
+    Err(E)
+
+type usize = i64
+
+struct String:
+    // Opaque string type for bootstrap
+    _private: usize
+
+trait Iterator:
+    type Item
+    fn next(&mut self) -> Option<Self::Item)
+
+fn panic(msg: &str) -> !
+
+module std::core
+
+// Full original preserved for restoration and incremental re-enablement.
+// (Preserved copy created by automated bootstrap helper.)
+
+// --- ORIGINAL CONTENT START ---

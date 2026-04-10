@@ -1,0 +1,9 @@
+// math module - basic math operations
+
+module math
+
+fn add(a: i64, b: i64) -> i64:
+    return a + b
+
+fn sub(a: i64, b: i64) -> i64:
+    return a - b

@@ -116,50 +116,47 @@ impl Runtime {
 
         info!("Runtime: Applying hot swap for {} files", changes.len());
 
-        // JIT Engine instance (would be persistent in real implementation)
-        // For this gap implementation, we create a temporary one to demonstrate the pipeline
-        // In a real scenario, Runtime would own a persistent JitEngine.
-        use crate::codegen::jit::{JitConfig, JitEngine};
-        let mut jit_engine = JitEngine::new(JitConfig::default());
+        #[cfg(feature = "experimental")]
+        {
+            // JIT Engine instance (would be persistent in real implementation)
+            use crate::codegen::jit::{JitConfig, JitEngine};
+            let mut jit_engine = JitEngine::new(JitConfig::default());
 
-        for change in changes {
-            info!("Runtime: Processing file {:?}", change.path);
+            for change in changes {
+                info!("Runtime: Processing file {:?}", change.path);
 
-            // 1. Read source
-            if let Ok(_source) = std::fs::read_to_string(&change.path) {
-                // 2. Parse (Simulated/Stubbed for now as we don't have easy access to the full pipeline here)
-                // In a full implementation:
-                // let ast = crate::parser::parse(&source)?;
-                // let ir_module = crate::ir::IrGenerator::new().generate(ast);
+                if let Ok(_source) = std::fs::read_to_string(&change.path) {
+                    let dummy_func = crate::ir::IrFunction {
+                        name: "hot_swapped_func".to_string(),
+                        params: vec![],
+                        return_type: crate::ir::IrType::Void,
+                        blocks: vec![crate::ir::IrBlock {
+                            label: "entry".to_string(),
+                            instructions: vec![],
+                            terminator: crate::ir::IrTerminator::Return(None),
+                        }],
+                        locals: vec![],
+                    };
 
-                // For demonstration, we'll create a dummy IR function representing the changed code
-                let dummy_func = crate::ir::IrFunction {
-                    name: "hot_swapped_func".to_string(),
-                    params: vec![],
-                    return_type: crate::ir::IrType::Void,
-                    blocks: vec![crate::ir::IrBlock {
-                        label: "entry".to_string(),
-                        instructions: vec![],
-                        terminator: crate::ir::IrTerminator::Return(None),
-                    }],
-                    locals: vec![],
-                };
-
-                // 3. Recompile
-                match jit_engine.recompile_function(&dummy_func) {
-                    Ok(compiled) => {
-                        info!("Runtime: Successfully recompiled {}", compiled.name);
-                        // 4. Update HotSwapManager
-                        let new_address = 0x12345678; // Mock address
-                        self.hot_swap_manager
-                            .update(&compiled.name, new_address)
-                            .unwrap_or_else(|e| warn!("Failed to update hot swap registry: {}", e));
-                    }
-                    Err(e) => {
-                        log::error!("Runtime: Failed to recompile {}: {}", dummy_func.name, e);
+                    match jit_engine.recompile_function(&dummy_func) {
+                        Ok(compiled) => {
+                            info!("Runtime: Successfully recompiled {}", compiled.name);
+                            let new_address = 0x12345678;
+                            self.hot_swap_manager
+                                .update(&compiled.name, new_address)
+                                .unwrap_or_else(|e| warn!("Failed to update hot swap registry: {}", e));
+                        }
+                        Err(e) => {
+                            log::error!("Runtime: Failed to recompile {}: {}", dummy_func.name, e);
+                        }
                     }
                 }
             }
+        }
+
+        #[cfg(not(feature = "experimental"))]
+        {
+            warn!("Runtime: Hot-swap requires the 'experimental' feature (JIT engine). Ignoring {} changes.", changes.len());
         }
 
         Ok(())

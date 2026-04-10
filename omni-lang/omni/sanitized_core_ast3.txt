@@ -1,0 +1,11 @@
+[2026-04-05T16:35:46Z INFO  omnc] Omni Compiler/Runtime v2.0.0
+[2026-04-05T16:35:46Z INFO  omnc] Target: Ovm
+[2026-04-05T16:35:46Z INFO  omnc] Compiling: "..\\omni\\stdlib\\sanitized\\core_partial.omni"
+[2026-04-05T16:35:46Z DEBUG omnc] Phase 0: Resolver engines (mode: bare_metal)
+[2026-04-05T16:35:46Z INFO  omnc] Resolver: exec=AOT_STATIC, mem=OWNERSHIP, conc=COOPERATIVE
+[2026-04-05T16:35:46Z DEBUG omnc] Phase 1: Lexical analysis
+[2026-04-05T16:35:46Z DEBUG omnc] Phase 2: Parsing
+[2026-04-05T16:35:46Z WARN  omnc::parser] parser error recorded: [E001] Unexpected token at line 28, column 25: expected Colon, got Newline
+[2026-04-05T16:35:46Z DEBUG omnc::parser] parser: record_error -> synchronize at current=86
+[2026-04-05T16:35:46Z DEBUG omnc::parser] parser:synchronize tick current=86 iter=0 next=Some(Newline)
+Error: [E001] Unexpected token at line 28, column 25: expected Colon, got Newline

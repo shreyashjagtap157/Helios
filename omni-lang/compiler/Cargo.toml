@@ -29,6 +29,7 @@ default = ["ovm"]
 ovm = []  # OVM bytecode interpreter (always available)
 llvm = ["dep:inkwell"]  # Native code generation via LLVM
 gpu = ["dep:cust", "dep:ocl", "dep:ash"] # GPU Backend support
+experimental = []  # Enable JIT, native codegen, MLIR, GPU dispatch, and other Phase 7-13 backends
 
 [dependencies]
 # GPU (Optional)

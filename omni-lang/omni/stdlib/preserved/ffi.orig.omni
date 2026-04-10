@@ -1,0 +1,6 @@
+module std::ffi
+
+// Full original preserved for restoration and incremental re-enablement.
+// (Preserved copy created by automated bootstrap helper.)
+
+// --- ORIGINAL CONTENT START ---

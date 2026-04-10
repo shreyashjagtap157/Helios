@@ -1,0 +1,36 @@
+Module {
+    items: [
+        Module(
+            ModuleDecl {
+                name: "tmp",
+                attributes: [],
+                items: [],
+            },
+        ),
+        Function(
+            Function {
+                name: "main",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [],
+                return_type: Some(
+                    I32,
+                ),
+                body: Block {
+                    statements: [
+                        Return(
+                            Some(
+                                Literal(
+                                    Int(
+                                        0,
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+            },
+        ),
+    ],
+}

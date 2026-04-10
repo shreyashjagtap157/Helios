@@ -1,0 +1,12 @@
+module test_question_op
+
+fn try_parse(x: int) -> Result<int, string>:
+    if x > 0:
+        return Ok(x)
+    else:
+        return Err("negative")
+
+fn main():
+    let result = try_parse(5)?
+    println("Result: ")
+    println(result)

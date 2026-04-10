@@ -1,0 +1,7 @@
+error: unexpected argument '--max-errors' found
+
+  tip: to pass '--max-errors' as a value, use '-- --max-errors'
+
+Usage: omnc.exe [OPTIONS] <INPUT> [-- <PROGRAM_ARGS>...]
+
+For more information, try '--help'.

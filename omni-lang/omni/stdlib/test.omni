@@ -1,0 +1,246 @@
+module std::test
+
+// ============================================================================
+// Omni Test Framework
+// ============================================================================
+// Lightweight unit-testing framework built into the standard library.
+// Provides assert macros, test organization, and a test runner.
+
+// Test result type
+enum TestResult:
+    Passed
+    Failed(str)
+    Ignored
+
+struct TestCase:
+    name: str
+    fn_ptr: fn() -> TestResult
+    is_ignored: bool
+    is_bench: bool
+
+struct TestSuite:
+    name: str
+    tests: Vector[TestCase]
+
+impl TestSuite:
+    fn new(name: str) -> TestSuite:
+        return TestSuite { name: name, tests: Vector::new() }
+
+    fn add_test(&mut self, name: str, test_fn: fn() -> TestResult):
+        self.tests.push(TestCase {
+            name: name,
+            fn_ptr: test_fn,
+            is_ignored: false,
+            is_bench: false
+        })
+
+    fn add_test_ignored(&mut self, name: str, reason: str):
+        self.tests.push(TestCase {
+            name: name,
+            fn_ptr: fn() { return TestResult::Ignored },
+            is_ignored: true,
+            is_bench: false
+        })
+
+    fn add_benchmark(&mut self, name: str, bench_fn: fn() -> ()):
+        self.tests.push(TestCase {
+            name: name,
+            fn_ptr: fn() { bench_fn(); return TestResult::Passed },
+            is_ignored: false,
+            is_bench: true
+        })
+
+    fn run(&self) -> TestSummary:
+        let passed = 0
+        let failed = 0
+        let ignored = 0
+        let failures = Vector[str].new()
+
+        for test in self.tests:
+            if test.is_ignored:
+                ignored = ignored + 1
+                continue
+
+            let result = test.fn_ptr()
+            match result:
+                TestResult::Passed:
+                    passed = passed + 1
+                TestResult::Failed(msg):
+                    failed = failed + 1
+                    failures.push(test.name + ": " + msg)
+                TestResult::Ignored:
+                    ignored = ignored + 1
+
+        return TestSummary {
+            total: self.tests.len(),
+            passed: passed,
+            failed: failed,
+            ignored: ignored,
+            failures: failures
+        }
+
+struct TestSummary:
+    total: usize
+    passed: usize
+    failed: usize
+    ignored: usize
+    failures: Vector[str]
+
+impl TestSummary:
+    fn is_success(&self) -> bool:
+        return self.failed == 0
+
+    fn print(&self):
+        println("test result: " + str(self.total) + " tests, " + 
+                str(self.passed) + " passed, " + str(self.failed) + 
+                " failed, " + str(self.ignored) + " ignored")
+
+        if self.failures.len() > 0:
+            println("")
+            println("FAILURES:")
+            for i in 0..self.failures.len():
+                println("  " + self.failures[i])
+
+// ============================================================================
+// Assertion Macros
+// ============================================================================
+
+fn assert(condition: bool, message: str):
+    if not condition:
+        panic("assertion failed: " + message)
+
+fn assert_eq[T where T: PartialEq](left: T, right: T, message: str):
+    if not (left == right):
+        panic("assertion failed: " + message + 
+              " (left=" + str(left) + ", right=" + str(right) + ")")
+
+fn assert_ne[T where T: PartialEq](left: T, right: T, message: str):
+    if left == right:
+        panic("assertion failed: " + message)
+
+fn assert_lt[T where T: PartialOrd](left: T, right: T, message: str):
+    if not (left < right):
+        panic("assertion failed: " + message)
+
+fn assert_le[T where T: PartialOrd](left: T, right: T, message: str):
+    if not (left <= right):
+        panic("assertion failed: " + message)
+
+fn assert_gt[T where T: PartialOrd](left: T, right: T, message: str):
+    if not (left > right):
+        panic("assertion failed: " + message)
+
+fn assert_ge[T where T: PartialOrd](left: T, right: T, message: str):
+    if not (left >= right):
+        panic("assertion failed: " + message)
+
+fn assert_panics(f: fn(), message: str):
+    let panicked = false
+    # In a full implementation, this would catch the panic
+    f()
+    if not panicked:
+        panic("assertion failed: " + message + " (expected panic did not occur)")
+
+fn assert_none[T](opt: Option[T], message: str):
+    match opt:
+        case Some(v): panic("assertion failed: " + message)
+        case None: pass
+
+fn assert_some[T](opt: Option[T], message: str) -> T:
+    match opt:
+        case Some(v): return v
+        case None: panic("assertion failed: " + message)
+
+fn assert_ok[T, E](result: Result[T, E], message: str) -> T:
+    match result:
+        case Ok(v): return v
+        case Err(e): panic("assertion failed: " + message)
+
+fn assert_err[T, E](result: Result[T, E], message: str) -> E:
+    match result:
+        case Ok(v): panic("assertion failed: " + message)
+        case Err(e): return e
+
+fn assert_approx_eq(left: Float, right: Float, epsilon: Float, message: str):
+    let diff = if left > right { left - right } else { right - left }
+    if diff > epsilon:
+        panic("assertion failed: " + message + 
+              " (left=" + str_f(left) + ", right=" + str_f(right) + ")")
+
+// ============================================================================
+// Convenience Test Helpers
+// ============================================================================
+
+fn todo(message: str):
+    panic("test not yet implemented: " + message)
+
+fn skip(message: str) -> TestResult:
+    return TestResult::Ignored
+
+fn bench(name: str, f: fn()):
+    let iterations = 1000
+    let start = std::time::now()
+    for i in 0..iterations:
+        f()
+    let elapsed = std::time::now() - start
+    let ns_per_iter = elapsed / iterations
+    println("benchmark " + name + ": " + str(ns_per_iter) + " ns/iter")
+
+// ============================================================================
+// Global Test Registry (for test discovery)
+// ============================================================================
+
+struct TestRegistry:
+    suites: Vector[TestSuite]
+
+impl TestRegistry:
+    fn new() -> TestRegistry:
+        return TestRegistry { suites: Vector::new() }
+
+    fn register_suite(&mut self, suite: TestSuite):
+        self.suites.push(suite)
+
+    fn run_all(&self) -> TestSummary:
+        let total_passed = 0
+        let total_failed = 0
+        let total_ignored = 0
+        let all_failures = Vector[str].new()
+
+        for suite in self.suites:
+            let summary = suite.run()
+            total_passed = total_passed + summary.passed
+            total_failed = total_failed + summary.failed
+            total_ignored = total_ignored + summary.ignored
+            for failure in summary.failures:
+                all_failures.push(suite.name + "::" + failure)
+
+        let overall = TestSummary {
+            total: self.suites.len(),
+            passed: total_passed,
+            failed: total_failed,
+            ignored: total_ignored,
+            failures: all_failures
+        }
+        overall.print()
+        return overall
+
+// Global registry (used by test macros)
+let GLOBAL_REGISTRY = TestRegistry::new()
+
+fn run_tests() -> TestSummary:
+    return GLOBAL_REGISTRY.run_all()
+
+// ============================================================================
+// Test Macros (simplified syntax)
+// ============================================================================
+
+# define_test(name, body) — define a named test
+# Usage: define_test!("my test", fn() { assert_eq!(1 + 1, 2, "math works") })
+
+fn define_test(name: str, body: fn() -> TestResult):
+    # In a full macro system, this would add to the registry
+    return
+
+# define_test_case(name, body) — alias for define_test
+fn define_test_case(name: str, body: fn() -> TestResult):
+    define_test(name, body)

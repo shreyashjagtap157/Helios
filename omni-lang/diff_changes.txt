@@ -1,0 +1,604 @@
+diff --git a/omni-lang/compiler/src/parser/mod.rs b/omni-lang/compiler/src/parser/mod.rs
+index 1d9d188..72a0d67 100644
+--- a/omni-lang/compiler/src/parser/mod.rs
++++ b/omni-lang/compiler/src/parser/mod.rs
+@@ -928,6 +928,7 @@ impl Parser {
+             name,
+             is_async,
+             attributes: Vec::new(),
++            effects: Vec::new(),
+             params,
+             return_type,
+             body: Block {
+@@ -999,6 +1000,7 @@ impl Parser {
+             name,
+             is_async,
+             attributes,
++            effects: Vec::new(),
+             params,
+             return_type,
+             body,
+@@ -1031,10 +1033,7 @@ impl Parser {
+                     self.advance();
+                 }
+                 None => {
+-                    let (line, column) = self
+-                        .peek()
+-                        .map(|t| (t.line, t.column))
+-                        .unwrap_or((0, 0));
++                    let (line, column) = self.peek().map(|t| (t.line, t.column)).unwrap_or((0, 0));
+                     return Err(ParseError::InvalidSyntax {
+                         line,
+                         column,
+@@ -2408,17 +2407,29 @@ impl Parser {
+ 
+     fn parse_postfix(&mut self) -> Result<Expression, ParseError> {
+         let mut expr = self.parse_primary()?;
++
++        // Handle postfix ? operator for Result unwrapping
++        while matches!(self.peek_kind(), Some(TokenKind::Question)) {
++            self.advance();
++            expr = Expression::Try(Box::new(expr));
++        }
++
+         let mut continuation_indent_depth = 0usize;
+ 
+         loop {
+             if matches!(self.peek_kind(), Some(TokenKind::Newline)) {
+                 let mut lookahead = self.current;
+-                while matches!(self.tokens.get(lookahead).map(|t| &t.kind), Some(TokenKind::Newline))
+-                {
++                while matches!(
++                    self.tokens.get(lookahead).map(|t| &t.kind),
++                    Some(TokenKind::Newline)
++                ) {
+                     lookahead += 1;
+                 }
+                 let mut extra_indent = 0usize;
+-                while matches!(self.tokens.get(lookahead).map(|t| &t.kind), Some(TokenKind::Indent)) {
++                while matches!(
++                    self.tokens.get(lookahead).map(|t| &t.kind),
++                    Some(TokenKind::Indent)
++                ) {
+                     lookahead += 1;
+                     extra_indent += 1;
+                 }
+@@ -2428,6 +2439,7 @@ impl Parser {
+                         | Some(TokenKind::LParen)
+                         | Some(TokenKind::LBracket)
+                         | Some(TokenKind::DoubleColon)
++                        | Some(TokenKind::Question)
+                 );
+                 if continues_postfix {
+                     while matches!(self.peek_kind(), Some(TokenKind::Newline)) {
+@@ -2527,6 +2539,11 @@ impl Parser {
+                     self.advance();
+                     let _ = self.parse_type()?;
+                 }
++                Some(TokenKind::Question) => {
++                    // Postfix ? operator for Result unwrapping
++                    self.advance();
++                    expr = Expression::Try(Box::new(expr));
++                }
+                 _ => break,
+             }
+         }
+@@ -3428,7 +3445,10 @@ fn stmt_match(x: str) -> i32:
+             }
+         }
+ 
+-        assert!(saw_block_arm, "expected at least one block-bodied match arm");
++        assert!(
++            saw_block_arm,
++            "expected at least one block-bodied match arm"
++        );
+     }
+ 
+     #[test]
+diff --git a/omni-lang/compiler/src/runtime/interpreter.rs b/omni-lang/compiler/src/runtime/interpreter.rs
+index 8c24f15..8e679bd 100644
+--- a/omni-lang/compiler/src/runtime/interpreter.rs
++++ b/omni-lang/compiler/src/runtime/interpreter.rs
+@@ -466,6 +466,37 @@ impl OvmInterpreter {
+                     pos += 2;
+                     let max_stack = u16::from_le_bytes(code_bytes[pos..pos + 2].try_into()?);
+                     pos += 2;
++                    let is_async = if version >= 2 && pos < code_bytes.len() {
++                        let value = code_bytes[pos];
++                        pos += 1;
++                        value != 0
++                    } else {
++                        false
++                    };
++
++                    let effects_count = if version >= 2 && pos + 4 <= code_bytes.len() {
++                        let count = u32::from_le_bytes(code_bytes[pos..pos + 4].try_into()?) as usize;
++                        pos += 4;
++                        count
++                    } else {
++                        0
++                    };
++
++                    let mut effects = Vec::new();
++                    for _ in 0..effects_count {
++                        if pos + 4 > code_bytes.len() {
++                            break;
++                        }
++                        let len = u32::from_le_bytes(code_bytes[pos..pos + 4].try_into()?) as usize;
++                        pos += 4;
++                        if pos + len > code_bytes.len() {
++                            break;
++                        }
++                        let effect = String::from_utf8_lossy(&code_bytes[pos..pos + len]).to_string();
++                        pos += len;
++                        effects.push(effect);
++                    }
++
+                     let bytecode_len =
+                         u32::from_le_bytes(code_bytes[pos..pos + 4].try_into()?) as usize;
+                     pos += 4;
+@@ -497,6 +528,8 @@ impl OvmInterpreter {
+                         max_stack,
+                         bytecode,
+                         is_native: false,
++                        is_async,
++                        effects,
+                     });
+                 }
+             }
+@@ -2798,6 +2831,9 @@ pub enum RuntimeValue {
+         type_name: String,
+         fields: HashMap<String, RuntimeValue>,
+     },
++    Ok(Box<RuntimeValue>),
++    Err(Box<RuntimeValue>),
++    Some(Box<RuntimeValue>),
+     Module {
+         name: String,
+         members: HashMap<String, RuntimeValue>,
+@@ -2833,6 +2869,9 @@ impl RuntimeValue {
+             RuntimeValue::GBox(_) => "gbox",
+             RuntimeValue::StructDef { .. } => "struct_def",
+             RuntimeValue::StructInstance { .. } => "struct",
++            RuntimeValue::Ok(_) => "Ok",
++            RuntimeValue::Err(_) => "Err",
++            RuntimeValue::Some(_) => "Some",
+             RuntimeValue::Module { .. } => "module",
+         }
+     }
+@@ -2866,6 +2905,9 @@ impl RuntimeValue {
+                     .collect();
+                 format!("{} {{{}}}", type_name, items.join(", "))
+             }
++            RuntimeValue::Ok(inner) => format!("Ok({})", inner.display_string()),
++            RuntimeValue::Err(inner) => format!("Err({})", inner.display_string()),
++            RuntimeValue::Some(inner) => format!("Some({})", inner.display_string()),
+             _ => format!("{:?}", self),
+         }
+     }
+@@ -3471,6 +3513,34 @@ impl Interpreter {
+                     }
+                     return Some(bindings);
+                 }
++                // Special handling for Result::Ok(x) ΓÇö match Ok variant
++                if name == "Result::Ok" || name == "Ok" {
++                    match value {
++                        RuntimeValue::Ok(inner) => {
++                            if let Some(pat) = sub_patterns.first() {
++                                if let Pattern::Binding(var_name) = pat {
++                                    bindings.insert(var_name.clone(), *inner.clone());
++                                }
++                            }
++                            return Some(bindings);
++                        }
++                        _ => return None,
++                    }
++                }
++                // Special handling for Result::Err(x) ΓÇö match Err variant
++                if name == "Result::Err" || name == "Err" {
++                    match value {
++                        RuntimeValue::Err(inner) => {
++                            if let Some(pat) = sub_patterns.first() {
++                                if let Pattern::Binding(var_name) = pat {
++                                    bindings.insert(var_name.clone(), *inner.clone());
++                                }
++                            }
++                            return Some(bindings);
++                        }
++                        _ => return None,
++                    }
++                }
+                 // Check if value is a struct instance with matching type name
+                 match value {
+                     RuntimeValue::StructInstance {
+@@ -3677,6 +3747,7 @@ impl Interpreter {
+                     name: "<lambda>".to_string(),
+                     is_async: false,
+                     attributes: vec![],
++                    effects: Vec::new(),
+                     params: params.clone(),
+                     return_type: None,
+                     body: crate::parser::ast::Block {
+@@ -3700,6 +3771,19 @@ impl Interpreter {
+                     fields: field_map,
+                 })
+             }
++            Expression::Ok(expr) => {
++                let inner = self.eval_expr(expr)?;
++                Ok(RuntimeValue::Ok(Box::new(inner)))
++            }
++            Expression::Err(expr) => {
++                let inner = self.eval_expr(expr)?;
++                Ok(RuntimeValue::Err(Box::new(inner)))
++            }
++            Expression::Some(expr) => {
++                let inner = self.eval_expr(expr)?;
++                Ok(RuntimeValue::Some(Box::new(inner)))
++            }
++            Expression::None => Ok(RuntimeValue::Null),
+             Expression::Path(expr, member_name) => {
+                 // Handle Struct::method() and Module::function() lookups
+                 let base = self.eval_expr(expr)?;
+@@ -3808,10 +3892,18 @@ impl Interpreter {
+                 // own is ownership annotation; pass through the value
+                 self.eval_expr(expr)
+             }
+-            _ => Err(anyhow!(
+-                "Expression type not yet supported: {:?}",
+-                std::mem::discriminant(expr)
+-            )),
++            Expression::Try(expr) => {
++                // ? operator - unwrap Result, return early if Err
++                let result = self.eval_expr(expr)?;
++                match result {
++                    RuntimeValue::Ok(inner) => Ok(*inner),
++                    RuntimeValue::Err(err) => {
++                        return Err(anyhow!("Result Err: {:?}", err));
++                    }
++                    _ => Err(anyhow!("? operator requires Result type")),
++                }
++            }
++            _ => Err(anyhow!("Expression type not yet supported: {:?}", expr)),
+         }
+     }
+ 
+diff --git a/omni-lang/compiler/src/semantic/mod.rs b/omni-lang/compiler/src/semantic/mod.rs
+index bc38506..dc08dc1 100644
+--- a/omni-lang/compiler/src/semantic/mod.rs
++++ b/omni-lang/compiler/src/semantic/mod.rs
+@@ -369,6 +369,7 @@ pub struct TypedFunction {
+     pub return_type: Type,
+     pub body: Vec<TypedStatement>,
+     pub is_async: bool,
++    pub effects: Vec<String>,
+ }
+ 
+ #[derive(Debug, Clone)]
+@@ -511,6 +512,7 @@ pub enum TypedExprKind {
+     Some(Box<TypedExpr>),
+     Ok(Box<TypedExpr>),
+     Err(Box<TypedExpr>),
++    Try(Box<TypedExpr>),
+     If {
+         condition: Box<TypedExpr>,
+         then_expr: Box<TypedExpr>,
+@@ -538,6 +540,11 @@ pub struct Analyzer {
+     const_values: HashMap<String, ConstValue>, // Evaluated constants
+     current_function: Option<String>,         // Current function being analyzed
+     current_function_return: Option<Type>,    // Return type of current function
++    current_function_is_async: bool,          // Whether current function is async
++    current_function_effects: Vec<String>,    // Declared effects for the current function
++    current_function_uses_async: bool,        // Whether current function contains async operations
++    function_effects: HashMap<String, (bool, Vec<String>)>,
++    method_effects: HashMap<(String, String), (bool, Vec<String>)>,
+     loop_depth: usize,                        // Current loop nesting depth
+     next_lifetime_id: usize,
+     active_lifetimes: HashMap<String, Lifetime>,
+@@ -580,6 +587,11 @@ impl Analyzer {
+             next_lifetime_id: 0,
+             active_lifetimes: HashMap::new(),
+             borrow_graph: Vec::new(),
++            current_function_is_async: false,
++            current_function_effects: Vec::new(),
++            current_function_uses_async: false,
++            function_effects: HashMap::new(),
++            method_effects: HashMap::new(),
+             // Phase 3 Integration: Initialize new module instances
+             constraint_solver: constraints::ConstraintSolver::new(),
+             trait_resolver: traits::TraitResolver::new(),
+@@ -689,7 +701,10 @@ impl Analyzer {
+             ),
+             (
+                 "str_slice",
+-                Type::Function(vec![Type::Str, Type::I64, Type::I64], Some(Box::new(Type::Str))),
++                Type::Function(
++                    vec![Type::Str, Type::I64, Type::I64],
++                    Some(Box::new(Type::Str)),
++                ),
+                 false,
+             ),
+             (
+@@ -1324,6 +1339,24 @@ impl Analyzer {
+         }
+     }
+ 
++    fn extract_named_type(&self, ty: &Type) -> Option<String> {
++        match ty {
++            Type::Named(name) => Some(name.clone()),
++            Type::WithOwnership(inner, _) => self.extract_named_type(inner),
++            _ => None,
++        }
++    }
++
++    fn lookup_method_metadata(&self, receiver_ty: &Type, method: &str) -> Option<(bool, Vec<String>)> {
++        if let Some(type_name) = self.extract_named_type(receiver_ty) {
++            self.method_effects
++                .get(&(type_name, method.to_string()))
++                .map(|(a, b)| (*a, b.clone()))
++        } else {
++            None
++        }
++    }
++
+     /// Resolve trait method for a type
+     fn resolve_trait_method(&self, ty: &Type, method: &str) -> Option<(String, TraitMethod)> {
+         let type_name = match ty {
+@@ -1651,29 +1684,49 @@ impl Analyzer {
+         // Forward declaration pass: register all top-level function signatures
+         // so functions can be called before their definition (like C prototypes)
+         for item in &module.items {
+-            if let Item::Function(f) = item {
+-                let param_types: Vec<Type> = f.params.iter().map(|p| p.ty.clone()).collect();
+-                let ret_type = f.return_type.clone().map(Box::new);
+-                let fn_type = Type::Function(param_types, ret_type);
+-
+-                // Only register if not already defined (e.g., as a builtin)
+-                if self.lookup_symbol(&f.name).is_err() {
+-                    // Insert directly into root scope for forward visibility
+-                    self.scopes[0].symbols.insert(
+-                        f.name.clone(),
+-                        Symbol {
+-                            name: f.name.clone(),
+-                            ty: fn_type,
+-                            mutable: false,
+-                            borrow_state: BorrowState::Owned,
+-                            lifetime: Some(Lifetime::static_lifetime()),
+-                            scope_id: 0,
+-                            active_borrows: Vec::new(),
+-                            drop_flag: false,
+-                        },
+-                    );
+-                    debug!("Forward-declared function: {}", f.name);
++            match item {
++                Item::Function(f) => {
++                    let param_types: Vec<Type> = f.params.iter().map(|p| p.ty.clone()).collect();
++                    let ret_type = f.return_type.clone().map(Box::new);
++                    let fn_type = Type::Function(param_types, ret_type);
++
++                    // Only register if not already defined (e.g., as a builtin)
++                    if self.lookup_symbol(&f.name).is_err() {
++                        // Insert directly into root scope for forward visibility
++                        self.scopes[0].symbols.insert(
++                            f.name.clone(),
++                            Symbol {
++                                name: f.name.clone(),
++                                ty: fn_type,
++                                mutable: false,
++                                borrow_state: BorrowState::Owned,
++                                lifetime: Some(Lifetime::static_lifetime()),
++                                scope_id: 0,
++                                active_borrows: Vec::new(),
++                                drop_flag: false,
++                            },
++                        );
++                        debug!("Forward-declared function: {}", f.name);
++                    }
++
++                    self.function_effects
++                        .insert(f.name.clone(), (f.is_async, f.effects.clone()));
++                }
++                Item::Extern(e) => {
++                    for f in &e.functions {
++                        self.function_effects
++                            .insert(f.name.clone(), (f.is_async, f.effects.clone()));
++                    }
+                 }
++                Item::Impl(i) => {
++                    for m in &i.methods {
++                        self.method_effects.insert(
++                            (i.type_name.clone(), m.name.clone()),
++                            (m.is_async, m.effects.clone()),
++                        );
++                    }
++                }
++                _ => {}
+             }
+         }
+ 
+@@ -1727,6 +1780,23 @@ impl Analyzer {
+                     );
+                 }
+                 Item::Impl(i) => {
++                    // Register type in root scope for Type::method resolution
++                    if !self.scopes[0].symbols.contains_key(&i.type_name) {
++                        self.scopes[0].symbols.insert(
++                            i.type_name.clone(),
++                            Symbol {
++                                name: i.type_name.clone(),
++                                ty: Type::Named(i.type_name.clone()),
++                                mutable: false,
++                                borrow_state: BorrowState::Owned,
++                                lifetime: Some(Lifetime::static_lifetime()),
++                                scope_id: 0,
++                                active_borrows: Vec::new(),
++                                drop_flag: false,
++                            },
++                        );
++                    }
++
+                     self.type_impls
+                         .entry(i.type_name.clone())
+                         .or_insert_with(Vec::new)
+@@ -1896,6 +1966,7 @@ impl Analyzer {
+                 return_type,
+                 body: Vec::new(),
+                 is_async: f.is_async,
++                effects: Vec::new(),
+             });
+         }
+         Ok(TypedItem::Extern(TypedExternBlock {
+@@ -1908,6 +1979,9 @@ impl Analyzer {
+         debug!("Analyzing function: {}", f.name);
+ 
+         self.current_function = Some(f.name.clone());
++        self.current_function_is_async = f.is_async;
++        self.current_function_effects = f.effects.clone();
++        self.current_function_uses_async = false;
+         self.push_scope();
+ 
+         // Add parameters to scope with proper ownership tracking
+@@ -1949,15 +2023,49 @@ impl Analyzer {
+         let return_type = f.return_type.clone().unwrap_or(Type::Named("()".into()));
+         self.current_function_return = Some(return_type.clone());
+ 
++        for effect in &f.effects {
++            if let Some(inner) = effect.strip_prefix("throw<").and_then(|rest| rest.strip_suffix('>')) {
++                if inner.is_empty() {
++                    return Err(SemanticError::new("invalid throw effect"));
++                }
++                match &return_type {
++                    Type::Generic(name, args) if name == "Result" && args.len() == 2 => {
++                        let result_error_ty = &args[1];
++                        let expected_err = self.type_to_string(result_error_ty);
++                        if expected_err != inner {
++                            return Err(SemanticError::new(&format!(
++                                "declares throw<{}> but returns Result<_, {}>",
++                                inner, expected_err
++                            )));
++                        }
++                    }
++                    _ => {
++                        return Err(SemanticError::new("does not return Result<T, E>"));
++                    }
++                }
++            } else if effect.starts_with("throw") {
++                return Err(SemanticError::new("invalid throw effect"));
++            }
++        }
++
+         // Analyze body statements with lifetime tracking
+         let body = self.analyze_block(&f.body)?;
+ 
+         // Check that all paths return the correct type
+         self.check_return_paths(&body, &return_type)?;
+ 
++        if f.effects.iter().any(|e| e == "async") && !f.is_async && !self.current_function_uses_async {
++            return Err(SemanticError::new(
++                "declares 'async' effect but is not declared async",
++            ));
++        }
++
+         self.pop_scope()?;
+         self.current_function = None;
+         self.current_function_return = None;
++        self.current_function_is_async = false;
++        self.current_function_effects.clear();
++        self.current_function_uses_async = false;
+ 
+         Ok(TypedItem::Function(TypedFunction {
+             name: f.name,
+@@ -1965,6 +2073,7 @@ impl Analyzer {
+             return_type,
+             body,
+             is_async: f.is_async,
++            effects: f.effects.clone(),
+         }))
+     }
+ 
+@@ -2334,6 +2443,26 @@ impl Analyzer {
+                 let typed_func = self.analyze_expression(func)?;
+                 let typed_args: Result<Vec<_>, _> =
+                     args.iter().map(|a| self.analyze_expression(a)).collect();
++
++                if let TypedExprKind::Identifier(name) = &typed_func.kind {
++                    if let Some((callee_async, callee_effects)) = self.function_effects.get(name) {
++                        if *callee_async {
++                            self.current_function_uses_async = true;
++                            if !self.current_function_is_async {
++                                return Err(SemanticError::new("calls async function"));
++                            }
++                        }
++                        for effect in callee_effects {
++                            if !self.current_function_effects.contains(&effect) {
++                                return Err(SemanticError::new(&format!(
++                                    "calls function requiring effect '{}'",
++                                    effect
++                                )));
++                            }
++                        }
++                    }
++                }
++
+                 let return_ty = match &typed_func.ty {
+                     Type::Function(_, ret) => ret
+                         .as_ref()
+@@ -2355,6 +2484,26 @@ impl Analyzer {
+                 let typed_args: Result<Vec<_>, _> =
+                     args.iter().map(|a| self.analyze_expression(a)).collect();
+                 let typed_args = typed_args?;
++
++                if let Some((callee_async, callee_effects)) =
++                    self.lookup_method_metadata(&typed_receiver.ty, method)
++                {
++                    if callee_async {
++                        self.current_function_uses_async = true;
++                        if !self.current_function_is_async {
++                            return Err(SemanticError::new("calls async function"));
++                        }
++                    }
++                    for effect in callee_effects {
++                        if !self.current_function_effects.contains(&effect) {
++                            return Err(SemanticError::new(&format!(
++                                "calls method requiring effect '{}'",
++                                effect
++                            )));
++                        }
++                    }
++                }
++
+                 // Look up the method's return type from impl blocks
+                 let method_return_ty = self.resolve_method_return_type(&typed_receiver.ty, method);
+                 Ok(TypedExpr {
+@@ -2523,6 +2672,12 @@ impl Analyzer {
+                 })
+             }
+             Expression::Await(inner) => {
++                self.current_function_uses_async = true;
++                if !self.current_function_is_async {
++                    return Err(SemanticError::new(
++                        "await can only be used inside async functions",
++                    ));
++                }
+                 let typed_inner = self.analyze_expression(inner)?;
+                 let inner_ty = match &typed_inner.ty {
+                     Type::Generic(name, _) if name == "Future" => {
+@@ -2563,6 +2718,19 @@ impl Analyzer {
+                     ty: Type::Generic("Result".into(), vec![Type::Named("_".into()), err_ty]),
+                 })
+             }
++            Expression::Try(inner) => {
++                let typed_inner = self.analyze_expression(inner)?;
++                let inner_ty = typed_inner.ty.clone();
++                if let Type::Generic(name, args) = &inner_ty {
++                    if name == "Result" && args.len() == 2 {
++                        return Ok(TypedExpr {
++                            kind: TypedExprKind::Try(Box::new(typed_inner)),
++                            ty: args[0].clone(),
++                        });
++                    }
++                }
++                Err(SemanticError::new("? operator requires Result type"))
++            }
+             Expression::Shared(inner) => {
+                 let typed_inner = self.analyze_expression(inner)?;
+                 let inner_ty = typed_inner.ty.clone();

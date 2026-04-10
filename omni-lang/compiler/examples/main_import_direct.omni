@@ -1,0 +1,7 @@
+// Main program using imported math module (direct function calls)
+
+import math
+
+fn main():
+    let sum = add(5, 3)
+    println("Sum: {sum}")

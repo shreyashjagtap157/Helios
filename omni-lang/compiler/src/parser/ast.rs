@@ -17,6 +17,32 @@
 //!
 //! Defines the structure of parsed Omni programs.
 
+/// Source code location span
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Span {
+    pub start: usize,
+    pub end: usize,
+}
+
+impl Span {
+    pub fn new(start: usize, end: usize) -> Self {
+        Span { start, end }
+    }
+}
+
+/// A wrapper to attach a span to an AST node
+#[derive(Debug, Clone)]
+pub struct Spanned<T> {
+    pub node: T,
+    pub span: Span,
+}
+
+impl<T> Spanned<T> {
+    pub fn new(node: T, span: Span) -> Self {
+        Spanned { node, span }
+    }
+}
+
 /// A complete Omni module (compilation unit)
 #[derive(Debug, Clone)]
 pub struct Module {

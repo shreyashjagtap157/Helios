@@ -1,0 +1,102 @@
+Module {
+    items: [
+        Module(
+            ModuleDecl {
+                name: "std::ffi",
+                attributes: [],
+                items: [],
+            },
+        ),
+        Function(
+            Function {
+                name: "c_str_from_bytes",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [
+                    Param {
+                        name: "b",
+                        ty: WithOwnership(
+                            Slice(
+                                U8,
+                            ),
+                            Borrow,
+                        ),
+                    },
+                ],
+                return_type: Some(
+                    Str,
+                ),
+                body: Block {
+                    statements: [
+                        Return(
+                            Some(
+                                Literal(
+                                    String(
+                                        "",
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+            },
+        ),
+        Function(
+            Function {
+                name: "c_malloc",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [
+                    Param {
+                        name: "size",
+                        ty: Usize,
+                    },
+                ],
+                return_type: Some(
+                    U64,
+                ),
+                body: Block {
+                    statements: [
+                        Return(
+                            Some(
+                                Literal(
+                                    Int(
+                                        0,
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+            },
+        ),
+        Function(
+            Function {
+                name: "c_free",
+                is_async: false,
+                attributes: [],
+                effects: [],
+                params: [
+                    Param {
+                        name: "ptr",
+                        ty: U64,
+                    },
+                ],
+                return_type: Some(
+                    Tuple(
+                        [],
+                    ),
+                ),
+                body: Block {
+                    statements: [
+                        Return(
+                            None,
+                        ),
+                    ],
+                },
+            },
+        ),
+    ],
+}
