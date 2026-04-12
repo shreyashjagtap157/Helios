@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(dead_code)]
 //! Omni Virtual Machine (OVM) - Full Bytecode Interpreter
 //! Executes OVM bytecode with GC, async support, exception handling, and native dispatch
 
@@ -2787,7 +2786,7 @@ pub enum RuntimeValue {
     Function(Box<crate::parser::ast::Function>),
     NativeFunction(String),
     NativePtr(usize),
-    Vector(ndarray::Array1<f32>),
+    Vector(Vec<f32>),
     GBox(usize),
     StructDef {
         name: String,
@@ -2831,9 +2830,9 @@ impl RuntimeValue {
             RuntimeValue::NativePtr(_) => "ptr",
             RuntimeValue::Vector(_) => "vector",
             RuntimeValue::GBox(_) => "gbox",
-            RuntimeValue::StructDef { .. } => "struct_def",
+            RuntimeValue::StructDef { name: _, .. } => "struct_def",
             RuntimeValue::StructInstance { .. } => "struct",
-            RuntimeValue::Module { .. } => "module",
+            RuntimeValue::Module { name: _, .. } => "module",
         }
     }
 
@@ -2993,7 +2992,7 @@ impl Interpreter {
         }
 
         // ── BORROW CHECKING ── warnings for ownership violations ──
-        let borrow_errors = crate::semantic::borrow_check::BorrowChecker::check_module(&module);
+        let borrow_errors = crate::semantic::polonius::run_polonius(&module);
         if !borrow_errors.is_empty() {
             for e in &borrow_errors {
                 eprintln!("warning[E006]: borrow check: {}", e);
@@ -3166,6 +3165,164 @@ impl Interpreter {
         }
 
         Ok(last_result)
+    }
+
+    /// Register AST module items without executing `main`.
+    pub fn load_module_ast(&mut self, module: &crate::parser::ast::Module) {
+        for item in &module.items {
+            match item {
+                crate::parser::ast::Item::Function(func) => {
+                    let func_clone = func.clone();
+                    self.global_scope.borrow_mut().set(
+                        func.name.clone(),
+                        RuntimeValue::Function(Box::new(func_clone)),
+                    );
+                }
+                crate::parser::ast::Item::Struct(struct_def) => {
+                    self.global_scope.borrow_mut().set(
+                        struct_def.name.clone(),
+                        RuntimeValue::StructDef {
+                            name: struct_def.name.clone(),
+                            fields: struct_def.fields.clone(),
+                            methods: struct_def.methods.clone(),
+                        },
+                    );
+                }
+                crate::parser::ast::Item::Import(import_decl) => {
+                    let bind_name = import_decl
+                        .alias
+                        .clone()
+                        .unwrap_or_else(|| import_decl.path.last().cloned().unwrap_or_default());
+                    let full_path = import_decl.path.join("::");
+
+                    let mut members = HashMap::new();
+                    match full_path.as_str() {
+                        "core::logging" => {
+                            members.insert(
+                                "debug".to_string(),
+                                RuntimeValue::NativeFunction("__log_debug".to_string()),
+                            );
+                            members.insert(
+                                "info".to_string(),
+                                RuntimeValue::NativeFunction("__log_info".to_string()),
+                            );
+                            members.insert(
+                                "warn".to_string(),
+                                RuntimeValue::NativeFunction("__log_warn".to_string()),
+                            );
+                            members.insert(
+                                "error".to_string(),
+                                RuntimeValue::NativeFunction("__log_error".to_string()),
+                            );
+                            members.insert(
+                                "trace".to_string(),
+                                RuntimeValue::NativeFunction("__log_trace".to_string()),
+                            );
+                        }
+                        "core::math" => {
+                            members.insert(
+                                "sqrt".to_string(),
+                                RuntimeValue::NativeFunction("__math_sqrt".to_string()),
+                            );
+                            members.insert(
+                                "abs".to_string(),
+                                RuntimeValue::NativeFunction("__math_abs".to_string()),
+                            );
+                            members.insert(
+                                "pow".to_string(),
+                                RuntimeValue::NativeFunction("__math_pow".to_string()),
+                            );
+                            members.insert(
+                                "min".to_string(),
+                                RuntimeValue::NativeFunction("__math_min".to_string()),
+                            );
+                            members.insert(
+                                "max".to_string(),
+                                RuntimeValue::NativeFunction("__math_max".to_string()),
+                            );
+                            members.insert(
+                                "floor".to_string(),
+                                RuntimeValue::NativeFunction("__math_floor".to_string()),
+                            );
+                            members.insert(
+                                "ceil".to_string(),
+                                RuntimeValue::NativeFunction("__math_ceil".to_string()),
+                            );
+                            members.insert(
+                                "pi".to_string(),
+                                RuntimeValue::NativeFunction("__math_pi".to_string()),
+                            );
+                        }
+                        "core::json" => {
+                            members.insert(
+                                "parse".to_string(),
+                                RuntimeValue::NativeFunction("__json_parse".to_string()),
+                            );
+                            members.insert(
+                                "stringify".to_string(),
+                                RuntimeValue::NativeFunction("__json_stringify".to_string()),
+                            );
+                        }
+                        _ => {
+                            eprintln!(
+                                "warning: unresolved import '{}', using stub module",
+                                full_path
+                            );
+                        }
+                    }
+
+                    self.global_scope.borrow_mut().set(
+                        bind_name,
+                        RuntimeValue::Module {
+                            name: full_path,
+                            members,
+                        },
+                    );
+                }
+                crate::parser::ast::Item::Impl(impl_block) => {
+                    let type_name = impl_block.type_name.clone();
+                    let scope = self.global_scope.borrow();
+                    if let Some(existing) = scope.get(&type_name) {
+                        if let RuntimeValue::StructDef {
+                            name,
+                            fields,
+                            methods,
+                        } = existing
+                        {
+                            let mut updated_methods = methods.clone();
+                            for method in &impl_block.methods {
+                                updated_methods.retain(|m| m.name != method.name);
+                                updated_methods.push(method.clone());
+                            }
+                            drop(scope);
+                            self.global_scope.borrow_mut().set(
+                                type_name,
+                                RuntimeValue::StructDef {
+                                    name,
+                                    fields,
+                                    methods: updated_methods,
+                                },
+                            );
+                        }
+                    }
+                }
+                crate::parser::ast::Item::Const(const_decl) => {
+                    if let Ok(value) = self.eval_expr(&const_decl.value) {
+                        self.global_scope
+                            .borrow_mut()
+                            .set(const_decl.name.clone(), value);
+                    }
+                }
+                crate::parser::ast::Item::Static(static_decl) => {
+                    if let Ok(value) = self.eval_expr(&static_decl.value) {
+                        self.global_scope
+                            .borrow_mut()
+                            .set(static_decl.name.clone(), value);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Call a registered function by name
@@ -3679,6 +3836,7 @@ impl Interpreter {
                     attributes: vec![],
                     params: params.clone(),
                     return_type: None,
+                    effect_row: None, // Lambdas are pure by default
                     body: crate::parser::ast::Block {
                         statements: vec![crate::parser::ast::Statement::Return(Some(
                             *body.clone(),

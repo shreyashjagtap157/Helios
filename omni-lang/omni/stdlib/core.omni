@@ -3,37 +3,76 @@ module std::core
 // Sanitized partial core (step 1) — safe, minimal subset for parser triage.
 // Preserved original remains in ../preserved_full/core.omni
 
-enum Option:
-    VariantNone
-    VariantSome
+enum Option<T>:
+    Some(T)
+    None
 
-impl Option:
+impl Option<T>:
     fn is_some(&self) -> bool:
-        return false
+        match self:
+            Some(_): true
+            None: false
 
     fn is_none(&self) -> bool:
         return not self.is_some()
 
-    fn unwrap_or(&self, default: &str) -> &str:
-        return default
+    fn unwrap(self) -> T:
+        match self:
+            Some(value): value
+            None: panic("called unwrap() on None")
 
-    fn map(&self, f: fn(&str) -> &str) -> Option:
-        // placeholder map implementation
-        return VariantNone
+    fn unwrap_or(self, default: T) -> T:
+        match self:
+            Some(value): value
+            None: default
 
-impl Result:
+    fn map<U>(self, f: fn(T) -> U) -> Option<U>:
+        match self:
+            Some(value): Some(f(value))
+            None: None
+
+    fn and_then<U>(self, f: fn(T) -> Option<U>) -> Option<U>:
+        match self:
+            Some(value): f(value)
+            None: None
+
+enum Result<T, E>:
+    Ok(T)
+    Err(E)
+
+impl Result<T, E>:
     fn is_ok(&self) -> bool:
-        return false
+        match self:
+            Ok(_): true
+            Err(_): false
 
     fn is_err(&self) -> bool:
         return not self.is_ok()
 
-    fn unwrap(&self) -> &str:
-        return ""
+    fn unwrap(self) -> T:
+        match self:
+            Ok(value): value
+            Err(_): panic("called unwrap() on Err")
 
-enum Result:
-    VariantOk
-    VariantErr
+    fn unwrap_err(self) -> E:
+        match self:
+            Ok(_): panic("called unwrap_err() on Ok")
+            Err(error): error
+
+    fn unwrap_or(self, default: T) -> T:
+        match self:
+            Ok(value): value
+            Err(_): default
+
+    fn map<U>(self, f: fn(T) -> U) -> Result<U, E>:
+        match self:
+            Ok(value): Ok(f(value))
+            Err(error): Err(error)
+
+    fn map_err<F2>(self, f: fn(E) -> F2) -> Result<T, F2>:
+        match self:
+            Ok(value): Ok(value)
+            Err(error): Err(f(error))
 
 struct String:
     len: usize
@@ -49,7 +88,9 @@ enum Ordering:
 
 // Minimal Iterator trait (no generics) to reintroduce common API surface
 trait Iterator:
-    fn next(&mut self) -> Option:
+    type Item
+
+    fn next(&mut self) -> Option<Self::Item>:
         return None
 
 // Basic trait stubs (simplified) to reintroduce common APIs safely
@@ -86,7 +127,7 @@ trait Eq:
     pass
 
 trait PartialOrd:
-    fn partial_cmp(&self, other: &Self) -> Option:
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering>:
         return None
     fn lt(&self, other: &Self) -> bool:
         return self.partial_cmp(other) == Some(Ordering::Less)
@@ -118,6 +159,12 @@ trait Hash:
 
 // Small String helpers (minimal implementations)
 impl String:
+    fn new() -> String:
+        return String { len: 0 }
+
+    fn with_capacity(_cap: usize) -> String:
+        return String { len: 0 }
+
     fn len(&self) -> usize:
         return self.len
 
@@ -131,14 +178,19 @@ impl String:
         return ""
 
     fn push_str(&mut self, s: &str):
-        // noop placeholder for bootstrap
-        return
+        self.len = self.len + s.len()
 
     fn push_string(&mut self, s: &String):
         self.push_str(s.as_str())
 
-    fn pop(&mut self) -> Option:
-        return VariantNone
+    fn pop(&mut self) -> Option<char>:
+        if self.len == 0:
+            return None
+        self.len = self.len - 1
+        return Some('\0')
+
+    fn clear(&mut self):
+        self.len = 0
 
     fn as_bytes(&self) -> &[u8]:
         return &[]
@@ -147,7 +199,7 @@ impl String:
         return &mut []
 
     fn push(&mut self, ch: char):
-        return
+        self.len = self.len + 1
 
 // Minimal allocation and collection stubs
 struct Box:
@@ -192,8 +244,8 @@ impl Vec:
         // placeholder
         return
 
-    fn pop(&mut self) -> Option:
-        return VariantNone
+    fn pop(&mut self) -> Option<&str>:
+        return None
 
     fn with_capacity(_n: usize) -> Vec:
         return Vec { len: 0 }
@@ -202,8 +254,8 @@ impl HashMap:
     fn insert(&mut self, _k: &str, _v: &str):
         return
 
-    fn get(&self, _k: &str) -> Option:
-        return VariantNone
+    fn get(&self, _k: &str) -> Option<&str>:
+        return None
 
     fn contains_key(&self, _k: &str) -> bool:
         return false

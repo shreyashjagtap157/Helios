@@ -26,6 +26,14 @@
     non_snake_case,
     mismatched_lifetime_syntaxes
 )]
+#![allow(
+    clippy::many_single_char_names,
+    clippy::too_many_arguments,
+    clippy::type_complexity,
+    clippy::redundant_closure,
+    clippy::or_fun_call,
+    clippy::unnecessary_unwrap
+)]
 
 pub mod brain;
 #[path = "codegen/mod.rs"]
@@ -39,6 +47,8 @@ pub mod lexer;
 pub mod modes;
 pub mod monitor;
 pub mod optimizer;
+pub mod security;
+pub mod testing;
 #[path = "parser/mod.rs"]
 pub mod parser;
 pub mod resolver;
@@ -55,6 +65,15 @@ pub use enhancements::{
 pub use modes::{
     allowed_zones, is_memory_op_allowed, Feature, MemoryOperation, MemoryZone, MemoryZoneChecker,
     ModuleChecker, ModuleMode, PackageManifest,
+};
+pub use security::{
+    CapabilityAuthority, CapabilityError, CapabilityErrorKind, CapabilityGuard, CapabilityKind,
+    CapabilityPolicy, CapabilityToken, FfiSandbox, ResourceLimits, Sandbox,
+};
+pub use testing::{
+    discover_tests, run_module_tests, run_tests, EffectMock, EffectTest, Ensures, Invariant,
+    Requires, Test, TestAnnotation, TestCase, TestConfig, TestFailure, TestIgnore,
+    TestResult, TestRunner, TestShouldPanic,
 };
 pub use resolver::{
     resolve_all, Annotations, ConcurrencyStrategy, ExecMode, MemoryStrategy, ResolverContext,

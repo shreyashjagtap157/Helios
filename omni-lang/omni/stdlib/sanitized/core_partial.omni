@@ -4,36 +4,56 @@ module std::core
 // Preserved original remains in ../preserved_full/core.omni
 
 enum Option:
-    VariantNone
-    VariantSome
+    Some
+    None
 
 impl Option:
     fn is_some(&self) -> bool:
-        return false
+        match self:
+            Some(_): true
+            None: false
 
     fn is_none(&self) -> bool:
         return not self.is_some()
 
+    fn unwrap(&self) -> &str:
+        match self:
+            Some(_): ""
+            None: panic("unwrap called on None")
+
     fn unwrap_or(&self, default: &str) -> &str:
-        return default
+        match self:
+            Some(_): ""
+            None: default
 
     fn map(&self, f: fn(&str) -> &str) -> Option:
-        // placeholder map implementation
-        return VariantNone
+        match self:
+            Some(_): Some
+            None: None
 
-impl Result:
     fn is_ok(&self) -> bool:
         return false
 
     fn is_err(&self) -> bool:
         return not self.is_ok()
 
-    fn unwrap(&self) -> &str:
-        return ""
-
 enum Result:
-    VariantOk
-    VariantErr
+    Ok
+    Err
+
+impl Result:
+    fn is_ok(&self) -> bool:
+        match self:
+            Ok(_): true
+            Err(_): false
+
+    fn is_err(&self) -> bool:
+        return not self.is_ok()
+
+    fn unwrap(&self) -> &str:
+        match self:
+            Ok(_): ""
+            Err(_): panic("unwrap called on Err")
 
 struct String:
     len: usize
@@ -138,7 +158,7 @@ impl String:
         self.push_str(s.as_str())
 
     fn pop(&mut self) -> Option:
-        return VariantNone
+        return None
 
     fn as_bytes(&self) -> &[u8]:
         return &[]
@@ -193,7 +213,7 @@ impl Vec:
         return
 
     fn pop(&mut self) -> Option:
-        return VariantNone
+        return None
 
     fn with_capacity(_n: usize) -> Vec:
         return Vec { len: 0 }
@@ -203,7 +223,7 @@ impl HashMap:
         return
 
     fn get(&self, _k: &str) -> Option:
-        return VariantNone
+        return None
 
     fn contains_key(&self, _k: &str) -> bool:
         return false

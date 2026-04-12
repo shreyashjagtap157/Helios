@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(dead_code)]
 //! Module Mode System for Omni
 //!
 //! Implements the three mutually exclusive per-module profiles from the master canvas:
@@ -21,6 +20,7 @@
 //! - `bare_metal`: no-GC ownership/manual execution with cooperative scheduling
 //!
 //! Each mode restricts which language features are available.
+#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -330,6 +330,8 @@ pub struct PackageManifest {
     pub dependencies: HashMap<String, DependencySpec>,
     #[serde(default)]
     pub build: Option<BuildConfig>,
+    #[serde(default)]
+    pub capabilities: HashMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -403,6 +405,7 @@ pub fn generate_module_metadata(
         "ir_version": manifest.package.ir_version,
         "used_features": used_features.iter().map(|f| format!("{:?}", f)).collect::<Vec<_>>(),
         "allowed_features": allowed_features(mode).iter().map(|f| format!("{:?}", f)).collect::<Vec<_>>(),
+        "capabilities": &manifest.capabilities,
     })
 }
 
@@ -496,6 +499,27 @@ mod tests {
         // Bare metal is the most restrictive in some ways
         assert!(!bare.contains(&Feature::GC));
         assert!(!bare.contains(&Feature::JIT));
+    }
+
+    #[test]
+    fn test_manifest_capabilities_round_trip() {
+        let content = r#"
+[package]
+name = "demo"
+version = "0.1.0"
+mode = "hosted"
+
+[capabilities]
+filesystem = ["read", "write"]
+network = ["connect"]
+"#;
+
+        let manifest: PackageManifest = toml::from_str(content).unwrap();
+        assert_eq!(manifest.capabilities["filesystem"], vec!["read", "write"]);
+        assert_eq!(manifest.capabilities["network"], vec!["connect"]);
+
+        let metadata = generate_module_metadata(&manifest, &[]);
+        assert!(metadata["capabilities"]["filesystem"].is_array());
     }
 
     // Memory zone tests

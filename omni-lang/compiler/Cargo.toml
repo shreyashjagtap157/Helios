@@ -57,27 +57,14 @@ inkwell = { version = "0.4", features = ["llvm17-0"], optional = true }
 indexmap = "2.1"
 petgraph = "0.6"         # For control flow graphs
 
+# Polonius - precise borrow checking (v2.0 spec)
+polonius-engine = "0.13"
+
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "0.8"
 
-# Runtime Dependencies (New)
-tokio = { version = "1.0", features = ["full"] }
-reqwest = { version = "0.11", features = ["json", "blocking"] }
-ndarray = "0.15"         # For Tensor math
-rand = "0.8"             # For Math/Crypto
-chrono = "0.4"           # For Time
-uuid = { version = "1.4", features = ["v4"] }
-num_cpus = "1.0"         # For std::sys
-lazy_static = "1.4"      # For static initialization
-hostname = "0.3"         # For system hostname
-sys-info = "0.9"         # For system memory info
-sysinfo = "0.29"         # For runtime monitoring of CPU/memory
-libloading = "0.8"       # For dynamic GPU driver loading
-
-[target.'cfg(unix)'.dependencies]
-pprof = { version = "0.12", features = ["flamegraph"] }
 
 [build-dependencies]
 lalrpop = "0.20"         # Parser generator

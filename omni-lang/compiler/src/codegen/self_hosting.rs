@@ -1,5 +1,7 @@
 //! Self-Hosting Compiler Architecture for Omni
 //!
+#![allow(dead_code)]
+
 //! This module establishes the framework and design patterns for implementing
 //! the Omni compiler IN Omni itself, enabling true self-hosting.
 //!

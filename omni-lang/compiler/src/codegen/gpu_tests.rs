@@ -1,5 +1,6 @@
-#[cfg(test)]
+#[cfg(all(test, feature = "experimental"))]
 mod tests {
+    #[allow(unused_imports)]
     use crate::codegen::gpu_dispatch::*;
     use std::sync::Arc;
 

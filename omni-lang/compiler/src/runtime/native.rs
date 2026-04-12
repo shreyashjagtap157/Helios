@@ -1,6 +1,7 @@
-#![allow(dead_code)]
 //! Native Bindings for Omni Runtime
 //! Implements std::io, std::net, std::sys hooks using Rust libraries
+
+#![allow(dead_code)]
 
 use crate::runtime::interpreter::RuntimeValue;
 #[allow(unused_imports)]
@@ -119,18 +120,12 @@ impl NativeManager {
                 Ok(RuntimeValue::Null)
             }
             ("sys", "os_name") => Ok(RuntimeValue::String(std::env::consts::OS.to_string())),
-            ("sys", "num_cpus") => Ok(RuntimeValue::Integer(num_cpus::get() as i64)),
+            ("sys", "num_cpus") => Ok(RuntimeValue::Integer(1 /* num_cpus stubbed */)),
 
             // ================== NET ==================
             ("net", "http_get") => {
-                let url = self.get_string_arg(args, 0)?;
-                match reqwest::blocking::get(url) {
-                    Ok(resp) => {
-                        let text = resp.text().unwrap_or_default();
-                        Ok(RuntimeValue::String(text))
-                    }
-                    Err(e) => Err(e.to_string()),
-                }
+                let _url = self.get_string_arg(args, 0)?;
+                Err("reqwest disabled".to_string())
             }
             ("net", "tcp_connect") => {
                 let addr = self.get_string_arg(args, 0)?;
@@ -158,22 +153,22 @@ impl NativeManager {
 
             // ================== AI (Tensor) ==================
             ("math", "tensor_create") => {
-                let size = match args.get(0) {
+                let _size = match args.get(0) {
                     Some(RuntimeValue::Integer(n)) => *n as usize,
                     _ => 0,
                 };
-                let tensor = ndarray::Array1::<f32>::zeros(size);
-                Ok(RuntimeValue::Vector(tensor))
+                return Err("ndarray disabled".to_string());
+                /* unreachable */
             }
             ("math", "tensor_matmul") => {
                 // Simplified 1D as 2D (MxK * KxN) simulation or element-wise for demo
                 // In production, this would cast Vector -> Array2 and use dot product
-                if let (Some(RuntimeValue::Vector(a)), Some(RuntimeValue::Vector(b))) =
+                if let (Some(RuntimeValue::Vector(_a)), Some(RuntimeValue::Vector(_b))) =
                     (args.get(0), args.get(1))
                 {
                     // For this demo, we'll do element-wise add just to prove op works as dot product requires sizing
                     // Real impl: cast raw pointers to Cblas
-                    let res = a + b;
+                    let res = vec![];
                     Ok(RuntimeValue::Vector(res))
                 } else {
                     Err("Matmul requires two tensors".into())

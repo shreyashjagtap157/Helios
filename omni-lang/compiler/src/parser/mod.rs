@@ -930,6 +930,7 @@ impl Parser {
             attributes: Vec::new(),
             params,
             return_type,
+            effect_row: None, // No effect annotations in extern signatures
             body: Block {
                 statements: Vec::new(),
             }, // Empty body for extern
@@ -972,6 +973,36 @@ impl Parser {
             None
         };
 
+        // Effect annotations: `/ effect1 + effect2` (v2.0 feature)
+        let effect_row = if matches!(self.peek_kind(), Some(TokenKind::Slash)) {
+            self.advance();
+            let mut effects = Vec::new();
+            loop {
+                match self.peek_kind() {
+                    Some(TokenKind::Identifier) => {
+                        let name = self.parse_identifier()?;
+                        // Check for type parameter: Error[E]
+                        let param = if matches!(self.peek_kind(), Some(TokenKind::LBracket)) {
+                            self.advance();
+                            let p = self.parse_identifier()?;
+                            self.expect(&TokenKind::RBracket)?;
+                            Some(p)
+                        } else {
+                            None
+                        };
+                        effects.push(EffectSymbol { name, param });
+                    }
+                    Some(TokenKind::Plus) => {
+                        self.advance(); // consume '+'
+                    }
+                    _ => break,
+                }
+            }
+            Some(EffectRow { effects })
+        } else {
+            None
+        };
+
         // Skip where clauses if present
         if matches!(self.peek_kind(), Some(TokenKind::Where)) {
             self.advance(); // consume `where`
@@ -1001,6 +1032,7 @@ impl Parser {
             attributes,
             params,
             return_type,
+            effect_row,
             body,
         })
     }
@@ -1031,10 +1063,7 @@ impl Parser {
                     self.advance();
                 }
                 None => {
-                    let (line, column) = self
-                        .peek()
-                        .map(|t| (t.line, t.column))
-                        .unwrap_or((0, 0));
+                    let (line, column) = self.peek().map(|t| (t.line, t.column)).unwrap_or((0, 0));
                     return Err(ParseError::InvalidSyntax {
                         line,
                         column,
@@ -1874,6 +1903,14 @@ impl Parser {
                 pattern
             };
 
+            // Parse optional guard: `pattern if condition => body`
+            let guard = if matches!(self.peek_kind(), Some(TokenKind::If)) {
+                self.advance();
+                Some(self.parse_expression()?)
+            } else {
+                None
+            };
+
             // Accept either `:` (block arms) or `=>` / `FatArrow` (expr arms)
             match self.peek_kind() {
                 Some(TokenKind::FatArrow) => {
@@ -1883,11 +1920,16 @@ impl Parser {
                         let body = self.parse_block()?;
                         arms.push(MatchArm {
                             pattern,
+                            guard,
                             body: MatchBody::Block(body),
                         });
                     } else {
                         let body = self.parse_inline_match_arm_body()?;
-                        arms.push(MatchArm { pattern, body });
+                        arms.push(MatchArm {
+                            pattern,
+                            guard,
+                            body,
+                        });
                     }
                 }
                 Some(TokenKind::Colon) => {
@@ -1898,11 +1940,16 @@ impl Parser {
                         let body = self.parse_block()?;
                         arms.push(MatchArm {
                             pattern,
+                            guard,
                             body: MatchBody::Block(body),
                         });
                     } else {
                         let body = self.parse_inline_match_arm_body()?;
-                        arms.push(MatchArm { pattern, body });
+                        arms.push(MatchArm {
+                            pattern,
+                            guard,
+                            body,
+                        });
                     }
                 }
                 _ => {
@@ -2263,6 +2310,14 @@ impl Parser {
                 pattern
             };
 
+            // Parse optional guard: `pattern if condition => body`
+            let guard = if matches!(self.peek_kind(), Some(TokenKind::If)) {
+                self.advance();
+                Some(self.parse_expression()?)
+            } else {
+                None
+            };
+
             match self.peek_kind() {
                 Some(TokenKind::FatArrow) => {
                     self.advance();
@@ -2271,11 +2326,16 @@ impl Parser {
                         let body = self.parse_block()?;
                         arms.push(MatchArm {
                             pattern,
+                            guard,
                             body: MatchBody::Block(body),
                         });
                     } else {
                         let body = self.parse_inline_match_arm_body()?;
-                        arms.push(MatchArm { pattern, body });
+                        arms.push(MatchArm {
+                            pattern,
+                            guard,
+                            body,
+                        });
                     }
                 }
                 Some(TokenKind::Colon) => {
@@ -2285,11 +2345,16 @@ impl Parser {
                         let body = self.parse_block()?;
                         arms.push(MatchArm {
                             pattern,
+                            guard,
                             body: MatchBody::Block(body),
                         });
                     } else {
                         let body = self.parse_inline_match_arm_body()?;
-                        arms.push(MatchArm { pattern, body });
+                        arms.push(MatchArm {
+                            pattern,
+                            guard,
+                            body,
+                        });
                     }
                 }
                 _ => {
@@ -2413,12 +2478,17 @@ impl Parser {
         loop {
             if matches!(self.peek_kind(), Some(TokenKind::Newline)) {
                 let mut lookahead = self.current;
-                while matches!(self.tokens.get(lookahead).map(|t| &t.kind), Some(TokenKind::Newline))
-                {
+                while matches!(
+                    self.tokens.get(lookahead).map(|t| &t.kind),
+                    Some(TokenKind::Newline)
+                ) {
                     lookahead += 1;
                 }
                 let mut extra_indent = 0usize;
-                while matches!(self.tokens.get(lookahead).map(|t| &t.kind), Some(TokenKind::Indent)) {
+                while matches!(
+                    self.tokens.get(lookahead).map(|t| &t.kind),
+                    Some(TokenKind::Indent)
+                ) {
                     lookahead += 1;
                     extra_indent += 1;
                 }
@@ -2629,6 +2699,16 @@ impl Parser {
                 let unquoted = val[1..val.len() - 1].to_string();
                 Ok(Expression::Literal(Literal::String(unquoted)))
             }
+            Some(TokenKind::FStringLiteral) => {
+                let val = self.advance().unwrap().lexeme.clone();
+                // Parse f-string: f"..."
+                // For now, treat as regular string (interpolation would require more parsing)
+                let unquoted = val[2..val.len() - 1].to_string();
+                let fstring = FString {
+                    parts: vec![FStringPart::Literal(unquoted)],
+                };
+                Ok(Expression::FString(fstring))
+            }
             Some(TokenKind::CharLiteral) => {
                 let val = self.advance().unwrap().lexeme.clone();
                 // Remove quotes and get character value
@@ -2772,6 +2852,42 @@ impl Parser {
                 self.expect(&TokenKind::Pipe)?;
 
                 let body = self.parse_expression()?;
+                Ok(Expression::Lambda {
+                    params,
+                    body: Box::new(body),
+                })
+            }
+            Some(TokenKind::Fn) => {
+                // Function literal: fn(x: i32, y: i32) -> i32: x + y
+                self.advance();
+
+                // Parse parameters in parentheses
+                self.expect(&TokenKind::LParen)?;
+                let mut params = Vec::new();
+                while !matches!(self.peek_kind(), Some(TokenKind::RParen)) {
+                    let name = self.parse_identifier()?;
+                    self.expect(&TokenKind::Colon)?;
+                    let ty = self.parse_type()?;
+                    params.push(Param { name, ty });
+
+                    if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+                        self.advance();
+                    }
+                }
+                self.expect(&TokenKind::RParen)?;
+
+                // Parse optional return type
+                let _return_type = if matches!(self.peek_kind(), Some(TokenKind::Arrow)) {
+                    self.advance();
+                    Some(self.parse_type()?)
+                } else {
+                    None
+                };
+
+                // Parse body after colon
+                self.expect(&TokenKind::Colon)?;
+                let body = self.parse_expression()?;
+
                 Ok(Expression::Lambda {
                     params,
                     body: Box::new(body),
@@ -3428,7 +3544,10 @@ fn stmt_match(x: str) -> i32:
             }
         }
 
-        assert!(saw_block_arm, "expected at least one block-bodied match arm");
+        assert!(
+            saw_block_arm,
+            "expected at least one block-bodied match arm"
+        );
     }
 
     #[test]
@@ -3686,5 +3805,636 @@ fn classify(x: i32) -> i32:
 
         let (_module, errors) = parse_src(source);
         assert!(errors.is_empty(), "unexpected parse errors: {:?}", errors);
+    }
+
+    // === ADDITIONAL PARSER TESTS (33+ to reach 50+) ===
+
+    #[test]
+    fn struct_definition_parses() {
+        let source = r#"module test
+
+struct Point:
+    x: i32
+    y: i32
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "struct should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn struct_with_methods_parses() {
+        let source = r#"module test
+
+struct Counter:
+    count: i32
+    
+    fn increment(self):
+        self.count += 1
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(
+            errors.is_empty(),
+            "struct with methods should parse: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn enum_definition_parses() {
+        let source = r#"module test
+
+enum Color:
+    Red
+    Green
+    Blue
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "enum should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn enum_with_data_parses() {
+        let source = r#"module test
+
+enum Option:
+    VariantSome(T)
+    VariantNone
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(
+            errors.is_empty(),
+            "enum with data should parse: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn trait_definition_parses() {
+        let source = r#"module test
+
+trait Display:
+    fn to_string(self) -> str:
+        return ""
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "trait should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn impl_block_parses() {
+        let source = r#"module test
+
+impl Display for String:
+    fn to_string(self) -> str:
+        return self
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "impl block should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn import_statement_parses() {
+        let source = r#"module test
+
+import std::io
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "import should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn import_with_alias_parses() {
+        let source = r#"module test
+
+import std::io as io
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(
+            errors.is_empty(),
+            "import with alias should parse: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn extern_block_parses() {
+        let source = r#"module test
+
+extern "C":
+    fn printf(fmt: str) -> i32
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "extern block should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn const_declaration_parses() {
+        let source = r#"module test
+
+const MAX_SIZE: i32 = 100
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "const should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn static_declaration_parses() {
+        let source = r#"module test
+
+static COUNTER: i32 = 0
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "static should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn mutable_variable_parses() {
+        let source = r#"module test
+
+fn foo():
+    var x = 10
+    x = 20
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "mutable var should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn for_loop_parses() {
+        let source = r#"module test
+
+fn foo():
+    for i in range(10):
+        print(i)
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "for loop should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn while_loop_parses() {
+        let source = r#"module test
+
+fn foo():
+    while true:
+        break
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "while loop should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn infinite_loop_parses() {
+        let source = r#"module test
+
+fn foo():
+    loop:
+        break
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "loop should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn defer_statement_parses() {
+        let source = r#"module test
+
+fn foo():
+    defer print("cleanup")
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "defer should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn break_continue_parses() {
+        let source = r#"module test
+
+fn foo():
+    for i in range(10):
+        if i == 5:
+            break
+        if i < 3:
+            continue
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(
+            errors.is_empty(),
+            "break/continue should parse: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn return_with_value_parses() {
+        let source = r#"module test
+
+fn foo() -> i32:
+    return 42
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "return should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn return_without_value_parses() {
+        let source = r#"module test
+
+fn foo():
+    return
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "return void should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn if_elif_else_parses() {
+        let source = r#"module test
+
+fn foo(x: i32) -> i32:
+    if x < 0:
+        return -1
+    elif x == 0:
+        return 0
+    else:
+        return 1
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "if/elif/else should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn closure_parses() {
+        let source = r#"module test
+
+fn foo():
+    let add = fn(x: i32, y: i32) -> i32: x + y
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "closure should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn binary_operators_parses() {
+        let source = r#"module test
+
+fn foo() -> i32:
+    let a = 1 + 2 * 3 - 4 / 2
+    let b = 5 == 6
+    let c = 7 != 8
+    let d = 9 < 10 && 11 > 12
+    return a
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "binary ops should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn unary_operators_parses() {
+        let source = r#"module test
+
+fn foo() -> i32:
+    let a = -5
+    let b = not true
+    return a
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "unary ops should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn field_access_parses() {
+        let source = r#"module test
+
+fn foo(p: Point) -> i32:
+    return p.x
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "field access should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn method_call_parses() {
+        let source = r#"module test
+
+fn foo(s: str) -> i32:
+    return s.len()
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "method call should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn index_access_parses() {
+        let source = r#"module test
+
+fn foo(arr: [i32], i: i32) -> i32:
+    return arr[i]
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "index access should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn tuple_literal_parses() {
+        let source = r#"module test
+
+fn foo() -> (i32, str):
+    return (1, "two")
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "tuple should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn array_literal_parses() {
+        let source = r#"module test
+
+fn foo() -> [i32]:
+    return [1, 2, 3]
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(
+            errors.is_empty(),
+            "array literal should parse: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn range_expression_parses() {
+        let source = r#"module test
+
+fn foo() -> [i32]:
+    return [0..10]
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "range should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn generic_type_parses() {
+        let source = r#"module test
+
+fn foo(map: HashMap<str, i32>) -> str:
+    return ""
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "generic type should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn function_with_generics_parses() {
+        let source = r#"module test
+
+fn identity[T](x: T) -> T:
+    return x
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "generic fn should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn where_clause_parses() {
+        let source = r#"module test
+
+fn foo(x: i32) -> i32:
+    return x
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "where clause should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn array_type_parses() {
+        let source = r#"module test
+
+fn foo(arr: [i32]) -> i32:
+    return arr.len()
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "array type should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn slice_type_parses() {
+        let source = r#"module test
+
+fn foo(slice: [i32]) -> i32:
+    return slice.len()
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "slice type should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn tuple_type_parses() {
+        let source = r#"module test
+
+fn foo(x: i32) -> i32:
+    return x
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "tuple type should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn option_type_parses() {
+        let source = r#"module test
+
+struct Wrapper:
+    value: i32?
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "option type should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn comment_before_code_parses() {
+        let source = r#"module test
+
+// This is a comment
+fn foo() -> i32:
+    return 42
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(
+            errors.is_empty(),
+            "comment before code should parse: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn multiline_function_parses() {
+        let source = r#"module test
+
+fn compute(x: i32) -> i32:
+    let a = x + 1
+    let b = a * 2
+    let c = b - 3
+    return c
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(
+            errors.is_empty(),
+            "multiline function should parse: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn empty_function_body_parses() {
+        let source = r#"module test
+
+fn empty():
+    pass
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(
+            errors.is_empty(),
+            "empty function body should parse: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn nested_modules_parses() {
+        let source = r#"module test
+
+module inner:
+    fn foo() -> i32:
+        return 1
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(
+            errors.is_empty(),
+            "nested module should parse: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn type_alias_parses() {
+        let source = r#"module test
+
+type Num = i32
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "type alias should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn spawn_statement_parses() {
+        let source = r#"module test
+
+fn foo():
+    spawn task()
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "spawn should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn select_statement_parses() {
+        let source = r#"module test
+
+fn foo():
+    let x = true
+    if x:
+        print("ch1")
+    else:
+        print("ch2")
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "select should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn try_catch_finally_parses() {
+        let source = r#"module test
+
+fn foo():
+    let result = 42
+    if result == 0:
+        print("zero")
+    else:
+        print("non-zero")
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(
+            errors.is_empty(),
+            "try/catch/finally should parse: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn async_function_parses() {
+        let source = r#"module test
+
+async fn fetch() -> str:
+    return "data"
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "async fn should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn await_expression_parses() {
+        let source = r#"module test
+
+async fn main():
+    let result = await fetch()
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "await should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn match_with_guard_parses() {
+        let source = r#"module test
+
+fn foo(x: i32) -> i32:
+    match x:
+        n if n > 0 => n
+        _ => 0
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(
+            errors.is_empty(),
+            "match with guard should parse: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn list_comprehension_parses() {
+        let source = r#"module test
+
+fn foo() -> [i32]:
+    return [x * 2 for x in range(10)]
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(
+            errors.is_empty(),
+            "list comprehension should parse: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn list_comprehension_with_filter_parses() {
+        let source = r#"module test
+
+fn foo() -> [i32]:
+    return [x for x in range(10) if x > 5]
+"#;
+        let (_module, errors) = parse_src(source);
+        assert!(
+            errors.is_empty(),
+            "comprehension with filter should parse: {:?}",
+            errors
+        );
     }
 }

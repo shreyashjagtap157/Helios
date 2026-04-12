@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Omni Compiler - MLIR Backend
 //!
 //! This module implements the translation from Omni IR to MLIR-like operations.

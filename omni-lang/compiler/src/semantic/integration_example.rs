@@ -14,7 +14,7 @@ mod integration_tests {
     use crate::parser::ast::*;
     use crate::semantic::borrow_check::BorrowChecker;
     use crate::semantic::constraints::{Constraint, ConstraintSolver, InferenceType};
-    use crate::semantic::monomorphization::{ExpressionSubstitutor, TypeSubstitution};
+    use crate::semantic::monomorphization::TypeSubstitution;
     use crate::semantic::traits::*;
 
     /// Demonstrates type inference using constraints
@@ -54,7 +54,7 @@ mod integration_tests {
     /// Demonstrates trait bound checking
     #[test]
     fn test_trait_bound_workflow() {
-        let mut resolver = TraitResolver::new();
+        let resolver = TraitResolver::new();
 
         // Check if i32 implements Copy
         assert!(resolver.implements_trait(&Type::I32, "Copy"));
@@ -101,7 +101,7 @@ mod integration_tests {
         // Note: LifetimeValidator is defined in constraints module
         // This test demonstrates the concept using the trait system instead
 
-        let mut resolver = TraitResolver::new();
+        let resolver = TraitResolver::new();
         // Lifetimes are typically associated with trait bounds
         // This demonstrates lifetime-like constraints through trait bounds
         let bounds = vec![TraitBound {
@@ -154,7 +154,6 @@ mod integration_tests {
         let subst = solver.solve().expect("Should solve");
 
         // Step 2: Trait verification
-        let mut trait_resolver = TraitResolver::new();
         let inferred_type = subst.apply(&InferenceType::Var(param_type));
         // (Would check trait bounds here)
 
@@ -208,7 +207,7 @@ mod integration_tests {
     /// Demonstrates Phase 3: Integrated trait bounds with generic monomorphization
     #[test]
     fn test_phase3_trait_bounds_with_generics() {
-        let mut resolver = TraitResolver::new();
+        let resolver = TraitResolver::new();
 
         // Generic function signature: fn clone_if_copy<T: Copy>(x: T) -> T
         let bounds = vec![TraitBound {
@@ -309,7 +308,7 @@ mod integration_tests {
         let type_subst = constraint_solver.solve().unwrap();
 
         // 2. Trait bound verification
-        let mut trait_resolver = TraitResolver::new();
+        let trait_resolver = TraitResolver::new();
         let bounds = vec![TraitBound {
             type_param: "T".to_string(),
             trait_name: "Copy".to_string(),

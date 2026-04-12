@@ -10,7 +10,6 @@ use crate::semantic::{
 /// Bypasses the IR entirely for clean stack-based codegen.
 /// Each expression pushes exactly one value to the stack.
 /// Each statement consumes its inputs and produces no stack residue.
-
 pub fn generate_ovm_direct(module: &TypedModule, output: &std::path::Path) -> Result<(), String> {
     let mut codegen = OvmCodegen::new();
     let mut functions = Vec::new();
@@ -75,6 +74,7 @@ pub fn generate_ovm_direct(module: &TypedModule, output: &std::path::Path) -> Re
             name: "__static_init".to_string(),
             params: Vec::new(),
             return_type: AstType::Named("()".into()),
+            effect_row: None,
             body: init_body,
             is_async: false,
         };

@@ -1,6 +1,7 @@
-#![allow(dead_code)]
 //! GPU Binary Compilation
 //!
+#![allow(dead_code)]
+
 //! Provides binary compilation from IR to GPU kernel formats:
 //! - PTX binary assembly for NVIDIA GPUs
 //! - SPIR-V binary modules for Vulkan/OpenCL

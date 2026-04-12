@@ -1,10 +1,10 @@
-#![allow(dead_code)]
 //! OVM Bytecode Format
 //!
 //! Defines the instruction set, value representation, and binary serialization
 //! format for the Omni Virtual Machine (OVM). This module provides a high-level
 //! bytecode representation that sits between the AST and the low-level codegen
 //! OVM opcodes, suitable for interpretation and ahead-of-time compilation.
+#![allow(dead_code)]
 
 use anyhow::{anyhow, Context, Result};
 use std::fmt;
@@ -1031,7 +1031,7 @@ mod tests {
 
     #[test]
     fn test_truncated_input_fails() {
-        let result = OvmModule::deserialize(&[b'O', b'V']);
+        let result = OvmModule::deserialize(b"OV");
         assert!(result.is_err());
     }
 

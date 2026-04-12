@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Native Network Integration
 //! Provides TCP/UDP socket operations and HTTP client functionality
 

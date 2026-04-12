@@ -92,6 +92,7 @@ mod tests {
                 attributes: vec![],
                 params: vec![],
                 return_type: None,
+                effect_row: None,
                 body: Block {
                     statements: vec![Statement::Let {
                         name: "x".into(),

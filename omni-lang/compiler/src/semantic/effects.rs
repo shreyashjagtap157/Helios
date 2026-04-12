@@ -99,6 +99,13 @@ impl Default for EffectRow {
 }
 
 impl EffectRow {
+    /// Create an effect row from a vector of effect symbols.
+    pub fn from_effects(effects: Vec<EffectSymbol>) -> Self {
+        let mut row = Self { effects };
+        row.normalize();
+        row
+    }
+
     /// The empty effect row — represents a pure computation.
     pub fn pure() -> Self {
         Self {

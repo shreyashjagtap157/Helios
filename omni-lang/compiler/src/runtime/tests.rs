@@ -3,8 +3,6 @@ mod tests {
     use crate::runtime::hot_swap::HotSwapManager;
     use std::fs::File;
     use std::io::Write;
-    use std::path::PathBuf;
-    use std::time::SystemTime;
 
     #[test]
     fn test_hot_swap_registry_update() {

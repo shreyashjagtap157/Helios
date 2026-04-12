@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Extended Native Code Generation
 //!
 //! Additional output format support and architecture emitters:

@@ -12,15 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(dead_code)]
 //! Code Generation
 //! Supports multiple backends: LLVM IR, OVM bytecode, and native code.
 
+#![allow(dead_code)]
+
 // ── Core modules (always compiled) ──────────────────────────────────────
-pub mod ovm;
-pub mod ovm_direct;
 pub mod opt;
 pub mod optimizer;
+pub mod ovm;
+pub mod ovm_direct;
 pub mod self_hosting;
 
 // ── Experimental / Phase 7-13 modules (gated behind feature flag) ───────

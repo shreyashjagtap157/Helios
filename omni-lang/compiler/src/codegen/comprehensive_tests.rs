@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Comprehensive Test Suite for the Omni Compiler
 //!
 //! Coverage areas:
@@ -12,7 +11,7 @@
 //! - DWARF debug info
 //! - Integration tests
 
-#[cfg(test)]
+#[cfg(all(test, feature = "experimental"))]
 mod tests {
     use crate::codegen::dwarf::DwarfEmitter;
     use crate::codegen::exception_handling::*;

@@ -1,0 +1,21 @@
+Release manifest for omni-self-hosting-v2-effects
+
+Included (referenced) files (relative to repo root):
+- OMNI_SELF_HOSTING_RELEASE_v2_EFFECTS.md
+- omni-lang/omni/stdlib/core.omni
+- omni-lang/omni/stdlib/core.backup.2026-04-03.orig.omni
+- omni-lang/omni/stdlib/collections.omni
+- omni-lang/omni/stdlib/collections.backup.2026-04-03.orig.omni
+- build/stage0.ovm
+- build/main.ovm
+- build/omnc_stage1.ovm
+- build/omnc_stage2.ovm
+- build/collections_minimal.ast.txt
+- build/core_string_len.ast.txt
+- build/core_string_from.ast.txt
+- build/core_string_push_char.ast.txt
+- build/core_option_result.ast.txt
+- build/core_ordering.ast.txt
+- build/core_empty_stub.ast.txt
+
+Note: The above build artifacts were produced during validation and are referenced here rather than duplicated to keep the release small. The `package_release.ps1` script will copy these files into a temporary folder and create a zip archive.

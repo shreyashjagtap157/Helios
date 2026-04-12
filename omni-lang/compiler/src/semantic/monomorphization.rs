@@ -257,6 +257,7 @@ impl StatementSubstitutor {
                         };
                         MatchArm {
                             pattern: arm.pattern.clone(),
+                            guard: arm.guard.clone(),
                             body: transformed_body,
                         }
                     })

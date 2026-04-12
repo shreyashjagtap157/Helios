@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(dead_code)]
 //! Omni Language Runtime
 //! Executes compiled or interpreted Omni code and facilitates native FFI.
+#![allow(dead_code)]
 
 pub mod bytecode;
 pub mod bytecode_compiler;
@@ -144,7 +144,9 @@ impl Runtime {
                             let new_address = 0x12345678;
                             self.hot_swap_manager
                                 .update(&compiled.name, new_address)
-                                .unwrap_or_else(|e| warn!("Failed to update hot swap registry: {}", e));
+                                .unwrap_or_else(|e| {
+                                    warn!("Failed to update hot swap registry: {}", e)
+                                });
                         }
                         Err(e) => {
                             log::error!("Runtime: Failed to recompile {}: {}", dummy_func.name, e);

@@ -20,8 +20,8 @@ impl Vec:
     fn push(&mut self, _item: &str):
         return
 
-    fn pop(&mut self) -> Option:
-        return VariantNone
+    fn pop(&mut self) -> Option<&str>:
+        return None
 
     fn capacity(&self) -> usize:
         return self.len
@@ -39,8 +39,8 @@ impl HashMap:
     fn insert(&mut self, _k: &str, _v: &str):
         return
 
-    fn get(&self, _k: &str) -> Option:
-        return VariantNone
+    fn get(&self, _k: &str) -> Option<&str>:
+        return None
 
     fn contains_key(&self, _k: &str) -> bool:
         return false

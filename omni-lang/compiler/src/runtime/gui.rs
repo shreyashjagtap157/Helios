@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Native GUI Integration (Cross-platform)
 //! Provides window management, event pumping, and basic rendering context
 

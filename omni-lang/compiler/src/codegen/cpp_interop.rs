@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! C++ Interoperability Layer
 //!
 //! Handles Itanium C++ ABI name mangling and VTable generation.

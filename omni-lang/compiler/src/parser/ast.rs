@@ -12,35 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(dead_code)]
 //! Omni AST - Abstract Syntax Tree Definitions
 //!
 //! Defines the structure of parsed Omni programs.
+#![allow(dead_code)]
 
-/// Source code location span
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// Source span (for future use)
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Span {
     pub start: usize,
     pub end: usize,
-}
-
-impl Span {
-    pub fn new(start: usize, end: usize) -> Self {
-        Span { start, end }
-    }
-}
-
-/// A wrapper to attach a span to an AST node
-#[derive(Debug, Clone)]
-pub struct Spanned<T> {
-    pub node: T,
-    pub span: Span,
-}
-
-impl<T> Spanned<T> {
-    pub fn new(node: T, span: Span) -> Self {
-        Spanned { node, span }
-    }
 }
 
 /// A complete Omni module (compilation unit)
@@ -146,14 +127,28 @@ pub struct Field {
 }
 
 /// Function definition
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Function {
     pub name: String,
     pub is_async: bool,
     pub attributes: Vec<String>,
     pub params: Vec<Param>,
     pub return_type: Option<Type>,
+    pub effect_row: Option<EffectRow>, // v2.0 effect annotations (e.g., / io + async)
     pub body: Block,
+}
+
+/// Effect symbol (the "tag" of an algebraic effect)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct EffectSymbol {
+    pub name: String,
+    pub param: Option<String>, // For polymorphic effects like Error[E]
+}
+
+/// Effect row for function effect annotations
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectRow {
+    pub effects: Vec<EffectSymbol>,
 }
 
 /// Function parameter
@@ -248,7 +243,6 @@ pub enum Type {
     }, // for<'a> syntax
     Tuple(Vec<Type>),          // (T1, T2, ...)
     Nullable(Box<Type>),       // T?
-    Any,                       // Accepts any type (for builtins like println)
     Infer,                     // Type to be inferred
 }
 
@@ -269,10 +263,7 @@ impl PartialEq for Type {
             | (Type::F64, Type::F64)
             | (Type::Bool, Type::Bool)
             | (Type::Str, Type::Str)
-            | (Type::SelfOwned, Type::SelfOwned)
-            | (Type::Any, Type::Any) => true,
-            // Type::Any matches anything (O-010)
-            (Type::Any, _) | (_, Type::Any) => true,
+            | (Type::SelfOwned, Type::SelfOwned) => true,
             (Type::Named(n1), Type::Named(n2)) => n1 == n2,
             (Type::Generic(n1, a1), Type::Generic(n2, a2)) => n1 == n2 && a1 == a2,
             (Type::Function(p1, r1), Type::Function(p2, r2)) => p1 == p2 && r1 == r2,
@@ -323,7 +314,7 @@ pub enum Ownership {
 }
 
 /// A block of statements
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Block {
     pub statements: Vec<Statement>,
 }
@@ -393,6 +384,7 @@ pub struct SelectArm {
 #[derive(Debug, Clone)]
 pub struct MatchArm {
     pub pattern: Pattern,
+    pub guard: Option<Expression>,
     pub body: MatchBody,
 }
 
@@ -417,6 +409,7 @@ pub enum Pattern {
 #[derive(Debug, Clone)]
 pub enum Expression {
     Literal(Literal),
+    FString(FString),
     Identifier(String),
     Binary(Box<Expression>, BinaryOp, Box<Expression>),
     Unary(UnaryOp, Box<Expression>),
@@ -484,6 +477,21 @@ pub enum Literal {
     String(String),
     Bool(bool),
     Null,
+}
+
+/// F-string interpolation part
+#[derive(Debug, Clone)]
+pub enum FStringPart {
+    /// Static text
+    Literal(String),
+    /// Interpolated expression
+    Interpolated(Expression),
+}
+
+/// F-string literal
+#[derive(Debug, Clone)]
+pub struct FString {
+    pub parts: Vec<FStringPart>,
 }
 
 /// Binary operators

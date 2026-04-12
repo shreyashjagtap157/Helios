@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! OVM Bytecode Backend
 //! Generates OVM bytecode from Omni IR for the Omni Virtual Machine
 
@@ -1120,10 +1119,8 @@ impl HardwareConfig {
         HardwareConfig {
             cpu_arch: Self::detect_arch(),
             simd_level: Self::detect_simd(),
-            core_count: num_cpus::get() as u32,
-            available_memory: sys_info::mem_info()
-                .map(|m| m.avail * 1024)
-                .unwrap_or(1024 * 1024 * 1024),
+            core_count: 1,
+            available_memory: 0,
             has_gpu: Self::detect_gpu(),
         }
     }

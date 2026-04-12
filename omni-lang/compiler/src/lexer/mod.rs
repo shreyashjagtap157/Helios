@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(dead_code)]
 //! Omni Lexer - Tokenization
 //!
 //! Converts source text into a stream of tokens using Logos for speed.
+#![allow(dead_code)]
 
 use logos::Logos;
 use thiserror::Error;
@@ -200,6 +200,8 @@ pub enum TokenKind {
     FloatLiteral,
     #[regex(r#""([^"\\]|\\.)*""#)]
     StringLiteral,
+    #[regex(r#"f"([^"\\]|\\.)*""#)]
+    FStringLiteral,
     #[regex(r"'([^'\\]|\\.)'")]
     CharLiteral,
 

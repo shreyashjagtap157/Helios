@@ -1,7 +1,7 @@
-#![allow(dead_code)]
 //! Advanced Distributed Logic
 //!
 //! ZeRO Optimizer, Gradient Bucketing, and Topology Discovery.
+#![allow(dead_code)]
 
 use std::collections::HashMap;
 

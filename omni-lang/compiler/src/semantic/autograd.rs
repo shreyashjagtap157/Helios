@@ -1,7 +1,7 @@
-#![allow(dead_code)]
 //! Advanced Automatic Differentiation
 //!
 //! Source Code Transformation for gradients, Hessians, and checkpointing.
+#![allow(dead_code)]
 
 use std::collections::HashMap;
 

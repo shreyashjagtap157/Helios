@@ -1,5 +1,6 @@
 use crate::ir::IrFunction;
 
+#[allow(dead_code)]
 /// Interface for an optimization pass
 pub trait OptimizationPass {
     /// Name of the pass for logging/debugging

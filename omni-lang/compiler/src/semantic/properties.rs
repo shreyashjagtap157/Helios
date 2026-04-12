@@ -111,6 +111,7 @@ impl PropertyContainer {
             attributes: vec![],
             params: vec![],
             return_type: Some(prop.type_expr.clone()),
+            effect_row: None,
             body: Block {
                 statements: if let Some(body) = &prop.getter_body {
                     vec![(**body).clone()]
@@ -137,7 +138,9 @@ impl PropertyContainer {
                 } else {
                     vec![]
                 },
+                ..Default::default()
             },
+            ..Default::default()
         })
     }
 }

@@ -332,6 +332,7 @@ mod tests {
             attributes: vec![],
             params: vec![],
             return_type: None,
+            effect_row: None,
             body: Block { statements: stmts },
         })
     }

@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Exception Handling and Stack Unwinding
 //!
 //! Implements structured exception handling for the Omni language:

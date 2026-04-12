@@ -1,6 +1,7 @@
-#![allow(dead_code)]
 //! Omni Type Inference Engine
 //!
+#![allow(dead_code)]
+
 //! Implements a constraint-based Hindley-Milner style type inference algorithm
 //! for the Omni programming language. This engine:
 //!
@@ -257,6 +258,16 @@ impl ConstraintOrigin {
 }
 
 // ---------------------------------------------------------------------------
+// Function signatures
+// ---------------------------------------------------------------------------
+
+type FunctionSignature = (
+    Vec<Type>,
+    Type,
+    Option<crate::semantic::effects::EffectRow>,
+);
+
+// ---------------------------------------------------------------------------
 // Substitution
 // ---------------------------------------------------------------------------
 
@@ -328,12 +339,15 @@ impl Substitution {
 pub struct TypeEnv {
     /// Stack of scopes. The last entry is the innermost scope.
     scopes: Vec<HashMap<std::string::String, Type>>,
+    /// Current accumulated effect row (for effect inference)
+    pub effect_row: Option<crate::semantic::effects::EffectRow>,
 }
 
 impl TypeEnv {
     pub fn new() -> Self {
         Self {
             scopes: vec![HashMap::new()],
+            effect_row: None,
         }
     }
 
@@ -346,6 +360,41 @@ impl TypeEnv {
     pub fn pop_scope(&mut self) {
         if self.scopes.len() > 1 {
             self.scopes.pop();
+        }
+    }
+
+    /// Clear the effect row (for pure expressions)
+    pub fn clear_effects(&mut self) {
+        self.effect_row = None;
+    }
+
+    /// Set the current effect row
+    pub fn set_effect_row(&mut self, effects: crate::semantic::effects::EffectRow) {
+        self.effect_row = Some(effects);
+    }
+
+    /// Get the current effect row
+    pub fn get_effect_row(&self) -> Option<&crate::semantic::effects::EffectRow> {
+        self.effect_row.as_ref()
+    }
+
+    /// Add an effect to the current effect row
+    pub fn add_effect(&mut self, effect: crate::semantic::effects::EffectSymbol) {
+        if let Some(ref mut row) = self.effect_row {
+            row.insert(effect);
+        } else {
+            self.effect_row = Some(crate::semantic::effects::EffectRow::just(effect));
+        }
+    }
+
+    /// Merge another effect row into the current one
+    pub fn merge_effects(&mut self, other: &crate::semantic::effects::EffectRow) {
+        if let Some(ref mut row) = self.effect_row {
+            for effect in other.iter() {
+                row.insert(effect.clone());
+            }
+        } else {
+            self.effect_row = Some(other.clone());
         }
     }
 
@@ -474,14 +523,17 @@ pub struct InferenceEngine {
     /// Known struct definitions: name → fields.
     struct_defs: HashMap<std::string::String, Vec<(std::string::String, Type)>>,
 
-    /// Known function signatures: name → (param_types, return_type).
-    function_sigs: HashMap<std::string::String, (Vec<Type>, Type)>,
+    /// Known function signatures: name → (param_types, return_type, effect_row).
+    function_sigs: HashMap<std::string::String, FunctionSignature>,
 
     /// Collected type errors.
     errors: Vec<TypeError>,
 
     /// Resolved result (populated after solving).
     result: InferenceResult,
+
+    /// Current accumulated effect row during inference
+    current_effects: Vec<crate::semantic::effects::EffectSymbol>,
 }
 
 impl InferenceEngine {
@@ -498,6 +550,66 @@ impl InferenceEngine {
             function_sigs: HashMap::new(),
             errors: Vec::new(),
             result: InferenceResult::new(),
+            current_effects: Vec::new(),
+        }
+    }
+    // -----------------------------------------------------------------
+    // Effect inference helpers
+    // -----------------------------------------------------------------
+
+    /// Add an IO effect (for println, print, read, etc.)
+    pub fn add_io_effect(&mut self) {
+        self.current_effects
+            .push(crate::semantic::effects::builtin::io());
+    }
+
+    /// Add an async effect (for async functions)
+    pub fn add_async_effect(&mut self) {
+        self.current_effects
+            .push(crate::semantic::effects::builtin::async_());
+    }
+
+    /// Add a state effect (for mutable state access)
+    pub fn add_state_effect(&mut self) {
+        self.current_effects
+            .push(crate::semantic::effects::builtin::state());
+    }
+
+    /// Add an error effect
+    pub fn add_error_effect(&mut self) {
+        self.current_effects
+            .push(crate::semantic::effects::builtin::error());
+    }
+
+    /// Merge another effect row into the current accumulated effects.
+    pub fn merge_effects(&mut self, other: &crate::semantic::effects::EffectRow) {
+        self.current_effects
+            .extend(other.iter().cloned());
+    }
+
+    /// Get the current accumulated effect row
+    pub fn get_effect_row(&self) -> crate::semantic::effects::EffectRow {
+        crate::semantic::effects::EffectRow::from_effects(self.current_effects.clone())
+    }
+
+    /// Clear accumulated effects (for pure expressions)
+    pub fn clear_effects(&mut self) {
+        self.current_effects.clear();
+    }
+
+    /// Check if the current effects satisfy a declared effect row
+    pub fn check_effects(
+        &self,
+        declared: &crate::semantic::effects::EffectRow,
+    ) -> Result<(), String> {
+        let current = self.get_effect_row();
+        if !current.is_subtype_of(declared) {
+            Err(format!(
+                "Function body effects {:?} do not satisfy declared effects {:?}",
+                current, declared
+            ))
+        } else {
+            Ok(())
         }
     }
 
@@ -530,6 +642,14 @@ impl InferenceEngine {
         );
         env.define(
             "println!",
+            Type::Function(vec![any_type.clone()], Box::new(Type::Void)),
+        );
+        env.define(
+            "eprintln",
+            Type::Function(vec![any_type.clone()], Box::new(Type::Void)),
+        );
+        env.define(
+            "eprint",
             Type::Function(vec![any_type.clone()], Box::new(Type::Void)),
         );
 
@@ -602,12 +722,22 @@ impl InferenceEngine {
         );
 
         // Register builtin function signatures
-        let println_sig = (vec![Type::String], Type::Void);
+        let io_effect = Some(crate::semantic::effects::EffectRow::just(
+            crate::semantic::effects::builtin::io(),
+        ));
+        let pure_effect = Some(crate::semantic::effects::EffectRow::pure());
+        let println_sig = (vec![any_type.clone()], Type::Void, io_effect.clone());
         self.function_sigs
             .insert("println".to_string(), println_sig.clone());
         self.function_sigs
-            .insert("println!".to_string(), println_sig);
-        let format_sig = (vec![Type::String], Type::String);
+            .insert("print".to_string(), println_sig.clone());
+        self.function_sigs
+            .insert("println!".to_string(), println_sig.clone());
+        self.function_sigs
+            .insert("eprintln".to_string(), println_sig.clone());
+        self.function_sigs
+            .insert("eprint".to_string(), println_sig);
+        let format_sig = (vec![Type::String], Type::String, pure_effect.clone());
         self.function_sigs
             .insert("format".to_string(), format_sig.clone());
         self.function_sigs.insert("format!".to_string(), format_sig);
@@ -673,7 +803,6 @@ impl InferenceEngine {
                 Type::Tuple(elem_tys)
             }
             ast::Type::Nullable(inner) => Type::Nullable(Box::new(self.from_ast_type(inner))),
-            ast::Type::Any => Type::Var(99999), // Any = unconstrained sentinel type variable
             ast::Type::Infer => self.fresh_var(), // Create fresh type variable for inference
         }
     }
@@ -779,13 +908,40 @@ impl InferenceEngine {
             Some(t) => self.from_ast_type(t),
             None => self.fresh_var(),
         };
+        let effect_row = Self::effect_row_from_ast(func.effect_row.as_ref());
 
         let func_ty = Type::Function(param_tys.clone(), Box::new(ret_ty.clone()));
         env.define(name, func_ty.clone());
 
         self.function_sigs
-            .insert(name.to_string(), (param_tys, ret_ty));
+            .insert(name.to_string(), (param_tys, ret_ty, effect_row));
         self.result.function_types.insert(name.to_string(), func_ty);
+    }
+
+    fn effect_row_from_ast(
+        effect_row: Option<&ast::EffectRow>,
+    ) -> Option<crate::semantic::effects::EffectRow> {
+        effect_row.map(|row| {
+            let effects: Vec<crate::semantic::effects::EffectSymbol> = row
+                .effects
+                .iter()
+                .map(|e| crate::semantic::effects::EffectSymbol::new(&e.name))
+                .collect();
+            crate::semantic::effects::EffectRow::from_effects(effects)
+        })
+    }
+
+    fn merge_registered_effects(&mut self, name: &str) -> bool {
+        let effect_row = self
+            .function_sigs
+            .get(name)
+            .and_then(|(_, _, effect_row)| effect_row.clone());
+        if let Some(effect_row) = effect_row {
+            self.merge_effects(&effect_row);
+            true
+        } else {
+            false
+        }
     }
 
     // -----------------------------------------------------------------
@@ -795,6 +951,9 @@ impl InferenceEngine {
     /// Infer types within a single function body.
     pub fn infer_function(&mut self, func: &ast::Function, env: &mut TypeEnv) {
         env.push_scope();
+
+        // Clear any previous effects for this function
+        self.clear_effects();
 
         // Bind parameters
         for param in &func.params {
@@ -810,6 +969,16 @@ impl InferenceEngine {
         // Infer each statement in the body
         for stmt in &func.body.statements {
             self.infer_statement(stmt, env, &expected_ret);
+        }
+
+        // Check that inferred effects satisfy declared effects (if any)
+        let declared = Self::effect_row_from_ast(func.effect_row.as_ref())
+            .unwrap_or_else(crate::semantic::effects::EffectRow::pure);
+        if let Err(e) = self.check_effects(&declared) {
+            self.errors.push(TypeError::new(format!(
+                "Function '{}' effect mismatch: {}",
+                func.name, e
+            )));
         }
 
         env.pop_scope();
@@ -1051,6 +1220,8 @@ impl InferenceEngine {
         match expr {
             // -- Literals --
             ast::Expression::Literal(lit) => self.infer_literal(lit),
+            // -- F-strings (treated as string) --
+            ast::Expression::FString(_) => Type::String,
 
             // -- Identifiers --
             ast::Expression::Identifier(name) => {
@@ -1101,6 +1272,27 @@ impl InferenceEngine {
                     ret_ty.clone(),
                     ConstraintOrigin::new("function call"),
                 ));
+
+                // Track effect for known callees first; fall back to the legacy
+                // name-based IO heuristic for unresolved builtins.
+                if let ast::Expression::Identifier(name) = callee.as_ref() {
+                    let propagated = self.merge_registered_effects(name);
+                    if !propagated {
+                        match name.as_str() {
+                            "println" | "print" | "println!" | "eprintln" | "eprint" => {
+                                self.add_io_effect();
+                            }
+                            "read_line" | "read" | "read_to_string" | "read_bytes" => {
+                                self.add_io_effect();
+                            }
+                            "write" | "write_all" | "flush" => {
+                                self.add_io_effect();
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
                 ret_ty
             }
 
@@ -1217,6 +1409,8 @@ impl InferenceEngine {
             // -- Await --
             ast::Expression::Await(inner) => {
                 // For now, the awaited value's type is the inner type
+                // Await expressions have async effects
+                self.add_async_effect();
                 self.infer_expr(inner, env)
             }
 
@@ -1480,7 +1674,10 @@ impl InferenceEngine {
         let resolved = self.substitution.apply(recv_ty);
         if let Type::Struct(ref struct_name, _) = resolved {
             let qualified = format!("{}::{}", struct_name, method);
-            if let Some((param_tys, ret_ty)) = self.function_sigs.get(&qualified).cloned() {
+            if let Some((param_tys, ret_ty, effect_row)) = self.function_sigs.get(&qualified).cloned() {
+                if let Some(effect_row) = effect_row {
+                    self.merge_effects(&effect_row);
+                }
                 // Skip the first param if it's Self
                 let method_params = if !param_tys.is_empty() {
                     &param_tys[1..]
@@ -2082,10 +2279,27 @@ mod tests {
             attributes: vec![],
             params: vec![],
             return_type: None,
+            effect_row: None,
             body: a::Block { statements: stmts },
         }
     }
 
+
+    fn io_effect_row() -> a::EffectRow {
+        a::EffectRow {
+            effects: vec![a::EffectSymbol {
+                name: "IO".to_string(),
+                param: None,
+            }],
+        }
+    }
+
+    fn call_stmt(name: &str) -> a::Statement {
+        a::Statement::Expression(a::Expression::Call(
+            Box::new(a::Expression::Identifier(name.to_string())),
+            vec![],
+        ))
+    }
     #[test]
     fn test_fresh_var_ids_increment() {
         let mut engine = InferenceEngine::new();
@@ -2305,5 +2519,59 @@ mod tests {
         let module = a::Module { items: vec![] };
         let result = check_types(&module);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_function_signature_stores_effect_row() {
+        let mut engine = InferenceEngine::new();
+        let module = a::Module {
+            items: vec![a::Item::Function(a::Function {
+                name: "emit".to_string(),
+                is_async: false,
+                attributes: vec![],
+                params: vec![],
+                return_type: None,
+                effect_row: Some(io_effect_row()),
+                body: a::Block { statements: vec![] },
+            })],
+        };
+
+        engine.generate_constraints(&module);
+
+        let signature = engine
+            .function_sigs
+            .get("emit")
+            .expect("registered function signature");
+        assert!(matches!(
+            signature.2.as_ref(),
+            Some(effect_row) if effect_row.contains(&crate::semantic::effects::builtin::io())
+        ));
+    }
+
+    #[test]
+    fn test_function_call_propagates_registered_effect_row() {
+        let emit_fn = a::Function {
+            name: "emit".to_string(),
+            is_async: false,
+            attributes: vec![],
+            params: vec![],
+            return_type: None,
+            effect_row: Some(io_effect_row()),
+            body: a::Block { statements: vec![] },
+        };
+
+        let caller_fn = simple_fn("main", vec![call_stmt("emit")]);
+        let module = a::Module {
+            items: vec![a::Item::Function(emit_fn), a::Item::Function(caller_fn)],
+        };
+
+        let result = check_types(&module);
+        assert!(result.is_err());
+
+        let errors = result.err().expect("expected effect mismatch error");
+        assert!(errors.iter().any(|error| {
+            error.message.contains("Function 'main' effect mismatch")
+                || error.message.contains("function 'main' effect mismatch")
+        }));
     }
 }

@@ -88,10 +88,10 @@ fn kw(w: str) -> i64:
     return 1
 fn tokenize(src: str) -> i64:
     let sl = str_len(src)
-    let p = 0
-    let tc = 0
-    let ind = 0
-    let sol = 1
+        let mut p = 0
+        let mut tc = 0
+        let mut ind = 0
+        let mut sol = 1
     while p < sl:
         let c = str_char_at(src, p)
         if c == 13:
@@ -104,6 +104,7 @@ fn tokenize(src: str) -> i64:
             continue
         if sol == 1:
             let d = 0
+                  let mut d = 0
             while p < sl:
                 let s = str_char_at(src, p)
                 if s == 32:
@@ -138,6 +139,7 @@ fn tokenize(src: str) -> i64:
         if c == 34:
             p = p + 1
             let sv = ""
+                  let mut sv = ""
             while p < sl:
                 let s = str_char_at(src, p)
                 if s == 34:
@@ -158,6 +160,7 @@ fn tokenize(src: str) -> i64:
             continue
         if is_dg(c):
             let n = 0
+                  let mut n = 0
             while p < sl:
                 let d = str_char_at(src, p)
                 if is_dg(d):
@@ -255,7 +258,7 @@ fn nd(t: i64) -> i64:
     return i
 fn parse_prog() -> i64:
     let r = nd(15)
-    let c = 0
+    let mut c = 0
     snl()
     while pk() != 0:
         if pk() == 31:
@@ -290,6 +293,7 @@ fn p_fndef() -> i64:
     av()
     ex(15)
     let pc = 0
+          let mut pc = 0
     while pk() != 16:
         if pk() == 0:
             break
@@ -317,7 +321,7 @@ fn p_fndef() -> i64:
     return n
 fn p_blk() -> i64:
     let b = nd(13)
-    let c = 0
+    let mut c = 0
     snl()
     while pk() != 30:
         if pk() == 0:
@@ -407,7 +411,7 @@ fn p_x() -> i64:
     let t = pk()
     if t >= 22:
         if t <= 27:
-            let ops = "=="
+            let mut ops = "=="
             if t == 23:
                 ops = "!="
             elif t == 24:
@@ -420,7 +424,7 @@ fn p_x() -> i64:
                 ops = ">="
             av()
             let n = nd(8)
-            g_n1[n] = l
+            g_n1[n] = l.clone()
             g_n2[n] = p_add()
             g_ns[n] = ops
             return n
@@ -430,28 +434,28 @@ fn p_add() -> i64:
     while pk() == 17:
         av()
         let n = nd(8)
-        g_n1[n] = l
+        g_n1[n] = l.clone()
         g_n2[n] = p_pri()
         g_ns[n] = "+"
         l = n
     while pk() == 18:
         av()
         let n = nd(8)
-        g_n1[n] = l
+        g_n1[n] = l.clone()
         g_n2[n] = p_pri()
         g_ns[n] = "-"
         l = n
     while pk() == 19:
         av()
         let n = nd(8)
-        g_n1[n] = l
+        g_n1[n] = l.clone()
         g_n2[n] = p_pri()
         g_ns[n] = "*"
         l = n
     while pk() == 20:
         av()
         let n = nd(8)
-        g_n1[n] = l
+        g_n1[n] = l.clone()
         g_n2[n] = p_pri()
         g_ns[n] = "/"
         l = n
@@ -490,7 +494,7 @@ fn p_pri() -> i64:
         if pk() == 15:
             av()
             let c = nd(7)
-            g_ns[c] = nm
+                g_ns[c] = nm.clone()
             let ac = 0
             while pk() != 16:
                 if pk() == 0:
@@ -514,7 +518,7 @@ fn p_pri() -> i64:
     return nd(0)
 // --- Codegen ---
 fn asc(s: str) -> i64:
-    let i = 0
+    let mut i = 0
     while i < g_cc:
         if str_eq(g_csv[i], s):
             return i
@@ -551,7 +555,7 @@ fn pi32(o: i64, v: i64):
     g_bc[o + 2] = (u / 65536) % 256
     g_bc[o + 3] = (u / 16777216) % 256
 fn fl(nm: str) -> i64:
-    let i = 0
+    let mut i = 0
     while i < g_lc:
         if str_eq(g_ln[i], nm):
             return i
@@ -561,7 +565,7 @@ fn fl(nm: str) -> i64:
     g_lc = g_lc + 1
     return x
 fn ff(nm: str) -> i64:
-    let i = 0
+    let mut i = 0
     while i < g_fc:
         if str_eq(g_fn[i], nm):
             return i
@@ -569,7 +573,7 @@ fn ff(nm: str) -> i64:
     return -1
 fn c_fn(fnode: i64):
     g_lc = 0
-    let p = 0
+    let mut p = 0
     while p < g_ni[fnode]:
         g_ln[g_lc] = g_fp[p]
         g_lc = g_lc + 1

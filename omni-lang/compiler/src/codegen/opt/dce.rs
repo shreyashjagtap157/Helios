@@ -74,10 +74,11 @@ impl OptimizationPass for DeadCodeElimination {
                     IrTerminator::Return(Some(crate::ir::IrValue::Var(v))) => {
                         used_vars.insert(v.clone());
                     }
-                    IrTerminator::CondBranch { cond, .. } => {
-                        if let crate::ir::IrValue::Var(v) = cond {
-                            used_vars.insert(v.clone());
-                        }
+                    IrTerminator::CondBranch {
+                        cond: crate::ir::IrValue::Var(v),
+                        ..
+                    } => {
+                        used_vars.insert(v.clone());
                     }
                     _ => {}
                 }

@@ -149,6 +149,7 @@ fn fold_statement(stmt: Statement, env: &mut ConstEnv) -> Statement {
                 .into_iter()
                 .map(|arm| MatchArm {
                     pattern: arm.pattern,
+                    guard: arm.guard,
                     body: match arm.body {
                         MatchBody::Expr(e) => MatchBody::Expr(fold_expr_with_env(&e, env)),
                         MatchBody::Block(mut b) => {
@@ -527,6 +528,7 @@ mod tests {
                 attributes: vec![],
                 params: vec![],
                 return_type: None,
+                effect_row: None,
                 body: Block {
                     statements: vec![
                         Statement::Let {
@@ -572,6 +574,7 @@ mod tests {
                 attributes: vec![],
                 params: vec![],
                 return_type: None,
+                effect_row: None,
                 body: Block {
                     statements: vec![
                         Statement::Let {
@@ -616,6 +619,7 @@ mod tests {
                 attributes: vec![],
                 params: vec![],
                 return_type: None,
+                effect_row: None,
                 body: Block {
                     statements: vec![
                         Statement::Let {

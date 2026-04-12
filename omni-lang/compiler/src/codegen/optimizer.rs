@@ -1,6 +1,7 @@
-#![allow(dead_code)]
 //! Advanced IR Optimization Passes for Code Generation
 //!
+#![allow(dead_code)]
+
 //! Implements real transformation passes:
 //! - Constant folding (evaluates constant expressions at compile time)
 //! - Dead code elimination (removes unused variables and unreachable code)

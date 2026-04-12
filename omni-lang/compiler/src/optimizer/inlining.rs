@@ -433,6 +433,7 @@ mod tests {
                 })
                 .collect(),
             return_type: None,
+            effect_row: None,
             body: Block { statements: stmts },
         })
     }

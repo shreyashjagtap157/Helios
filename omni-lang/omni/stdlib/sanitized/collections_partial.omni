@@ -21,7 +21,7 @@ impl Vec:
         return
 
     fn pop(&mut self) -> Option:
-        return VariantNone
+        return None
 
     fn capacity(&self) -> usize:
         return self.len
@@ -40,7 +40,7 @@ impl HashMap:
         return
 
     fn get(&self, _k: &str) -> Option:
-        return VariantNone
+        return None
 
     fn contains_key(&self, _k: &str) -> bool:
         return false

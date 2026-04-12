@@ -1,5 +1,7 @@
 //! GPU Kernel Fusion Pass
 //!
+#![allow(dead_code)]
+
 //! Merges consecutive element-wise operations into single GPU kernels,
 //! reducing memory bandwidth by keeping intermediate results in registers/shared memory.
 

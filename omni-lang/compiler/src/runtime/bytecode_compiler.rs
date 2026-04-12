@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! AST → OVM Bytecode Compiler
 //!
 //! Walks the Omni AST produced by the parser and emits a flat sequence of
@@ -575,6 +574,12 @@ impl BytecodeCompiler {
             Expression::Literal(lit) => {
                 self.compile_literal(lit);
             }
+            // -- f-strings (treated as string for now) --
+            Expression::FString(_fs) => {
+                // For now, concatenate parts into a single string literal
+                let s = "[f-string]".to_string();
+                let _ = self.compile_expression(&Expression::Literal(Literal::String(s)));
+            }
 
             // -- identifiers --
             Expression::Identifier(name) => {
@@ -717,6 +722,7 @@ impl BytecodeCompiler {
                     attributes: Vec::new(),
                     params: params.clone(),
                     return_type: None,
+                    effect_row: None, // Lambdas are pure by default
                     body: Block {
                         statements: vec![Statement::Return(Some(*body.clone()))],
                     },
@@ -969,6 +975,7 @@ mod tests {
                 attributes: vec![],
                 params: vec![],
                 return_type: None,
+                effect_row: None,
                 body: Block { statements: stmts },
             })],
         }
@@ -1199,6 +1206,7 @@ mod tests {
                         ty: Type::I64,
                     }],
                     return_type: Some(Type::I64),
+                    effect_row: None,
                     body: Block {
                         statements: vec![Statement::Return(Some(Expression::Binary(
                             Box::new(Expression::Identifier("n".into())),
@@ -1213,6 +1221,7 @@ mod tests {
                     attributes: vec![],
                     params: vec![],
                     return_type: None,
+                    effect_row: None,
                     body: Block {
                         statements: vec![Statement::Expression(Expression::Call(
                             Box::new(Expression::Identifier("helper".into())),

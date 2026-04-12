@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(dead_code)]
 //! Omni Intermediate Representation
 //!
+#![allow(dead_code)]
+
 //! A low-level SSA-based IR for optimization and codegen.
 //! Supports match lowering, closures, async/await, generics, and trait dispatch.
 

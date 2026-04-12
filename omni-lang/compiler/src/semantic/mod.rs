@@ -12,17 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(dead_code)]
 //! Omni Semantic Analyzer - Core module
 //! Implements type checking, borrow checking, lifetime inference, and trait bound verification.
 //!
 //! This module provides complete semantic analysis including:
 //! - Type inference using Hindley-Milner algorithm
 //! - Borrow checker with full ownership tracking
+#![allow(dead_code)]
 //! - Lifetime inference and validation
 //! - Trait bound verification and resolution
 //! - Generic monomorphization
 //! - Const evaluation for compile-time computation
+//! - Effect system analysis (v2.0)
 //!
 //! ## Error Handling Model (O-024)
 //!
@@ -31,19 +32,26 @@
 //! for the full classification rules. Hard errors abort compilation; soft errors
 //! are demoted to warnings.
 
+pub mod advanced_types; // Phase 7: advanced type system
 pub mod autograd;
 pub mod borrow_check;
 pub mod comprehensive_tests;
 pub mod const_generics;
 pub mod constraints;
 pub mod edge_cases;
+pub mod effects; // Effect system (v2.0)
 pub mod error_recovery;
+pub mod exhaustive_phase_tests; // Exhaustive tests for all phases
 pub mod inference;
 pub mod integration_example;
 pub mod lifetimes;
 pub mod monomorphization;
 pub mod optimization;
 pub mod performance;
+pub mod phase8_effects; // Phase 8: Full effect system
+pub mod concurrency; // Phase 9: Concurrency & tensor acceleration
+pub mod phase_comprehensive_tests; // Phase comprehensive tests
+pub mod polonius; // Polonius-based borrow checker (v2.0)
 pub mod properties; // Properties & sealed classes support
 pub mod traits;
 pub mod type_inference; // Constraint-based Hindley-Milner type inference engine
@@ -135,8 +143,7 @@ fn types_equal(a: &Type, b: &Type) -> bool {
         | (Type::Str, Type::Str)
         | (Type::SelfOwned, Type::SelfOwned) => true,
 
-        // Type::Any matches any type (O-010)
-        (Type::Any, _) | (_, Type::Any) => true,
+        // Removed Type::Any; expressions must now unify cleanly
 
         // Self references
         (Type::SelfRef { mutable: m1 }, Type::SelfRef { mutable: m2 }) => m1 == m2,
@@ -367,6 +374,7 @@ pub struct TypedFunction {
     pub name: String,
     pub params: Vec<(String, Type)>,
     pub return_type: Type,
+    pub effect_row: Option<effects::EffectRow>, // v2.0 effect annotations
     pub body: Vec<TypedStatement>,
     pub is_async: bool,
 }
@@ -595,52 +603,52 @@ impl Analyzer {
     /// Register all builtin functions so they are available without imports
     fn register_builtins(&mut self) {
         let builtins: Vec<(&str, Type, bool)> = vec![
-            // I/O builtins — accept Any type (O-014)
-            ("println", Type::Function(vec![Type::Any], None), false),
-            ("print", Type::Function(vec![Type::Any], None), false),
-            ("eprintln", Type::Function(vec![Type::Any], None), false),
-            ("eprint", Type::Function(vec![Type::Any], None), false),
+            // I/O builtins — accept Infer type, requiring downstream user unificaton or explicit String toString() calls.
+            ("println", Type::Function(vec![Type::Infer], None), false),
+            ("print", Type::Function(vec![Type::Infer], None), false),
+            ("eprintln", Type::Function(vec![Type::Infer], None), false),
+            ("eprint", Type::Function(vec![Type::Infer], None), false),
             // String formatting
             (
                 "format",
-                Type::Function(vec![Type::Any], Some(Box::new(Type::Str))),
+                Type::Function(vec![Type::Infer], Some(Box::new(Type::Str))),
                 false,
             ),
             // Type introspection — use type_of to match VM (O-016)
             (
                 "type_of",
-                Type::Function(vec![Type::Any], Some(Box::new(Type::Str))),
+                Type::Function(vec![Type::Infer], Some(Box::new(Type::Str))),
                 false,
             ),
             (
                 "sizeof",
-                Type::Function(vec![Type::Any], Some(Box::new(Type::I64))),
+                Type::Function(vec![Type::Infer], Some(Box::new(Type::I64))),
                 false,
             ),
             // Missing builtins (O-002)
             (
                 "len",
-                Type::Function(vec![Type::Any], Some(Box::new(Type::I64))),
+                Type::Function(vec![Type::Infer], Some(Box::new(Type::I64))),
                 false,
             ),
             (
                 "int",
-                Type::Function(vec![Type::Any], Some(Box::new(Type::I64))),
+                Type::Function(vec![Type::Infer], Some(Box::new(Type::I64))),
                 false,
             ),
             (
                 "float",
-                Type::Function(vec![Type::Any], Some(Box::new(Type::F64))),
+                Type::Function(vec![Type::Infer], Some(Box::new(Type::F64))),
                 false,
             ),
             (
                 "sqrt",
-                Type::Function(vec![Type::Any], Some(Box::new(Type::F64))),
+                Type::Function(vec![Type::Infer], Some(Box::new(Type::F64))),
                 false,
             ),
             (
                 "abs",
-                Type::Function(vec![Type::Any], Some(Box::new(Type::I64))),
+                Type::Function(vec![Type::Infer], Some(Box::new(Type::I64))),
                 false,
             ),
             // Process/runtime
@@ -653,17 +661,17 @@ impl Analyzer {
                 false,
             ),
             ("exit", Type::Function(vec![Type::I32], None), false),
-            // Assertions — accept Any type, VM checks truthiness (O-033)
-            ("assert", Type::Function(vec![Type::Any], None), false),
+            // Assertions
+            ("assert", Type::Function(vec![Type::Bool], None), false),
             (
                 "assert_eq",
-                Type::Function(vec![Type::Any, Type::Any], None),
+                Type::Function(vec![Type::Infer, Type::Infer], None),
                 false,
             ),
             // Debug
             (
                 "dbg",
-                Type::Function(vec![Type::Any], Some(Box::new(Type::Any))),
+                Type::Function(vec![Type::Infer], Some(Box::new(Type::Infer))),
                 false,
             ),
             // Bootstrap string/file helpers used by compiler_minimal.omni
@@ -689,7 +697,10 @@ impl Analyzer {
             ),
             (
                 "str_slice",
-                Type::Function(vec![Type::Str, Type::I64, Type::I64], Some(Box::new(Type::Str))),
+                Type::Function(
+                    vec![Type::Str, Type::I64, Type::I64],
+                    Some(Box::new(Type::Str)),
+                ),
                 false,
             ),
             (
@@ -1435,6 +1446,18 @@ impl Analyzer {
                 Literal::String(s) => ConstValue::String(s.clone()),
                 Literal::Null => ConstValue::Null,
             }),
+            Expression::FString(fs) => {
+                // For now, concatenate f-string parts into a single string
+                let s: String = fs
+                    .parts
+                    .iter()
+                    .map(|part| match part {
+                        FStringPart::Literal(lit) => lit.clone(),
+                        FStringPart::Interpolated(_) => "[expr]".to_string(),
+                    })
+                    .collect();
+                Ok(ConstValue::String(s))
+            }
             Expression::Identifier(name) => {
                 if let Some(val) = self.const_values.get(name) {
                     Ok(val.clone())
@@ -1894,6 +1917,7 @@ impl Analyzer {
                 name: f.name,
                 params,
                 return_type,
+                effect_row: None, // Extern functions have no explicit effects
                 body: Vec::new(),
                 is_async: f.is_async,
             });
@@ -1949,6 +1973,9 @@ impl Analyzer {
         let return_type = f.return_type.clone().unwrap_or(Type::Named("()".into()));
         self.current_function_return = Some(return_type.clone());
 
+        // V2.0 Effect System: Analyze function effects
+        let effect_row = self.analyze_effect_row(f.effect_row.as_ref());
+
         // Analyze body statements with lifetime tracking
         let body = self.analyze_block(&f.body)?;
 
@@ -1963,9 +1990,22 @@ impl Analyzer {
             name: f.name,
             params,
             return_type,
+            effect_row,
             body,
             is_async: f.is_async,
         }))
+    }
+
+    /// Analyze effect row from parsed AST
+    fn analyze_effect_row(&self, effect_row: Option<&EffectRow>) -> Option<effects::EffectRow> {
+        effect_row.map(|row| {
+            let effects: Vec<effects::EffectSymbol> = row
+                .effects
+                .iter()
+                .map(|e| effects::EffectSymbol::new(&e.name))
+                .collect();
+            effects::EffectRow::from_effects(effects)
+        })
     }
 
     /// Check that all code paths return the expected type
@@ -2275,6 +2315,15 @@ impl Analyzer {
                 };
                 Ok(TypedExpr {
                     kind: TypedExprKind::Literal(lit.clone()),
+                    ty,
+                })
+            }
+            Expression::FString(_) => {
+                // F-strings are treated as strings
+                let ty = Type::Str;
+                // For now, treat as a string literal
+                Ok(TypedExpr {
+                    kind: TypedExprKind::Literal(Literal::String("[f-string]".to_string())),
                     ty,
                 })
             }

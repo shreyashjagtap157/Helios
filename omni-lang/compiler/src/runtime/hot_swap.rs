@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Omni Hot Reload Runtime
 //!
 //! Implements function pointer indirection and atomic patching for live code updates.

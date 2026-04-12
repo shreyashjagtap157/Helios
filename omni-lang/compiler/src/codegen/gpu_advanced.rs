@@ -1,5 +1,7 @@
 //! Advanced GPU Optimizations
 //!
+#![allow(dead_code)]
+
 //! Warp divergence analysis, shared memory banking, Tensor Cores, CUDA Graphs.
 
 use crate::ir::{IrFunction, IrInstruction, IrModule, IrType};

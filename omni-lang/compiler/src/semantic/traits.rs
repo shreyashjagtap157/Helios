@@ -8,6 +8,7 @@
 //! - Trait objects (dyn Trait)
 //! - Higher-ranked trait bounds (for<'a>)
 //! - Generic associated types (GATs)
+#![allow(dead_code)]
 
 use crate::parser::ast::*;
 use std::collections::HashMap;

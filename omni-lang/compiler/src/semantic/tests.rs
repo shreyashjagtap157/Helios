@@ -33,7 +33,7 @@ mod tests {
     #[test]
     fn test_define_and_lookup_symbol() {
         let mut analyzer = Analyzer::new();
-        analyzer.define_symbol("test_var".to_string(), Type::I64, false);
+        let _ = analyzer.define_symbol("test_var".to_string(), Type::I64, false);
         let result = analyzer.lookup_symbol("test_var");
         assert!(result.is_ok());
     }
@@ -70,6 +70,7 @@ mod tests {
             attributes: Vec::new(),
             params: Vec::new(),
             return_type: None,
+            effect_row: None,
             body: Block {
                 statements: Vec::new(),
             },
@@ -194,6 +195,7 @@ mod tests {
                 ty: Type::Named("T".to_string()),
             }],
             return_type: Some(Type::Named("T".to_string())),
+            effect_row: None,
             body: Block {
                 statements: vec![Statement::Return(Some(Expression::Identifier(
                     "x".to_string(),

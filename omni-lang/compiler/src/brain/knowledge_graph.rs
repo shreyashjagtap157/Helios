@@ -73,9 +73,7 @@ impl KnowledgeGraph {
 
     /// Add a node to the graph.
     pub fn add_node(&mut self, name: &str) {
-        self.adjacency
-            .entry(name.to_string())
-            .or_insert_with(Vec::new);
+        self.adjacency.entry(name.to_string()).or_default();
     }
 
     /// Add a weighted directed edge from `from` to `to`.
@@ -152,10 +150,8 @@ impl KnowledgeGraph {
         let mut rec_stack = HashSet::new();
 
         for node in self.adjacency.keys() {
-            if !visited.contains(node) {
-                if self.dfs_cycle(node, &mut visited, &mut rec_stack) {
-                    return true;
-                }
+            if !visited.contains(node) && self.dfs_cycle(node, &mut visited, &mut rec_stack) {
+                return true;
             }
         }
         false

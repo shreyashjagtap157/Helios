@@ -68,8 +68,8 @@ impl AdaptiveReasoner {
                     let category_forms: Vec<String> = {
                         let mut forms = vec![category.to_string()];
                         // Simple plural → singular: "humans" → "human"
-                        if category.ends_with('s') {
-                            forms.push(category[..category.len() - 1].to_string());
+                        if let Some(stripped) = category.strip_suffix('s') {
+                            forms.push(stripped.to_string());
                         }
                         // Also try adding 's' for reverse
                         forms.push(format!("{}s", category));
@@ -77,11 +77,11 @@ impl AdaptiveReasoner {
                     };
 
                     // Find matching instance premise
-                    for j in 0..premises.len() {
+                    for (j, premise) in premises.iter().enumerate() {
                         if i == j {
                             continue;
                         }
-                        let q = premises[j].to_lowercase();
+                        let q = premise.to_lowercase();
                         for cat_form in &category_forms {
                             let patterns = [
                                 format!(" is a {}", cat_form),
@@ -112,11 +112,11 @@ impl AdaptiveReasoner {
                         .trim()
                         .to_string();
 
-                    for j in 0..premises.len() {
+                    for (j, premise) in premises.iter().enumerate() {
                         if i == j {
                             continue;
                         }
-                        if premises[j].to_lowercase().trim() == antecedent {
+                        if premise.to_lowercase().trim() == antecedent {
                             return DeductionResult {
                                 conclusion: consequent,
                                 confidence: 0.90,
