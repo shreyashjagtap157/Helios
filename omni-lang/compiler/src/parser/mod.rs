@@ -2471,6 +2471,238 @@ impl Parser {
         }
     }
 
+    fn parse_interpolated_string(
+        lexeme: &str,
+        line: usize,
+        column: usize,
+    ) -> Result<FString, ParseError> {
+        if lexeme.len() < 3 {
+            return Err(ParseError::InvalidSyntax {
+                line,
+                column,
+                message: "unterminated interpolated string literal".to_string(),
+                code: ParseErrorCode::InvalidSyntax,
+                hint: Some("close the string with \"".to_string()),
+            });
+        }
+
+        let inner = &lexeme[2..lexeme.len() - 1];
+        let chars: Vec<char> = inner.chars().collect();
+        let mut parts = Vec::new();
+        let mut literal = String::new();
+        let mut index = 0usize;
+        let mut escaped = false;
+
+        while index < chars.len() {
+            let ch = chars[index];
+
+            if escaped {
+                literal.push(ch);
+                escaped = false;
+                index += 1;
+                continue;
+            }
+
+            match ch {
+                '\\' => {
+                    literal.push(ch);
+                    escaped = true;
+                    index += 1;
+                }
+                '{' => {
+                    if chars.get(index + 1) == Some(&'{') {
+                        literal.push('{');
+                        index += 2;
+                        continue;
+                    }
+
+                    if !literal.is_empty() {
+                        parts.push(FStringPart::Literal(std::mem::take(&mut literal)));
+                    }
+
+                    let (segment, next_index) = Self::extract_interpolated_expression(
+                        &chars,
+                        index + 1,
+                        line,
+                        column,
+                    )?;
+                    let expression_text = Self::strip_interpolation_format_spec(&segment).trim();
+                    if expression_text.is_empty() {
+                        return Err(ParseError::InvalidSyntax {
+                            line,
+                            column,
+                            message: "empty interpolation expression in string literal".to_string(),
+                            code: ParseErrorCode::InvalidSyntax,
+                            hint: Some("write an expression inside {...}".to_string()),
+                        });
+                    }
+
+                    let expression = Self::parse_interpolated_expression(
+                        expression_text,
+                        line,
+                        column,
+                    )?;
+                    parts.push(FStringPart::Interpolated(expression));
+                    index = next_index;
+                }
+                '}' => {
+                    if chars.get(index + 1) == Some(&'}') {
+                        literal.push('}');
+                        index += 2;
+                    } else {
+                        return Err(ParseError::InvalidSyntax {
+                            line,
+                            column,
+                            message: "unmatched '}' in string literal".to_string(),
+                            code: ParseErrorCode::InvalidSyntax,
+                            hint: Some("escape a literal brace as '}}'".to_string()),
+                        });
+                    }
+                }
+                _ => {
+                    literal.push(ch);
+                    index += 1;
+                }
+            }
+        }
+
+        if escaped {
+            literal.push('\\');
+        }
+
+        if !literal.is_empty() {
+            parts.push(FStringPart::Literal(literal));
+        }
+
+        Ok(FString { parts })
+    }
+
+    fn extract_interpolated_expression(
+        chars: &[char],
+        start_index: usize,
+        line: usize,
+        column: usize,
+    ) -> Result<(String, usize), ParseError> {
+        let mut depth = 1usize;
+        let mut index = start_index;
+        let mut in_string: Option<char> = None;
+        let mut escaped = false;
+
+        while index < chars.len() {
+            let ch = chars[index];
+
+            if let Some(quote) = in_string {
+                if escaped {
+                    escaped = false;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if ch == quote {
+                    in_string = None;
+                }
+            } else {
+                match ch {
+                    '"' | '\'' => {
+                        in_string = Some(ch);
+                    }
+                    '{' => {
+                        depth += 1;
+                    }
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            let segment: String = chars[start_index..index].iter().collect();
+                            return Ok((segment, index + 1));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            index += 1;
+        }
+
+        Err(ParseError::InvalidSyntax {
+            line,
+            column,
+            message: "unterminated interpolation in string literal".to_string(),
+            code: ParseErrorCode::InvalidSyntax,
+            hint: Some("close the interpolation with '}'".to_string()),
+        })
+    }
+
+    fn strip_interpolation_format_spec(segment: &str) -> &str {
+        let mut paren_depth = 0usize;
+        let mut bracket_depth = 0usize;
+        let mut brace_depth = 0usize;
+        let mut in_string: Option<char> = None;
+        let mut escaped = false;
+
+        for (index, ch) in segment.char_indices() {
+            if let Some(quote) = in_string {
+                if escaped {
+                    escaped = false;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if ch == quote {
+                    in_string = None;
+                }
+                continue;
+            }
+
+            match ch {
+                '"' | '\'' => in_string = Some(ch),
+                '(' => paren_depth += 1,
+                ')' if paren_depth > 0 => paren_depth -= 1,
+                '[' => bracket_depth += 1,
+                ']' if bracket_depth > 0 => bracket_depth -= 1,
+                '{' => brace_depth += 1,
+                '}' if brace_depth > 0 => brace_depth -= 1,
+                ':' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                    if (index > 0 && segment.as_bytes()[index - 1] == b':')
+                        || segment[index..].starts_with("::")
+                    {
+                        continue;
+                    }
+
+                    return segment[..index].trim_end();
+                }
+                _ => {}
+            }
+        }
+
+        segment.trim()
+    }
+
+    fn parse_interpolated_expression(
+        source: &str,
+        line: usize,
+        column: usize,
+    ) -> Result<Expression, ParseError> {
+        let tokens = crate::lexer::tokenize(source).map_err(|error| ParseError::InvalidSyntax {
+            line,
+            column,
+            message: format!("invalid interpolated expression: {}", error),
+            code: ParseErrorCode::InvalidSyntax,
+            hint: Some("check the expression inside {...}".to_string()),
+        })?;
+
+        let mut parser = Parser::new(tokens);
+        let expression = parser.parse_expression()?;
+
+        if let Some(token) = parser.peek() {
+            return Err(ParseError::UnexpectedToken {
+                line: token.line,
+                column: token.column,
+                expected: "end of interpolated expression".to_string(),
+                got: format!("{:?}", token.kind),
+                code: ParseErrorCode::UnexpectedToken,
+                hint: Some("remove extra tokens after the interpolation expression".to_string()),
+            });
+        }
+
+        Ok(expression)
+    }
+
     fn parse_postfix(&mut self) -> Result<Expression, ParseError> {
         let mut expr = self.parse_primary()?;
         let mut continuation_indent_depth = 0usize;
@@ -2699,14 +2931,9 @@ impl Parser {
                 let unquoted = val[1..val.len() - 1].to_string();
                 Ok(Expression::Literal(Literal::String(unquoted)))
             }
-            Some(TokenKind::FStringLiteral) => {
-                let val = self.advance().unwrap().lexeme.clone();
-                // Parse f-string: f"..."
-                // For now, treat as regular string (interpolation would require more parsing)
-                let unquoted = val[2..val.len() - 1].to_string();
-                let fstring = FString {
-                    parts: vec![FStringPart::Literal(unquoted)],
-                };
+            Some(TokenKind::FStringLiteral) | Some(TokenKind::DStringLiteral) => {
+                let token = self.advance().unwrap().clone();
+                let fstring = Self::parse_interpolated_string(&token.lexeme, token.line, token.column)?;
                 Ok(Expression::FString(fstring))
             }
             Some(TokenKind::CharLiteral) => {
@@ -2884,6 +3111,238 @@ impl Parser {
                     None
                 };
 
+
+            fn parse_interpolated_string(
+                lexeme: &str,
+                line: usize,
+                column: usize,
+            ) -> Result<FString, ParseError> {
+                if lexeme.len() < 3 {
+                    return Err(ParseError::InvalidSyntax {
+                        line,
+                        column,
+                        message: "unterminated interpolated string literal".to_string(),
+                        code: ParseErrorCode::InvalidSyntax,
+                        hint: Some("close the string with \"".to_string()),
+                    });
+                }
+
+                let inner = &lexeme[2..lexeme.len() - 1];
+                let chars: Vec<char> = inner.chars().collect();
+                let mut parts = Vec::new();
+                let mut literal = String::new();
+                let mut index = 0usize;
+                let mut escaped = false;
+
+                while index < chars.len() {
+                    let ch = chars[index];
+
+                    if escaped {
+                        literal.push(ch);
+                        escaped = false;
+                        index += 1;
+                        continue;
+                    }
+
+                    match ch {
+                        '\\' => {
+                            literal.push(ch);
+                            escaped = true;
+                            index += 1;
+                        }
+                        '{' => {
+                            if chars.get(index + 1) == Some(&'{') {
+                                literal.push('{');
+                                index += 2;
+                                continue;
+                            }
+
+                            if !literal.is_empty() {
+                                parts.push(FStringPart::Literal(std::mem::take(&mut literal)));
+                            }
+
+                            let (segment, next_index) = extract_interpolated_expression(
+                                &chars,
+                                index + 1,
+                                line,
+                                column,
+                            )?;
+                            let expression_text = strip_interpolation_format_spec(&segment).trim();
+                            if expression_text.is_empty() {
+                                return Err(ParseError::InvalidSyntax {
+                                    line,
+                                    column,
+                                    message: "empty interpolation expression in string literal".to_string(),
+                                    code: ParseErrorCode::InvalidSyntax,
+                                    hint: Some("write an expression inside {...}".to_string()),
+                                });
+                            }
+
+                            let expression = parse_interpolated_expression(
+                                expression_text,
+                                line,
+                                column,
+                            )?;
+                            parts.push(FStringPart::Interpolated(expression));
+                            index = next_index;
+                        }
+                        '}' => {
+                            if chars.get(index + 1) == Some(&'}') {
+                                literal.push('}');
+                                index += 2;
+                            } else {
+                                return Err(ParseError::InvalidSyntax {
+                                    line,
+                                    column,
+                                    message: "unmatched '}' in string literal".to_string(),
+                                    code: ParseErrorCode::InvalidSyntax,
+                                    hint: Some("escape a literal brace as '}}'".to_string()),
+                                });
+                            }
+                        }
+                        _ => {
+                            literal.push(ch);
+                            index += 1;
+                        }
+                    }
+                }
+
+                if escaped {
+                    literal.push('\\');
+                }
+
+                if !literal.is_empty() {
+                    parts.push(FStringPart::Literal(literal));
+                }
+
+                Ok(FString { parts })
+            }
+
+            fn extract_interpolated_expression(
+                chars: &[char],
+                start_index: usize,
+                line: usize,
+                column: usize,
+            ) -> Result<(String, usize), ParseError> {
+                let mut depth = 1usize;
+                let mut index = start_index;
+                let mut in_string: Option<char> = None;
+                let mut escaped = false;
+
+                while index < chars.len() {
+                    let ch = chars[index];
+
+                    if let Some(quote) = in_string {
+                        if escaped {
+                            escaped = false;
+                        } else if ch == '\\' {
+                            escaped = true;
+                        } else if ch == quote {
+                            in_string = None;
+                        }
+                    } else {
+                        match ch {
+                            '"' | '\'' => {
+                                in_string = Some(ch);
+                            }
+                            '{' => {
+                                depth += 1;
+                            }
+                            '}' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    let segment: String = chars[start_index..index].iter().collect();
+                                    return Ok((segment, index + 1));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    index += 1;
+                }
+
+                Err(ParseError::InvalidSyntax {
+                    line,
+                    column,
+                    message: "unterminated interpolation in string literal".to_string(),
+                    code: ParseErrorCode::InvalidSyntax,
+                    hint: Some("close the interpolation with '}'".to_string()),
+                })
+            }
+
+            fn strip_interpolation_format_spec(segment: &str) -> &str {
+                let mut paren_depth = 0usize;
+                let mut bracket_depth = 0usize;
+                let mut brace_depth = 0usize;
+                let mut in_string: Option<char> = None;
+                let mut escaped = false;
+
+                for (index, ch) in segment.char_indices() {
+                    if let Some(quote) = in_string {
+                        if escaped {
+                            escaped = false;
+                        } else if ch == '\\' {
+                            escaped = true;
+                        } else if ch == quote {
+                            in_string = None;
+                        }
+                        continue;
+                    }
+
+                    match ch {
+                        '"' | '\'' => in_string = Some(ch),
+                        '(' => paren_depth += 1,
+                        ')' if paren_depth > 0 => paren_depth -= 1,
+                        '[' => bracket_depth += 1,
+                        ']' if bracket_depth > 0 => bracket_depth -= 1,
+                        '{' => brace_depth += 1,
+                        '}' if brace_depth > 0 => brace_depth -= 1,
+                        ':' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                            if (index > 0 && segment.as_bytes()[index - 1] == b':')
+                                || segment[index..].starts_with("::")
+                            {
+                                continue;
+                            }
+
+                            return segment[..index].trim_end();
+                        }
+                        _ => {}
+                    }
+                }
+
+                segment.trim()
+            }
+
+            fn parse_interpolated_expression(
+                source: &str,
+                line: usize,
+                column: usize,
+            ) -> Result<Expression, ParseError> {
+                let tokens = crate::lexer::tokenize(source).map_err(|error| ParseError::InvalidSyntax {
+                    line,
+                    column,
+                    message: format!("invalid interpolated expression: {}", error),
+                    code: ParseErrorCode::InvalidSyntax,
+                    hint: Some("check the expression inside {...}".to_string()),
+                })?;
+
+                let mut parser = Parser::new(tokens);
+                let expression = parser.parse_expression()?;
+
+                if let Some(token) = parser.peek() {
+                    return Err(ParseError::UnexpectedToken {
+                        line: token.line,
+                        column: token.column,
+                        expected: "end of interpolated expression".to_string(),
+                        got: format!("{:?}", token.kind),
+                        code: ParseErrorCode::UnexpectedToken,
+                        hint: Some("remove extra tokens after the interpolation expression".to_string()),
+                    });
+                }
+
+                Ok(expression)
+            }
                 // Parse body after colon
                 self.expect(&TokenKind::Colon)?;
                 let body = self.parse_expression()?;
@@ -3890,6 +4349,98 @@ impl Display for String:
 "#;
         let (_module, errors) = parse_src(source);
         assert!(errors.is_empty(), "impl block should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn interpolated_fstring_parses_expression_parts() {
+        let source = r#"module test
+
+fn greet(name: str, count: i32) -> str:
+    let message = f"Hello {name}, next {count + 1}!"
+    return message
+"#;
+
+        let (module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "f-string should parse: {:?}", errors);
+
+        let fstring = module
+            .items
+            .into_iter()
+            .find_map(|item| match item {
+                Item::Function(func) => func.body.statements.into_iter().find_map(|stmt| {
+                    match stmt {
+                        Statement::Let {
+                            value: Some(Expression::FString(fstring)),
+                            ..
+                        } => Some(fstring),
+                        _ => None,
+                    }
+                }),
+                _ => None,
+            })
+            .expect("expected an interpolated f-string expression");
+
+        assert_eq!(fstring.parts.len(), 5);
+        assert!(matches!(
+            &fstring.parts[0],
+            FStringPart::Literal(text) if text == "Hello "
+        ));
+        assert!(matches!(
+            &fstring.parts[1],
+            FStringPart::Interpolated(Expression::Identifier(name)) if name == "name"
+        ));
+        assert!(matches!(
+            &fstring.parts[2],
+            FStringPart::Literal(text) if text == ", next "
+        ));
+        assert!(matches!(
+            &fstring.parts[3],
+            FStringPart::Interpolated(Expression::Binary(_, BinaryOp::Add, _))
+        ));
+        assert!(matches!(
+            &fstring.parts[4],
+            FStringPart::Literal(text) if text == "!"
+        ));
+    }
+
+    #[test]
+    fn debug_string_literal_parses_format_hint() {
+        let source = r#"module test
+
+fn debug(value: i32) -> str:
+    let message = d"Value: {value:?}"
+    return message
+"#;
+
+        let (module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "d-string should parse: {:?}", errors);
+
+        let fstring = module
+            .items
+            .into_iter()
+            .find_map(|item| match item {
+                Item::Function(func) => func.body.statements.into_iter().find_map(|stmt| {
+                    match stmt {
+                        Statement::Let {
+                            value: Some(Expression::FString(fstring)),
+                            ..
+                        } => Some(fstring),
+                        _ => None,
+                    }
+                }),
+                _ => None,
+            })
+            .expect("expected a debug string expression");
+
+        assert_eq!(fstring.parts.len(), 2);
+        assert!(matches!(
+            &fstring.parts[0],
+            FStringPart::Literal(text) if text == "Value: "
+        ));
+        assert!(matches!(
+            &fstring.parts[1],
+            FStringPart::Interpolated(Expression::Identifier(name)) if name == "value"
+        ));
     }
 
     #[test]

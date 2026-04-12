@@ -202,6 +202,8 @@ pub enum TokenKind {
     StringLiteral,
     #[regex(r#"f"([^"\\]|\\.)*""#)]
     FStringLiteral,
+    #[regex(r#"d"([^"\\]|\\.)*""#)]
+    DStringLiteral,
     #[regex(r"'([^'\\]|\\.)'")]
     CharLiteral,
 
@@ -751,6 +753,20 @@ mod tests {
         let source = r#""hello world""#;
         let tokens = tokenize(source).unwrap();
         assert_eq!(tokens[0].kind, TokenKind::StringLiteral);
+    }
+
+    #[test]
+    fn test_fstring_literal() {
+        let source = r#"f"hello {name}""#;
+        let tokens = tokenize(source).unwrap();
+        assert_eq!(tokens[0].kind, TokenKind::FStringLiteral);
+    }
+
+    #[test]
+    fn test_dstring_literal() {
+        let source = r#"d"hello {name:?}""#;
+        let tokens = tokenize(source).unwrap();
+        assert_eq!(tokens[0].kind, TokenKind::DStringLiteral);
     }
 
     #[test]
