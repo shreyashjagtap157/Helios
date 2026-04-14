@@ -650,6 +650,12 @@ pub struct IrGenerator {
     current_func_is_async: bool,
 }
 
+impl Default for IrGenerator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IrGenerator {
     pub fn new() -> Self {
         info!("Initializing IR generator with advanced features");
@@ -797,7 +803,7 @@ impl IrGenerator {
         }
 
         // Add generated closures
-        functions.extend(self.closures.drain(..));
+        functions.append(&mut self.closures);
 
         IrModule {
             name: "main".to_string(),
@@ -938,7 +944,7 @@ impl IrGenerator {
                     }
                     _ => {
                         // Fallback for other lvalue expressions
-                        let val = self.gen_expr(&target, instructions);
+                        let val = self.gen_expr(target, instructions);
                         match val {
                             IrValue::Var(v) => v,
                             _ => "temp".to_string(),
@@ -1591,6 +1597,18 @@ impl IrGenerator {
                 s // Return start value as fallback
             }
             TypedExprKind::Lambda { body, .. } => self.gen_expr(body, instructions),
+            TypedExprKind::LetChain { name, value, body } => {
+                let value_val = self.gen_expr(value, instructions);
+                instructions.push(IrInstruction::Alloca {
+                    dest: name.clone(),
+                    ty: self.convert_type(&value.ty),
+                });
+                instructions.push(IrInstruction::Store {
+                    ptr: name.clone(),
+                    value: value_val,
+                });
+                self.gen_expr(body, instructions)
+            }
             TypedExprKind::Tuple(elems) => {
                 let dest = self.fresh_temp();
                 let elem_vals: Vec<_> = elems

@@ -491,7 +491,7 @@ fn compile_stmt(codegen: &mut OvmCodegen, stmt: &TypedStatement) -> Result<(), S
             codegen.emit_u16(match_val);
 
             let mut arm_exit_jumps = Vec::new();
-            for (_i, (pattern, body)) in arms.iter().enumerate() {
+            for (pattern, body) in arms.iter() {
                 // Load match value for pattern test
                 codegen.emit(OvmOpcode::LoadLoc);
                 codegen.emit_u16(match_val);
@@ -675,6 +675,24 @@ fn compile_expr(codegen: &mut OvmCodegen, expr: &TypedExpr) -> Result<(), String
         TypedExprKind::Lambda { body, .. } => {
             // Compile lambda body inline (single-expression closure)
             compile_expr(codegen, body)?;
+        }
+        TypedExprKind::LetChain { name, value, body } => {
+            compile_expr(codegen, value)?;
+            let previous = codegen
+                .local_indices
+                .insert(name.clone(), codegen.local_indices.len() as u16);
+            let idx = *codegen.local_indices.get(name).unwrap();
+            codegen.emit(OvmOpcode::StoreLoc);
+            codegen.emit_u16(idx);
+            compile_expr(codegen, body)?;
+            match previous {
+                Some(prev) => {
+                    codegen.local_indices.insert(name.clone(), prev);
+                }
+                None => {
+                    codegen.local_indices.remove(name);
+                }
+            }
         }
         TypedExprKind::Tuple(elems) => {
             for e in elems {

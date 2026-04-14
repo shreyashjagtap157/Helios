@@ -512,6 +512,7 @@ impl Parser {
             Some(TokenKind::Module) => self.parse_module_decl(attributes),
             Some(TokenKind::Struct) => self.parse_struct(attributes),
             Some(TokenKind::Enum) => self.parse_enum(attributes),
+            Some(TokenKind::Error) => self.parse_error_set(attributes),
             Some(TokenKind::Fn) => self.parse_function(attributes),
             Some(TokenKind::Async) => self.parse_function(attributes),
             Some(TokenKind::Trait) => self.parse_trait(attributes),
@@ -1082,42 +1083,39 @@ impl Parser {
     fn parse_params(&mut self) -> Result<Vec<Param>, ParseError> {
         let mut params = Vec::new();
 
-        // Handle self parameter
-        if matches!(self.peek_kind(), Some(TokenKind::Ampersand)) {
-            self.advance();
-            let mutable = matches!(self.peek_kind(), Some(TokenKind::Mut));
-            if mutable {
+        while !matches!(self.peek_kind(), Some(TokenKind::RParen)) {
+            let modifier = self.parse_param_modifier();
+            if matches!(self.peek_kind(), Some(TokenKind::Ampersand)) {
                 self.advance();
-            }
-            if self.peek().map(|t| t.lexeme.as_str()) == Some("self") {
+                let mutable = matches!(self.peek_kind(), Some(TokenKind::Mut));
+                if mutable {
+                    self.advance();
+                }
+                if self.peek().map(|t| t.lexeme.as_str()) == Some("self") {
+                    self.advance();
+                    params.push(Param {
+                        name: "self".to_string(),
+                        ty: Type::SelfRef { mutable },
+                        modifier,
+                    });
+                }
+            } else if self.peek().map(|t| t.lexeme.as_str()) == Some("self") {
                 self.advance();
                 params.push(Param {
                     name: "self".to_string(),
-                    ty: Type::SelfRef { mutable },
+                    ty: Type::SelfOwned,
+                    modifier,
                 });
-            }
-        } else if self.peek().map(|t| t.lexeme.as_str()) == Some("self") {
-            self.advance();
-            params.push(Param {
-                name: "self".to_string(),
-                ty: Type::SelfOwned,
-            });
-        }
-
-        // Handle comma after self
-        if !params.is_empty() && matches!(self.peek_kind(), Some(TokenKind::Comma)) {
-            self.advance();
-        }
-
-        while !matches!(self.peek_kind(), Some(TokenKind::RParen)) {
-            let name = self.parse_identifier()?;
-            let ty = if matches!(self.peek_kind(), Some(TokenKind::Colon)) {
-                self.advance();
-                self.parse_type()?
             } else {
-                Type::Infer
-            };
-            params.push(Param { name, ty });
+                let name = self.parse_identifier()?;
+                let ty = if matches!(self.peek_kind(), Some(TokenKind::Colon)) {
+                    self.advance();
+                    self.parse_type()?
+                } else {
+                    Type::Infer
+                };
+                params.push(Param { name, ty, modifier });
+            }
 
             if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
                 self.advance();
@@ -1127,6 +1125,20 @@ impl Parser {
         }
 
         Ok(params)
+    }
+
+    fn parse_param_modifier(&mut self) -> ParamModifier {
+        match self.peek_kind() {
+            Some(TokenKind::Inout) => {
+                self.advance();
+                ParamModifier::Inout
+            }
+            Some(TokenKind::Linear) => {
+                self.advance();
+                ParamModifier::Linear
+            }
+            _ => ParamModifier::Normal,
+        }
     }
 
     /// Parse a type annotation
@@ -2082,7 +2094,7 @@ impl Parser {
                     self.advance();
                     let _ = self.parse_type(); // ignore errors from type here
                 }
-                return Ok(pat);
+                Ok(pat)
             }
             Some(TokenKind::Identifier) => {
                 let mut name = self.parse_identifier()?;
@@ -2279,6 +2291,31 @@ impl Parser {
             condition: Box::new(condition),
             then_expr: Box::new(then_expr),
             else_expr,
+        })
+    }
+
+    fn parse_let_chain_expression(&mut self) -> Result<Expression, ParseError> {
+        self.expect(&TokenKind::Let)?;
+        let name = self.parse_identifier()?;
+        self.expect(&TokenKind::Eq)?;
+        let value = self.parse_expression()?;
+        self.expect(&TokenKind::In)?;
+
+        let body = if matches!(self.peek_kind(), Some(TokenKind::Newline)) {
+            self.advance();
+            self.expect(&TokenKind::Indent)?;
+            let expr = self.parse_expression()?;
+            self.skip_newlines();
+            self.expect(&TokenKind::Dedent)?;
+            expr
+        } else {
+            self.parse_expression()?
+        };
+
+        Ok(Expression::LetChain {
+            name,
+            value: Box::new(value),
+            body: Box::new(body),
         })
     }
 
@@ -2520,12 +2557,8 @@ impl Parser {
                         parts.push(FStringPart::Literal(std::mem::take(&mut literal)));
                     }
 
-                    let (segment, next_index) = Self::extract_interpolated_expression(
-                        &chars,
-                        index + 1,
-                        line,
-                        column,
-                    )?;
+                    let (segment, next_index) =
+                        Self::extract_interpolated_expression(&chars, index + 1, line, column)?;
                     let expression_text = Self::strip_interpolation_format_spec(&segment).trim();
                     if expression_text.is_empty() {
                         return Err(ParseError::InvalidSyntax {
@@ -2537,11 +2570,8 @@ impl Parser {
                         });
                     }
 
-                    let expression = Self::parse_interpolated_expression(
-                        expression_text,
-                        line,
-                        column,
-                    )?;
+                    let expression =
+                        Self::parse_interpolated_expression(expression_text, line, column)?;
                     parts.push(FStringPart::Interpolated(expression));
                     index = next_index;
                 }
@@ -2933,7 +2963,8 @@ impl Parser {
             }
             Some(TokenKind::FStringLiteral) | Some(TokenKind::DStringLiteral) => {
                 let token = self.advance().unwrap().clone();
-                let fstring = Self::parse_interpolated_string(&token.lexeme, token.line, token.column)?;
+                let fstring =
+                    Self::parse_interpolated_string(&token.lexeme, token.line, token.column)?;
                 Ok(Expression::FString(fstring))
             }
             Some(TokenKind::CharLiteral) => {
@@ -2964,6 +2995,7 @@ impl Parser {
                 self.advance();
                 Ok(Expression::Literal(Literal::Bool(false)))
             }
+            Some(TokenKind::Let) => self.parse_let_chain_expression(),
             Some(TokenKind::If) => self.parse_if_expression(),
             Some(TokenKind::Match) => self.parse_match_expression(),
             Some(TokenKind::None_) => {
@@ -3070,7 +3102,11 @@ impl Parser {
                     } else {
                         Type::Named("_".to_string()) // inferred type
                     };
-                    params.push(Param { name, ty });
+                    params.push(Param {
+                        name,
+                        ty,
+                        modifier: ParamModifier::Normal,
+                    });
 
                     if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
                         self.advance();
@@ -3082,6 +3118,7 @@ impl Parser {
                 Ok(Expression::Lambda {
                     params,
                     body: Box::new(body),
+                    is_async: false,
                 })
             }
             Some(TokenKind::Fn) => {
@@ -3092,10 +3129,11 @@ impl Parser {
                 self.expect(&TokenKind::LParen)?;
                 let mut params = Vec::new();
                 while !matches!(self.peek_kind(), Some(TokenKind::RParen)) {
+                    let modifier = self.parse_param_modifier();
                     let name = self.parse_identifier()?;
                     self.expect(&TokenKind::Colon)?;
                     let ty = self.parse_type()?;
-                    params.push(Param { name, ty });
+                    params.push(Param { name, ty, modifier });
 
                     if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
                         self.advance();
@@ -3111,238 +3149,6 @@ impl Parser {
                     None
                 };
 
-
-            fn parse_interpolated_string(
-                lexeme: &str,
-                line: usize,
-                column: usize,
-            ) -> Result<FString, ParseError> {
-                if lexeme.len() < 3 {
-                    return Err(ParseError::InvalidSyntax {
-                        line,
-                        column,
-                        message: "unterminated interpolated string literal".to_string(),
-                        code: ParseErrorCode::InvalidSyntax,
-                        hint: Some("close the string with \"".to_string()),
-                    });
-                }
-
-                let inner = &lexeme[2..lexeme.len() - 1];
-                let chars: Vec<char> = inner.chars().collect();
-                let mut parts = Vec::new();
-                let mut literal = String::new();
-                let mut index = 0usize;
-                let mut escaped = false;
-
-                while index < chars.len() {
-                    let ch = chars[index];
-
-                    if escaped {
-                        literal.push(ch);
-                        escaped = false;
-                        index += 1;
-                        continue;
-                    }
-
-                    match ch {
-                        '\\' => {
-                            literal.push(ch);
-                            escaped = true;
-                            index += 1;
-                        }
-                        '{' => {
-                            if chars.get(index + 1) == Some(&'{') {
-                                literal.push('{');
-                                index += 2;
-                                continue;
-                            }
-
-                            if !literal.is_empty() {
-                                parts.push(FStringPart::Literal(std::mem::take(&mut literal)));
-                            }
-
-                            let (segment, next_index) = extract_interpolated_expression(
-                                &chars,
-                                index + 1,
-                                line,
-                                column,
-                            )?;
-                            let expression_text = strip_interpolation_format_spec(&segment).trim();
-                            if expression_text.is_empty() {
-                                return Err(ParseError::InvalidSyntax {
-                                    line,
-                                    column,
-                                    message: "empty interpolation expression in string literal".to_string(),
-                                    code: ParseErrorCode::InvalidSyntax,
-                                    hint: Some("write an expression inside {...}".to_string()),
-                                });
-                            }
-
-                            let expression = parse_interpolated_expression(
-                                expression_text,
-                                line,
-                                column,
-                            )?;
-                            parts.push(FStringPart::Interpolated(expression));
-                            index = next_index;
-                        }
-                        '}' => {
-                            if chars.get(index + 1) == Some(&'}') {
-                                literal.push('}');
-                                index += 2;
-                            } else {
-                                return Err(ParseError::InvalidSyntax {
-                                    line,
-                                    column,
-                                    message: "unmatched '}' in string literal".to_string(),
-                                    code: ParseErrorCode::InvalidSyntax,
-                                    hint: Some("escape a literal brace as '}}'".to_string()),
-                                });
-                            }
-                        }
-                        _ => {
-                            literal.push(ch);
-                            index += 1;
-                        }
-                    }
-                }
-
-                if escaped {
-                    literal.push('\\');
-                }
-
-                if !literal.is_empty() {
-                    parts.push(FStringPart::Literal(literal));
-                }
-
-                Ok(FString { parts })
-            }
-
-            fn extract_interpolated_expression(
-                chars: &[char],
-                start_index: usize,
-                line: usize,
-                column: usize,
-            ) -> Result<(String, usize), ParseError> {
-                let mut depth = 1usize;
-                let mut index = start_index;
-                let mut in_string: Option<char> = None;
-                let mut escaped = false;
-
-                while index < chars.len() {
-                    let ch = chars[index];
-
-                    if let Some(quote) = in_string {
-                        if escaped {
-                            escaped = false;
-                        } else if ch == '\\' {
-                            escaped = true;
-                        } else if ch == quote {
-                            in_string = None;
-                        }
-                    } else {
-                        match ch {
-                            '"' | '\'' => {
-                                in_string = Some(ch);
-                            }
-                            '{' => {
-                                depth += 1;
-                            }
-                            '}' => {
-                                depth -= 1;
-                                if depth == 0 {
-                                    let segment: String = chars[start_index..index].iter().collect();
-                                    return Ok((segment, index + 1));
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    index += 1;
-                }
-
-                Err(ParseError::InvalidSyntax {
-                    line,
-                    column,
-                    message: "unterminated interpolation in string literal".to_string(),
-                    code: ParseErrorCode::InvalidSyntax,
-                    hint: Some("close the interpolation with '}'".to_string()),
-                })
-            }
-
-            fn strip_interpolation_format_spec(segment: &str) -> &str {
-                let mut paren_depth = 0usize;
-                let mut bracket_depth = 0usize;
-                let mut brace_depth = 0usize;
-                let mut in_string: Option<char> = None;
-                let mut escaped = false;
-
-                for (index, ch) in segment.char_indices() {
-                    if let Some(quote) = in_string {
-                        if escaped {
-                            escaped = false;
-                        } else if ch == '\\' {
-                            escaped = true;
-                        } else if ch == quote {
-                            in_string = None;
-                        }
-                        continue;
-                    }
-
-                    match ch {
-                        '"' | '\'' => in_string = Some(ch),
-                        '(' => paren_depth += 1,
-                        ')' if paren_depth > 0 => paren_depth -= 1,
-                        '[' => bracket_depth += 1,
-                        ']' if bracket_depth > 0 => bracket_depth -= 1,
-                        '{' => brace_depth += 1,
-                        '}' if brace_depth > 0 => brace_depth -= 1,
-                        ':' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
-                            if (index > 0 && segment.as_bytes()[index - 1] == b':')
-                                || segment[index..].starts_with("::")
-                            {
-                                continue;
-                            }
-
-                            return segment[..index].trim_end();
-                        }
-                        _ => {}
-                    }
-                }
-
-                segment.trim()
-            }
-
-            fn parse_interpolated_expression(
-                source: &str,
-                line: usize,
-                column: usize,
-            ) -> Result<Expression, ParseError> {
-                let tokens = crate::lexer::tokenize(source).map_err(|error| ParseError::InvalidSyntax {
-                    line,
-                    column,
-                    message: format!("invalid interpolated expression: {}", error),
-                    code: ParseErrorCode::InvalidSyntax,
-                    hint: Some("check the expression inside {...}".to_string()),
-                })?;
-
-                let mut parser = Parser::new(tokens);
-                let expression = parser.parse_expression()?;
-
-                if let Some(token) = parser.peek() {
-                    return Err(ParseError::UnexpectedToken {
-                        line: token.line,
-                        column: token.column,
-                        expected: "end of interpolated expression".to_string(),
-                        got: format!("{:?}", token.kind),
-                        code: ParseErrorCode::UnexpectedToken,
-                        hint: Some("remove extra tokens after the interpolation expression".to_string()),
-                    });
-                }
-
-                Ok(expression)
-            }
                 // Parse body after colon
                 self.expect(&TokenKind::Colon)?;
                 let body = self.parse_expression()?;
@@ -3350,6 +3156,7 @@ impl Parser {
                 Ok(Expression::Lambda {
                     params,
                     body: Box::new(body),
+                    is_async: false,
                 })
             }
             Some(TokenKind::Some_) => {
@@ -3886,6 +3693,72 @@ impl Parser {
         }))
     }
 
+    /// Parse error set type (v2.0 spec: finite named sets of errors)
+    /// Syntax: error set ParseErrors:
+    ///     InvalidSyntax(span: Span, message: String)
+    ///     UnexpectedEof(position: usize)
+    fn parse_error_set(&mut self, _attributes: Vec<String>) -> Result<Item, ParseError> {
+        self.expect(&TokenKind::Error)?;
+        self.expect(&TokenKind::SetKw)?;
+        let name = self.parse_identifier()?;
+
+        // Parse variants
+        let variants = if matches!(self.peek_kind(), Some(TokenKind::Colon)) {
+            self.expect(&TokenKind::Colon)?;
+            self.skip_newlines();
+            self.expect(&TokenKind::Indent)?;
+
+            let mut variants = Vec::new();
+            while !matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+                self.skip_newlines();
+                if matches!(self.peek_kind(), Some(TokenKind::Dedent)) {
+                    break;
+                }
+
+                let variant_name = self.parse_identifier()?;
+                let fields = if matches!(self.peek_kind(), Some(TokenKind::LParen)) {
+                    self.advance();
+                    let mut field_types = Vec::new();
+                    while !matches!(self.peek_kind(), Some(TokenKind::RParen)) {
+                        // Parse field: name: Type
+                        let field_name = self.parse_identifier()?;
+                        self.expect(&TokenKind::Colon)?;
+                        let field_type = self.parse_type()?;
+                        field_types.push((field_name, field_type));
+                        if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+                            self.advance();
+                        }
+                    }
+                    self.expect(&TokenKind::RParen)?;
+                    Some(field_types)
+                } else {
+                    None
+                };
+
+                variants.push(crate::parser::ast::ErrorVariant {
+                    name: variant_name,
+                    fields: fields.unwrap_or_default(),
+                });
+
+                if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
+                    self.advance();
+                }
+                self.skip_newlines();
+            }
+
+            self.expect(&TokenKind::Dedent)?;
+            variants
+        } else {
+            Vec::new()
+        };
+
+        // Add error set type to AST
+        Ok(Item::TypeAlias(crate::parser::ast::TypeAlias {
+            name: name.clone(),
+            ty: crate::parser::ast::Type::ErrorSet { name, variants },
+        }))
+    }
+
     /// Parse type alias
     fn parse_type_alias(&mut self, _attributes: Vec<String>) -> Result<Item, ParseError> {
         self.expect(&TokenKind::Type)?;
@@ -4163,6 +4036,41 @@ fn parse_pair(s: str) -> i32:
     }
 
     #[test]
+    fn let_chain_expression_parses() {
+        let source = r#"module test
+
+fn compute() -> i32:
+    return let x = 41 in x + 1
+"#;
+
+        let (module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "unexpected parse errors: {:?}", errors);
+
+        let return_expr = module
+            .items
+            .into_iter()
+            .find_map(|item| match item {
+                Item::Function(func) if func.name == "compute" => {
+                    func.body.statements.into_iter().find_map(|stmt| match stmt {
+                        Statement::Return(Some(expr)) => Some(expr),
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+            .expect("expected let-chain return expression to parse");
+
+        match return_expr {
+            Expression::LetChain { name, value, body } => {
+                assert_eq!(name, "x");
+                assert!(matches!(*value, Expression::Literal(Literal::Int(41))));
+                assert!(matches!(*body, Expression::Binary(_, BinaryOp::Add, _)));
+            }
+            other => panic!("expected let-chain expression, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn expression_as_cast_parses() {
         let source = r#"module test
 
@@ -4367,15 +4275,18 @@ fn greet(name: str, count: i32) -> str:
             .items
             .into_iter()
             .find_map(|item| match item {
-                Item::Function(func) => func.body.statements.into_iter().find_map(|stmt| {
-                    match stmt {
-                        Statement::Let {
-                            value: Some(Expression::FString(fstring)),
-                            ..
-                        } => Some(fstring),
-                        _ => None,
-                    }
-                }),
+                Item::Function(func) => {
+                    func.body
+                        .statements
+                        .into_iter()
+                        .find_map(|stmt| match stmt {
+                            Statement::Let {
+                                value: Some(Expression::FString(fstring)),
+                                ..
+                            } => Some(fstring),
+                            _ => None,
+                        })
+                }
                 _ => None,
             })
             .expect("expected an interpolated f-string expression");
@@ -4419,15 +4330,18 @@ fn debug(value: i32) -> str:
             .items
             .into_iter()
             .find_map(|item| match item {
-                Item::Function(func) => func.body.statements.into_iter().find_map(|stmt| {
-                    match stmt {
-                        Statement::Let {
-                            value: Some(Expression::FString(fstring)),
-                            ..
-                        } => Some(fstring),
-                        _ => None,
-                    }
-                }),
+                Item::Function(func) => {
+                    func.body
+                        .statements
+                        .into_iter()
+                        .find_map(|stmt| match stmt {
+                            Statement::Let {
+                                value: Some(Expression::FString(fstring)),
+                                ..
+                            } => Some(fstring),
+                            _ => None,
+                        })
+                }
                 _ => None,
             })
             .expect("expected a debug string expression");
@@ -4441,6 +4355,35 @@ fn debug(value: i32) -> str:
             &fstring.parts[1],
             FStringPart::Interpolated(Expression::Identifier(name)) if name == "value"
         ));
+    }
+
+    #[test]
+    fn inout_and_linear_parameters_parse() {
+        let source = r#"module test
+
+fn transform(inout buffer: str, linear token: i32) -> str:
+    return buffer
+"#;
+
+        let (module, errors) = parse_src(source);
+        assert!(
+            errors.is_empty(),
+            "parameter modifiers should parse: {:?}",
+            errors
+        );
+
+        let function = module
+            .items
+            .into_iter()
+            .find_map(|item| match item {
+                Item::Function(function) if function.name == "transform" => Some(function),
+                _ => None,
+            })
+            .expect("expected modifier-bearing function to parse");
+
+        assert_eq!(function.params.len(), 2);
+        assert!(matches!(function.params[0].modifier, ParamModifier::Inout));
+        assert!(matches!(function.params[1].modifier, ParamModifier::Linear));
     }
 
     #[test]
@@ -4873,6 +4816,42 @@ type Num = i32
 "#;
         let (_module, errors) = parse_src(source);
         assert!(errors.is_empty(), "type alias should parse: {:?}", errors);
+    }
+
+    #[test]
+    fn error_set_type_parses() {
+        let source = r#"module test
+
+error set ParseErrors:
+    InvalidSyntax(line: i64, message: str)
+    UnexpectedEof(position: usize)
+"#;
+
+        let (module, errors) = parse_src(source);
+        assert!(errors.is_empty(), "error set should parse: {:?}", errors);
+
+        let type_alias = module
+            .items
+            .into_iter()
+            .find_map(|item| match item {
+                Item::TypeAlias(type_alias) if type_alias.name == "ParseErrors" => {
+                    Some(type_alias)
+                }
+                _ => None,
+            })
+            .expect("expected error set type alias to parse");
+
+        match type_alias.ty {
+            Type::ErrorSet { name, variants } => {
+                assert_eq!(name, "ParseErrors");
+                assert_eq!(variants.len(), 2);
+                assert_eq!(variants[0].name, "InvalidSyntax");
+                assert_eq!(variants[0].fields.len(), 2);
+                assert_eq!(variants[1].name, "UnexpectedEof");
+                assert_eq!(variants[1].fields.len(), 1);
+            }
+            other => panic!("expected error set type, got {:?}", other),
+        }
     }
 
     #[test]

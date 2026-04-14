@@ -23,6 +23,12 @@ pub struct LifetimeContext {
     pub relations: Vec<LifetimeRelation>, // Outlives relationships
 }
 
+impl Default for LifetimeContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LifetimeContext {
     pub fn new() -> Self {
         Self {

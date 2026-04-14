@@ -4,6 +4,31 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+/// Package capability declaration (v2.0 spec: capability declarations in manifest)
+#[derive(Debug, Clone, Default)]
+pub struct Capabilities {
+    /// Capability name -> list of allowed operations
+    pub capabilities: HashMap<String, Vec<String>>,
+}
+
+impl Capabilities {
+    pub fn from_section(lines: &[&str]) -> Self {
+        let mut caps = Self::default();
+        for line in lines {
+            if let Some((name, ops)) = line.split_once('=') {
+                let ops: Vec<String> = ops
+                    .trim_matches(|c| c == '[' || c == ']')
+                    .split(',')
+                    .map(|s| s.trim().trim_matches('"').to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                caps.capabilities.insert(name.trim().to_string(), ops);
+            }
+        }
+        caps
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PackageManifest {
     pub name: String,
@@ -15,6 +40,8 @@ pub struct PackageManifest {
     pub dependencies: HashMap<String, Dependency>,
     pub build: BuildConfig,
     pub features: HashMap<String, Vec<String>>,
+    /// Capability declarations (v2.0 spec: visible to users before installation)
+    pub capabilities: Capabilities,
 }
 
 #[derive(Debug, Clone)]
@@ -52,18 +79,28 @@ impl PackageManifest {
         let mut dependencies = HashMap::new();
         let mut build = BuildConfig::default();
         let mut features = HashMap::new();
+        let mut capabilities = Capabilities::default();
+        let mut capability_lines = Vec::new();
 
         let mut in_dependencies = false;
         let mut in_build = false;
         let mut in_features = false;
+        let mut in_capabilities = false;
 
         for line in content.lines() {
             let line = line.trim();
 
             if line.starts_with('[') {
+                // Save previous capabilities section
+                if in_capabilities && !capability_lines.is_empty() {
+                    capabilities = Capabilities::from_section(&capability_lines);
+                    capability_lines.clear();
+                }
+
                 in_dependencies = false;
                 in_build = false;
                 in_features = false;
+                in_capabilities = false;
 
                 if line == "[package]" {
                     continue;
@@ -73,8 +110,14 @@ impl PackageManifest {
                     in_build = true;
                 } else if line == "[features]" {
                     in_features = true;
+                } else if line == "[capabilities]" {
+                    in_capabilities = true;
                 }
                 continue;
+            }
+
+            if in_capabilities {
+                capability_lines.push(line);
             }
 
             if line.is_empty() || line.starts_with('#') {
@@ -125,6 +168,11 @@ impl PackageManifest {
             return Err("Package name is required".to_string());
         }
 
+        // Finalize capabilities if they were at the end of the file
+        if in_capabilities && !capability_lines.is_empty() {
+            capabilities = Capabilities::from_section(&capability_lines);
+        }
+
         Ok(Self {
             name,
             version,
@@ -135,6 +183,7 @@ impl PackageManifest {
             dependencies,
             build,
             features,
+            capabilities,
         })
     }
 

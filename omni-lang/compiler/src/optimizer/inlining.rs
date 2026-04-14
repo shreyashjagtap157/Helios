@@ -430,6 +430,7 @@ mod tests {
                 .map(|p| Param {
                     name: p.to_string(),
                     ty: Type::I64,
+                    modifier: ParamModifier::Normal,
                 })
                 .collect(),
             return_type: None,
@@ -517,6 +518,7 @@ mod tests {
                     "with_lambda",
                     vec![],
                     vec![Statement::Return(Some(Expression::Lambda {
+                        is_async: false,
                         params: vec![],
                         body: Box::new(int(1)),
                     }))],

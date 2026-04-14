@@ -106,6 +106,9 @@ pub enum OpCode {
     NewMap(usize),
     /// Index into an array or map (pops index, then collection)
     Index,
+    /// Store into an array or map index.
+    /// Pops index, collection, value (in that order), pushes updated collection.
+    StoreIndex,
 
     // -- Built-in operations --
     Print,
@@ -167,6 +170,7 @@ impl fmt::Display for OpCode {
             OpCode::NewArray(n) => write!(f, "NEW_ARRAY {}", n),
             OpCode::NewMap(n) => write!(f, "NEW_MAP {}", n),
             OpCode::Index => write!(f, "INDEX"),
+            OpCode::StoreIndex => write!(f, "STORE_INDEX"),
             OpCode::Print => write!(f, "PRINT"),
             OpCode::PrintLn => write!(f, "PRINTLN"),
             OpCode::Len => write!(f, "LEN"),
@@ -469,6 +473,7 @@ impl OvmModule {
     const OP_NEW_ARRAY: u8 = 0x71;
     const OP_NEW_MAP: u8 = 0x72;
     const OP_INDEX: u8 = 0x73;
+    const OP_STORE_INDEX: u8 = 0x74;
     const OP_PRINT: u8 = 0x80;
     const OP_PRINTLN: u8 = 0x81;
     const OP_LEN: u8 = 0x82;
@@ -563,6 +568,7 @@ impl OvmModule {
                 Self::write_usize(buf, *n);
             }
             OpCode::Index => Self::write_u8(buf, Self::OP_INDEX),
+            OpCode::StoreIndex => Self::write_u8(buf, Self::OP_STORE_INDEX),
             OpCode::Print => Self::write_u8(buf, Self::OP_PRINT),
             OpCode::PrintLn => Self::write_u8(buf, Self::OP_PRINTLN),
             OpCode::Len => Self::write_u8(buf, Self::OP_LEN),
@@ -624,6 +630,7 @@ impl OvmModule {
             Self::OP_NEW_ARRAY => Ok(OpCode::NewArray(Self::read_usize(bytes, pos)?)),
             Self::OP_NEW_MAP => Ok(OpCode::NewMap(Self::read_usize(bytes, pos)?)),
             Self::OP_INDEX => Ok(OpCode::Index),
+            Self::OP_STORE_INDEX => Ok(OpCode::StoreIndex),
             Self::OP_PRINT => Ok(OpCode::Print),
             Self::OP_PRINTLN => Ok(OpCode::PrintLn),
             Self::OP_LEN => Ok(OpCode::Len),
@@ -733,7 +740,7 @@ impl OvmModule {
         if bytes.len() < 6 {
             return Err(anyhow!("bytecode too short for header"));
         }
-        if &bytes[0..4] != &OVM_MAGIC {
+        if bytes[0..4] != OVM_MAGIC {
             return Err(anyhow!("invalid OVM magic bytes"));
         }
         let mut pos: usize = 4;
@@ -976,6 +983,7 @@ mod tests {
                 OpCode::Push(Value::Int(1)),
                 OpCode::NewMap(1),
                 OpCode::Index,
+                OpCode::StoreIndex,
                 OpCode::Print,
                 OpCode::PrintLn,
                 OpCode::Len,

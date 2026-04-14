@@ -109,6 +109,9 @@ pub struct BorrowState {
     pub immutable_borrows: Vec<ImmutableBorrow>,
     /// Active mutable borrow (at most one).
     pub mutable_borrow: Option<MutableBorrow>,
+    /// Field-level borrows (v2.0 spec: independent field-level borrows)
+    /// Map: field_name -> (borrow_kind, location)
+    pub field_borrows: HashMap<String, (OwnershipKind, Location)>,
 }
 
 impl BorrowState {
@@ -121,11 +124,45 @@ impl BorrowState {
             moved_at: None,
             immutable_borrows: Vec::new(),
             mutable_borrow: None,
+            field_borrows: HashMap::new(),
         }
     }
 
     pub fn has_any_borrow(&self) -> bool {
-        !self.immutable_borrows.is_empty() || self.mutable_borrow.is_some()
+        !self.immutable_borrows.is_empty()
+            || self.mutable_borrow.is_some()
+            || !self.field_borrows.is_empty()
+    }
+
+    /// Check if a specific field can be borrowed independently (v2.0 spec)
+    /// Different fields of the same struct can be borrowed independently
+    pub fn can_borrow_field(&self, field: &str) -> bool {
+        // Check if this specific field already has a conflicting borrow
+        if let Some((borrow_kind, _)) = self.field_borrows.get(field) {
+            // Field already borrowed - check if it's compatible
+            match borrow_kind {
+                OwnershipKind::MutBorrowed => return false, // Already mutably borrowed
+                OwnershipKind::Borrowed => {
+                    // Already immutably borrowed - allow, mutability checked at higher level
+                }
+                _ => {}
+            }
+        }
+        // Also need to check that the whole variable isn't mutably borrowed
+        if self.mutable_borrow.is_some() {
+            return false;
+        }
+        true
+    }
+
+    /// Record a field-level borrow (v2.0 spec: field projections)
+    pub fn borrow_field(&mut self, field: &str, kind: OwnershipKind, loc: Location) {
+        self.field_borrows.insert(field.to_string(), (kind, loc));
+    }
+
+    /// Release a field-level borrow when it goes out of scope
+    pub fn release_field_borrow(&mut self, field: &str) {
+        self.field_borrows.remove(field);
     }
 }
 
@@ -141,6 +178,8 @@ pub struct Scope {
     pub variables: Vec<String>,
     /// Borrows created in this scope: `(var_name, is_mutable)`.
     pub borrows: Vec<(String, bool)>,
+    /// Field borrows created in this scope: `(var_name, field_name)`.
+    pub field_borrows: Vec<(String, String)>,
 }
 
 impl Scope {
@@ -149,6 +188,7 @@ impl Scope {
             id,
             variables: Vec::new(),
             borrows: Vec::new(),
+            field_borrows: Vec::new(),
         }
     }
 }
@@ -209,6 +249,13 @@ pub enum BorrowError {
     },
     /// Move inside a loop body (the variable is used again in the next iteration).
     MoveInLoop { variable: String, move_at: Location },
+    /// Field-level borrow conflict (v2.0 spec: field projections)
+    FieldBorrowConflict {
+        variable: String,
+        field: String,
+        first_borrow: Location,
+        second_borrow: Location,
+    },
 }
 
 impl std::fmt::Display for BorrowError {
@@ -301,6 +348,15 @@ impl std::fmt::Display for BorrowError {
                 write!(f, "value `{}` moved inside loop at stmt {} (would be used again in next iteration)",
                        variable, move_at.stmt_index)
             }
+            BorrowError::FieldBorrowConflict {
+                variable,
+                field,
+                first_borrow,
+                second_borrow,
+            } => {
+                write!(f, "conflicting field-level borrows on `{}.{}` (first at stmt {}, second at stmt {})",
+                       variable, field, first_borrow.stmt_index, second_borrow.stmt_index)
+            }
         }
     }
 }
@@ -327,6 +383,12 @@ pub struct BorrowChecker {
     loop_moves: Vec<String>,
     /// Whether the current function has a reference return type.
     returns_reference: bool,
+}
+
+impl Default for BorrowChecker {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BorrowChecker {
@@ -371,6 +433,9 @@ impl BorrowChecker {
             // Release all borrows that were created in this scope.
             for (var_name, is_mut) in &scope.borrows {
                 self.release_borrow_internal(var_name, *is_mut);
+            }
+            for (var_name, field_name) in &scope.field_borrows {
+                self.release_field_borrow_internal(var_name, field_name);
             }
             // Remove variables declared in this scope.
             for var in &scope.variables {
@@ -583,6 +648,15 @@ impl BorrowChecker {
                 });
                 return;
             }
+            if let Some((field, (_, first_borrow))) = state.field_borrows.iter().next() {
+                self.errors.push(BorrowError::FieldBorrowConflict {
+                    variable: var_name.to_string(),
+                    field: field.clone(),
+                    first_borrow: *first_borrow,
+                    second_borrow: loc,
+                });
+                return;
+            }
             if let Some(s) = self.variables.get_mut(var_name) {
                 s.mutable_borrow = Some(MutableBorrow {
                     scope_id,
@@ -596,6 +670,19 @@ impl BorrowChecker {
                     variable: var_name.to_string(),
                     mut_at: mb.location,
                     shared_at: loc,
+                });
+                return;
+            }
+            if let Some((field, (OwnershipKind::MutBorrowed, first_borrow))) = state
+                .field_borrows
+                .iter()
+                .find(|(_, (kind, _))| *kind == OwnershipKind::MutBorrowed)
+            {
+                self.errors.push(BorrowError::FieldBorrowConflict {
+                    variable: var_name.to_string(),
+                    field: field.clone(),
+                    first_borrow: *first_borrow,
+                    second_borrow: loc,
                 });
                 return;
             }
@@ -613,6 +700,82 @@ impl BorrowChecker {
         }
     }
 
+    /// Record a field-level borrow on `var_name.field`.
+    pub fn add_field_borrow(&mut self, var_name: &str, field: &str, mutable: bool) {
+        let loc = self.loc();
+
+        let state = match self.variables.get(var_name) {
+            Some(state) => state.clone(),
+            None => return,
+        };
+
+        if state.ownership == OwnershipKind::Moved {
+            self.errors.push(BorrowError::UseAfterMove {
+                variable: var_name.to_string(),
+                moved_at: state.moved_at.unwrap_or(loc),
+                used_at: loc,
+            });
+            return;
+        }
+
+        if let Some(ref whole_mut_borrow) = state.mutable_borrow {
+            self.errors.push(BorrowError::FieldBorrowConflict {
+                variable: var_name.to_string(),
+                field: field.to_string(),
+                first_borrow: whole_mut_borrow.location,
+                second_borrow: loc,
+            });
+            return;
+        }
+
+        if mutable {
+            if let Some(shared_whole_borrow) = state.immutable_borrows.first() {
+                self.errors.push(BorrowError::FieldBorrowConflict {
+                    variable: var_name.to_string(),
+                    field: field.to_string(),
+                    first_borrow: shared_whole_borrow.location,
+                    second_borrow: loc,
+                });
+                return;
+            }
+        }
+
+        if let Some((existing_kind, first_borrow)) = state.field_borrows.get(field) {
+            let conflict = matches!(
+                (existing_kind, mutable),
+                (OwnershipKind::MutBorrowed, _) | (OwnershipKind::Borrowed, true)
+            );
+
+            if conflict {
+                self.errors.push(BorrowError::FieldBorrowConflict {
+                    variable: var_name.to_string(),
+                    field: field.to_string(),
+                    first_borrow: *first_borrow,
+                    second_borrow: loc,
+                });
+                return;
+            }
+        }
+
+        if let Some(state) = self.variables.get_mut(var_name) {
+            state.borrow_field(
+                field,
+                if mutable {
+                    OwnershipKind::MutBorrowed
+                } else {
+                    OwnershipKind::Borrowed
+                },
+                loc,
+            );
+        }
+
+        if let Some(scope) = self.scopes.last_mut() {
+            scope
+                .field_borrows
+                .push((var_name.to_string(), field.to_string()));
+        }
+    }
+
     /// Release a borrow (called during scope exit).
     pub fn release_borrow(&mut self, var_name: &str) {
         self.release_borrow_internal(var_name, false);
@@ -626,6 +789,12 @@ impl BorrowChecker {
             } else if !state.immutable_borrows.is_empty() {
                 state.immutable_borrows.pop();
             }
+        }
+    }
+
+    fn release_field_borrow_internal(&mut self, var_name: &str, field: &str) {
+        if let Some(state) = self.variables.get_mut(var_name) {
+            state.release_field_borrow(field);
         }
     }
 
@@ -651,11 +820,9 @@ impl BorrowChecker {
 
     /// Check an entire module, returning all borrow errors found.
     pub fn check_module(module: &ast::Module) -> Vec<BorrowError> {
-        let mut checker = BorrowChecker::new();
-        for item in &module.items {
-            checker.check_item(item);
-        }
-        checker.errors
+        // Use Polonius-only as the single source of truth for borrow checking.
+        // Legacy NLL-based fallback removed per Phase0/Phase1 hardening.
+        crate::semantic::polonius::run_polonius(module)
     }
 
     /// Check a single top-level item.
@@ -758,7 +925,7 @@ impl BorrowChecker {
                 if let ast::Expression::Identifier(ref src) = value {
                     self.mark_moved(src);
                 }
-                let is_shared = ty.as_ref().map_or(false, |t| Self::type_is_shared(t));
+                let is_shared = ty.as_ref().is_some_and(|t| Self::type_is_shared(t));
                 self.declare_variable(name, *mutable);
                 if is_shared {
                     if let Some(s) = self.variables.get_mut(name) {
@@ -902,10 +1069,16 @@ impl BorrowChecker {
                 mutable,
                 expr: inner,
             } => {
-                if let ast::Expression::Identifier(ref name) = **inner {
-                    self.add_borrow(name, *mutable);
-                } else {
-                    self.check_expression(inner);
+                match inner.as_ref() {
+                    ast::Expression::Identifier(name) => self.add_borrow(name, *mutable),
+                    ast::Expression::Field(base, field) => {
+                        if let ast::Expression::Identifier(name) = base.as_ref() {
+                            self.add_field_borrow(name, field, *mutable);
+                        } else {
+                            self.check_expression(inner);
+                        }
+                    }
+                    _ => self.check_expression(inner),
                 }
             }
             ast::Expression::Call(callee, args) => {
@@ -973,7 +1146,7 @@ impl BorrowChecker {
                     self.check_expression(e);
                 }
             }
-            ast::Expression::Lambda { params: _, body } => {
+            ast::Expression::Lambda { body, .. } => {
                 self.check_expression(body);
             }
             ast::Expression::If {
@@ -1055,7 +1228,6 @@ impl BorrowChecker {
                         s.ownership = OwnershipKind::Own;
                         s.moved_at = None;
                     }
-                    return;
                 }
             }
         }
@@ -1142,7 +1314,7 @@ impl BorrowChecker {
             let is_loop_local = self
                 .scopes
                 .last()
-                .map_or(false, |s| s.variables.contains(&var_name));
+                .is_some_and(|s| s.variables.contains(&var_name));
             if !is_loop_local {
                 self.errors.push(BorrowError::MoveInLoop {
                     variable: var_name,
@@ -1199,6 +1371,13 @@ mod tests {
         Expression::Borrow {
             mutable,
             expr: Box::new(ident(name)),
+        }
+    }
+
+    fn field_borrow_expr(base: &str, field: &str, mutable: bool) -> Expression {
+        Expression::Borrow {
+            mutable,
+            expr: Box::new(Expression::Field(Box::new(ident(base)), field.to_string())),
         }
     }
 
@@ -1587,6 +1766,88 @@ mod tests {
         assert!(
             errors.is_empty(),
             "borrow should be released after scope exit, got {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_independent_field_borrows_ok() {
+        let func = make_function(
+            "test",
+            vec![
+                let_stmt("state", true, int_lit(1)),
+                let_stmt("name_ref", false, field_borrow_expr("state", "name", false)),
+                let_stmt("cache_ref", false, field_borrow_expr("state", "cache", true)),
+            ],
+        );
+        let module = make_module(vec![func]);
+        let errors = BorrowChecker::check_module(&module);
+        assert!(
+            errors.is_empty(),
+            "different fields should be borrowable independently, got {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_same_field_mut_borrow_conflict() {
+        let func = make_function(
+            "test",
+            vec![
+                let_stmt("state", true, int_lit(1)),
+                let_stmt("a", false, field_borrow_expr("state", "cache", true)),
+                let_stmt("b", false, field_borrow_expr("state", "cache", true)),
+            ],
+        );
+        let module = make_module(vec![func]);
+        let errors = BorrowChecker::check_module(&module);
+        assert!(
+            errors
+                .iter()
+                .any(|error| matches!(error, BorrowError::FieldBorrowConflict { .. })),
+            "expected conflicting field mutable borrow error, got {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_shared_then_mut_same_field_conflict() {
+        let func = make_function(
+            "test",
+            vec![
+                let_stmt("state", true, int_lit(1)),
+                let_stmt("a", false, field_borrow_expr("state", "name", false)),
+                let_stmt("b", false, field_borrow_expr("state", "name", true)),
+            ],
+        );
+        let module = make_module(vec![func]);
+        let errors = BorrowChecker::check_module(&module);
+        assert!(
+            errors
+                .iter()
+                .any(|error| matches!(error, BorrowError::FieldBorrowConflict { .. })),
+            "expected shared-then-mutable field borrow conflict, got {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_move_while_field_borrowed_errors() {
+        let func = make_function(
+            "test",
+            vec![
+                let_stmt("state", true, int_lit(1)),
+                let_stmt("name_ref", false, field_borrow_expr("state", "name", false)),
+                let_stmt("moved_state", false, ident("state")),
+            ],
+        );
+        let module = make_module(vec![func]);
+        let errors = BorrowChecker::check_module(&module);
+        assert!(
+            errors
+                .iter()
+                .any(|error| matches!(error, BorrowError::MovedWhileBorrowed { .. })),
+            "expected move-while-field-borrowed error, got {:?}",
             errors
         );
     }

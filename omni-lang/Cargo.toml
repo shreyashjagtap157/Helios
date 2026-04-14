@@ -1,0 +1,16 @@
+[workspace]
+members = [
+    "compiler",
+    "ovm",
+    "stage1-compiler",
+    "tools/omni-fmt",
+    "tools/omni-lsp",
+    "tools/omni-dap",
+    "tools/opm",
+]
+resolver = "2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3

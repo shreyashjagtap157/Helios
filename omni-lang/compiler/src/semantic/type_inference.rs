@@ -91,6 +91,9 @@ pub enum Type {
 
     /// Placeholder for error recovery – unifies with anything
     Error,
+
+    /// Error set type (v2.0 spec: finite named sets of errors)
+    ErrorSet(String),
 }
 
 impl fmt::Display for Type {
@@ -140,6 +143,7 @@ impl fmt::Display for Type {
                 write!(f, ">")
             }
             Type::Error => write!(f, "<error>"),
+            Type::ErrorSet(name) => write!(f, "error set {}", name),
         }
     }
 }
@@ -261,11 +265,7 @@ impl ConstraintOrigin {
 // Function signatures
 // ---------------------------------------------------------------------------
 
-type FunctionSignature = (
-    Vec<Type>,
-    Type,
-    Option<crate::semantic::effects::EffectRow>,
-);
+type FunctionSignature = (Vec<Type>, Type, Option<crate::semantic::effects::EffectRow>);
 
 // ---------------------------------------------------------------------------
 // Substitution
@@ -341,6 +341,12 @@ pub struct TypeEnv {
     scopes: Vec<HashMap<std::string::String, Type>>,
     /// Current accumulated effect row (for effect inference)
     pub effect_row: Option<crate::semantic::effects::EffectRow>,
+}
+
+impl Default for TypeEnv {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TypeEnv {
@@ -536,6 +542,12 @@ pub struct InferenceEngine {
     current_effects: Vec<crate::semantic::effects::EffectSymbol>,
 }
 
+impl Default for InferenceEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InferenceEngine {
     // -----------------------------------------------------------------
     // Construction
@@ -583,8 +595,7 @@ impl InferenceEngine {
 
     /// Merge another effect row into the current accumulated effects.
     pub fn merge_effects(&mut self, other: &crate::semantic::effects::EffectRow) {
-        self.current_effects
-            .extend(other.iter().cloned());
+        self.current_effects.extend(other.iter().cloned());
     }
 
     /// Get the current accumulated effect row
@@ -735,8 +746,7 @@ impl InferenceEngine {
             .insert("println!".to_string(), println_sig.clone());
         self.function_sigs
             .insert("eprintln".to_string(), println_sig.clone());
-        self.function_sigs
-            .insert("eprint".to_string(), println_sig);
+        self.function_sigs.insert("eprint".to_string(), println_sig);
         let format_sig = (vec![Type::String], Type::String, pure_effect.clone());
         self.function_sigs
             .insert("format".to_string(), format_sig.clone());
@@ -804,6 +814,7 @@ impl InferenceEngine {
             }
             ast::Type::Nullable(inner) => Type::Nullable(Box::new(self.from_ast_type(inner))),
             ast::Type::Infer => self.fresh_var(), // Create fresh type variable for inference
+            ast::Type::ErrorSet { name, .. } => Type::ErrorSet(name.clone()), // Error set types
         }
     }
 
@@ -971,14 +982,22 @@ impl InferenceEngine {
             self.infer_statement(stmt, env, &expected_ret);
         }
 
-        // Check that inferred effects satisfy declared effects (if any)
-        let declared = Self::effect_row_from_ast(func.effect_row.as_ref())
-            .unwrap_or_else(crate::semantic::effects::EffectRow::pure);
-        if let Err(e) = self.check_effects(&declared) {
-            self.errors.push(TypeError::new(format!(
-                "Function '{}' effect mismatch: {}",
-                func.name, e
-            )));
+        let inferred_effects = self.get_effect_row();
+        let declared = Self::effect_row_from_ast(func.effect_row.as_ref());
+
+        // Only enforce effect compatibility when the function explicitly
+        // declares an effect row. Otherwise we infer the function's effects.
+        if let Some(declared) = declared.clone() {
+            if let Err(e) = self.check_effects(&declared) {
+                self.errors.push(TypeError::new(format!(
+                    "Function '{}' effect mismatch: {}",
+                    func.name, e
+                )));
+            }
+        }
+
+        if let Some(signature) = self.function_sigs.get_mut(&func.name) {
+            signature.2 = Some(declared.unwrap_or(inferred_effects));
         }
 
         env.pop_scope();
@@ -1420,7 +1439,7 @@ impl InferenceEngine {
             }
 
             // -- Lambda --
-            ast::Expression::Lambda { params, body } => {
+            ast::Expression::Lambda { params, body, .. } => {
                 env.push_scope();
                 let param_tys: Vec<Type> = params
                     .iter()
@@ -1433,6 +1452,16 @@ impl InferenceEngine {
                 let body_ty = self.infer_expr(body, env);
                 env.pop_scope();
                 Type::Function(param_tys, Box::new(body_ty))
+            }
+
+            // -- Let-chain --
+            ast::Expression::LetChain { name, value, body } => {
+                let value_ty = self.infer_expr(value, env);
+                env.push_scope();
+                env.define(name, value_ty);
+                let body_ty = self.infer_expr(body, env);
+                env.pop_scope();
+                body_ty
             }
 
             // -- If expression --
@@ -1674,7 +1703,9 @@ impl InferenceEngine {
         let resolved = self.substitution.apply(recv_ty);
         if let Type::Struct(ref struct_name, _) = resolved {
             let qualified = format!("{}::{}", struct_name, method);
-            if let Some((param_tys, ret_ty, effect_row)) = self.function_sigs.get(&qualified).cloned() {
+            if let Some((param_tys, ret_ty, effect_row)) =
+                self.function_sigs.get(&qualified).cloned()
+            {
                 if let Some(effect_row) = effect_row {
                     self.merge_effects(&effect_row);
                 }
@@ -2284,7 +2315,6 @@ mod tests {
         }
     }
 
-
     fn io_effect_row() -> a::EffectRow {
         a::EffectRow {
             effects: vec![a::EffectSymbol {
@@ -2292,6 +2322,10 @@ mod tests {
                 param: None,
             }],
         }
+    }
+
+    fn pure_effect_row() -> a::EffectRow {
+        a::EffectRow { effects: vec![] }
     }
 
     fn call_stmt(name: &str) -> a::Statement {
@@ -2561,6 +2595,29 @@ mod tests {
         };
 
         let caller_fn = simple_fn("main", vec![call_stmt("emit")]);
+        let module = a::Module {
+            items: vec![a::Item::Function(emit_fn), a::Item::Function(caller_fn)],
+        };
+
+        let result = check_types(&module);
+        assert!(result.is_ok(), "unannotated callers should infer callee effects");
+    }
+
+    #[test]
+    fn test_explicit_pure_effect_annotation_rejects_io_call() {
+        let emit_fn = a::Function {
+            name: "emit".to_string(),
+            is_async: false,
+            attributes: vec![],
+            params: vec![],
+            return_type: None,
+            effect_row: Some(io_effect_row()),
+            body: a::Block { statements: vec![] },
+        };
+
+        let mut caller_fn = simple_fn("main", vec![call_stmt("emit")]);
+        caller_fn.effect_row = Some(pure_effect_row());
+
         let module = a::Module {
             items: vec![a::Item::Function(emit_fn), a::Item::Function(caller_fn)],
         };

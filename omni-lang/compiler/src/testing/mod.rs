@@ -15,6 +15,7 @@ use crate::runtime::interpreter::{Interpreter, RuntimeValue};
 
 /// Test annotation metadata attached to a function.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Default)]
 pub struct Test {
     pub name: Option<String>,
     pub should_panic: bool,
@@ -22,16 +23,6 @@ pub struct Test {
     pub timeout_ms: Option<u64>,
 }
 
-impl Default for Test {
-    fn default() -> Self {
-        Self {
-            name: None,
-            should_panic: false,
-            ignore: false,
-            timeout_ms: None,
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TestShouldPanic {
@@ -124,6 +115,7 @@ pub struct TestFailure {
 }
 
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct TestResult {
     pub total: usize,
     pub passed: usize,
@@ -133,18 +125,6 @@ pub struct TestResult {
     pub duration: Duration,
 }
 
-impl Default for TestResult {
-    fn default() -> Self {
-        Self {
-            total: 0,
-            passed: 0,
-            failed: 0,
-            skipped: 0,
-            failures: Vec::new(),
-            duration: Duration::default(),
-        }
-    }
-}
 
 impl TestResult {
     pub fn is_success(&self) -> bool {
@@ -183,23 +163,19 @@ impl TestRunner {
         let started = Instant::now();
 
         let mut cases: Vec<TestCase> = tests
-            .iter()
-            .cloned()
-            .filter(|case| match &self.config.filter {
+            .iter().filter(|&case| match &self.config.filter {
                 Some(filter) => case.display_name().contains(filter),
                 None => true,
-            })
+            }).cloned()
             .collect();
         cases.sort_by_key(|case| case.order);
 
-        let mut collected: Vec<(usize, TestOutcome, Duration)> = if self.config.parallel
-            && self.config.workers > 1
-            && cases.len() > 1
-        {
-            self.collect_parallel(&cases)
-        } else {
-            self.collect_sequential(&cases)
-        };
+        let mut collected: Vec<(usize, TestOutcome, Duration)> =
+            if self.config.parallel && self.config.workers > 1 && cases.len() > 1 {
+                self.collect_parallel(&cases)
+            } else {
+                self.collect_sequential(&cases)
+            };
 
         collected.sort_by_key(|(order, _, _)| *order);
 
@@ -388,7 +364,9 @@ fn execute_test_case(case: &TestCase) -> (TestOutcome, Duration) {
     let outcome = match execution {
         Ok(Ok(_)) => {
             if case.test.should_panic {
-                TestOutcome::Failed("expected panic, but the test completed successfully".to_string())
+                TestOutcome::Failed(
+                    "expected panic, but the test completed successfully".to_string(),
+                )
             } else {
                 TestOutcome::Passed
             }
@@ -425,7 +403,10 @@ fn execute_test_case(case: &TestCase) -> (TestOutcome, Duration) {
 
 fn is_test_candidate(annotations: &[TestAnnotation]) -> bool {
     annotations.iter().any(|annotation| {
-        matches!(annotation, TestAnnotation::Test | TestAnnotation::EffectTest)
+        matches!(
+            annotation,
+            TestAnnotation::Test | TestAnnotation::EffectTest
+        )
     })
 }
 
@@ -508,7 +489,11 @@ fn parse_test_args(args: Option<&str>) -> Vec<TestAnnotation> {
     };
 
     let mut annotations = Vec::new();
-    for token in args.split(',').map(|part| part.trim()).filter(|part| !part.is_empty()) {
+    for token in args
+        .split(',')
+        .map(|part| part.trim())
+        .filter(|part| !part.is_empty())
+    {
         let lower = token.to_ascii_lowercase();
         if lower == "should_panic" {
             annotations.push(TestAnnotation::TestShouldPanic(TestShouldPanic {
@@ -520,7 +505,12 @@ fn parse_test_args(args: Option<&str>) -> Vec<TestAnnotation> {
             }));
         } else if lower.starts_with("ignore=") {
             annotations.push(TestAnnotation::TestIgnore(TestIgnore {
-                reason: normalize_value(token.split_once('=').map(|(_, value)| value).unwrap_or("ignored")),
+                reason: normalize_value(
+                    token
+                        .split_once('=')
+                        .map(|(_, value)| value)
+                        .unwrap_or("ignored"),
+                ),
             }));
         } else if lower.starts_with("expected=") {
             annotations.push(TestAnnotation::TestShouldPanic(TestShouldPanic {
@@ -529,22 +519,30 @@ fn parse_test_args(args: Option<&str>) -> Vec<TestAnnotation> {
                 )),
             }));
         } else if lower.starts_with("timeout=") {
-            if let Some(limit) = parse_timeout(Some(token.split_once('=').map(|(_, value)| value).unwrap_or(""))) {
+            if let Some(limit) = parse_timeout(Some(
+                token.split_once('=').map(|(_, value)| value).unwrap_or(""),
+            )) {
                 annotations.push(TestAnnotation::Timeout(limit));
             }
         } else if lower == "effect" {
             annotations.push(TestAnnotation::EffectTest);
         } else if lower.starts_with("requires=") {
             annotations.push(TestAnnotation::Requires(Requires {
-                condition: normalize_value(token.split_once('=').map(|(_, value)| value).unwrap_or("")),
+                condition: normalize_value(
+                    token.split_once('=').map(|(_, value)| value).unwrap_or(""),
+                ),
             }));
         } else if lower.starts_with("ensures=") {
             annotations.push(TestAnnotation::Ensures(Ensures {
-                condition: normalize_value(token.split_once('=').map(|(_, value)| value).unwrap_or("")),
+                condition: normalize_value(
+                    token.split_once('=').map(|(_, value)| value).unwrap_or(""),
+                ),
             }));
         } else if lower.starts_with("invariant=") {
             annotations.push(TestAnnotation::Invariant(Invariant {
-                condition: normalize_value(token.split_once('=').map(|(_, value)| value).unwrap_or("")),
+                condition: normalize_value(
+                    token.split_once('=').map(|(_, value)| value).unwrap_or(""),
+                ),
             }));
         }
     }
@@ -576,23 +574,20 @@ fn parse_attribute(attribute: &str) -> Option<(String, Option<String>)> {
 
 fn parse_expected(args: Option<&str>) -> Option<String> {
     args.and_then(|value| {
-        value
-            .split(',')
-            .map(|part| part.trim())
-            .find_map(|part| {
-                let lower = part.to_ascii_lowercase();
-                if lower.starts_with("expected=") {
-                    Some(normalize_value(
-                        part.split_once('=').map(|(_, rhs)| rhs).unwrap_or(""),
-                    ))
-                } else if lower.starts_with("message=") {
-                    Some(normalize_value(
-                        part.split_once('=').map(|(_, rhs)| rhs).unwrap_or(""),
-                    ))
-                } else {
-                    None
-                }
-            })
+        value.split(',').map(|part| part.trim()).find_map(|part| {
+            let lower = part.to_ascii_lowercase();
+            if lower.starts_with("expected=") {
+                Some(normalize_value(
+                    part.split_once('=').map(|(_, rhs)| rhs).unwrap_or(""),
+                ))
+            } else if lower.starts_with("message=") {
+                Some(normalize_value(
+                    part.split_once('=').map(|(_, rhs)| rhs).unwrap_or(""),
+                ))
+            } else {
+                None
+            }
+        })
     })
 }
 
@@ -761,7 +756,9 @@ mod tests {
 
         assert_eq!(tests.len(), 3);
         assert_eq!(tests[0].display_name(), "passes");
-        assert!(tests.iter().any(|case| case.function.name == "should_panic_case"));
+        assert!(tests
+            .iter()
+            .any(|case| case.function.name == "should_panic_case"));
         assert!(tests.iter().any(|case| case.test.ignore));
     }
 
@@ -806,16 +803,16 @@ mod tests {
     fn parse_attribute_normalizes_bracketed_and_bare_forms() {
         assert_eq!(
             parse_attribute("#[TEST( expected = \"boom\" )]"),
-            Some((
-                "test".to_string(),
-                Some("expected = \"boom\"".to_string())
-            ))
+            Some(("test".to_string(), Some("expected = \"boom\"".to_string())))
         );
         assert_eq!(
             parse_attribute("timeout(5)"),
             Some(("timeout".to_string(), Some("5".to_string())))
         );
-        assert_eq!(parse_attribute("#[ignore]"), Some(("ignore".to_string(), None)));
+        assert_eq!(
+            parse_attribute("#[ignore]"),
+            Some(("ignore".to_string(), None))
+        );
     }
 
     #[test]
@@ -859,7 +856,10 @@ mod tests {
             parse_reason(Some("reason='skip combo'")),
             Some("skip combo".to_string())
         );
-        assert_eq!(parse_reason(Some("skip combo")), Some("skip combo".to_string()));
+        assert_eq!(
+            parse_reason(Some("skip combo")),
+            Some("skip combo".to_string())
+        );
     }
 
     #[test]

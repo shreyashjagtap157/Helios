@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::parser::ast::*;
-    use crate::semantic::{Analyzer, TypedItem};
+    use crate::semantic::{Analyzer, SemanticError, TypedExprKind, TypedItem};
 
     #[test]
     fn test_analyzer_creation() {
@@ -88,6 +88,53 @@ mod tests {
     }
 
     #[test]
+    fn test_function_effect_annotation_analysis() {
+        let mut analyzer = Analyzer::new();
+
+        let fn_item = Item::Function(Function {
+            name: "uses_io".to_string(),
+            is_async: false,
+            attributes: Vec::new(),
+            params: Vec::new(),
+            return_type: Some(Type::Named("()".to_string())),
+            effect_row: Some(EffectRow {
+                effects: vec![EffectSymbol {
+                    name: "IO".to_string(),
+                    param: None,
+                }],
+            }),
+            body: Block {
+                statements: vec![Statement::Expression(Expression::Call(
+                    Box::new(Expression::Identifier("println".to_string())),
+                    vec![Expression::Literal(Literal::String("hello".to_string()))],
+                ))],
+            },
+        });
+
+        let typed = analyzer
+            .analyze(Module {
+                items: vec![fn_item],
+            })
+            .expect("expected effect-annotated function to analyze");
+
+        let typed_fn = typed
+            .items
+            .iter()
+            .find_map(|item| match item {
+                TypedItem::Function(function) if function.name == "uses_io" => Some(function),
+                _ => None,
+            })
+            .expect("expected typed function");
+
+        let effect_row = typed_fn.effect_row.as_ref().expect("expected effect row");
+        let effect_names: Vec<_> = effect_row
+            .iter()
+            .map(|effect| effect.name.as_str())
+            .collect();
+        assert_eq!(effect_names, vec!["IO"]);
+    }
+
+    #[test]
     fn test_unify_numeric_coercion() {
         let mut analyzer = Analyzer::new();
         let result = analyzer.unify(&Type::I32, &Type::I64);
@@ -132,6 +179,27 @@ mod tests {
     }
 
     #[test]
+    fn test_let_chain_expression_analysis() {
+        let mut analyzer = Analyzer::new();
+        let expr = Expression::LetChain {
+            name: "x".to_string(),
+            value: Box::new(Expression::Literal(Literal::Int(41))),
+            body: Box::new(Expression::Binary(
+                Box::new(Expression::Identifier("x".to_string())),
+                BinaryOp::Add,
+                Box::new(Expression::Literal(Literal::Int(1))),
+            )),
+        };
+
+        let result = analyzer
+            .analyze_expression(&expr)
+            .expect("expected let-chain expression to analyze");
+
+        assert!(matches!(result.ty, Type::I64));
+        assert!(matches!(result.kind, TypedExprKind::LetChain { .. }));
+    }
+
+    #[test]
     fn test_binary_addition() {
         let mut analyzer = Analyzer::new();
         let expr = Expression::Binary(
@@ -155,6 +223,119 @@ mod tests {
         let result = analyzer.analyze_expression(&expr);
         assert!(result.is_ok());
         assert!(matches!(result.unwrap().ty, Type::Bool));
+    }
+
+    #[test]
+    fn test_linear_parameter_must_be_consumed() {
+        let mut analyzer = Analyzer::new();
+        let result = analyzer.analyze(Module {
+            items: vec![Item::Function(Function {
+                name: "consume".to_string(),
+                is_async: false,
+                attributes: vec![],
+                params: vec![Param {
+                    name: "token".to_string(),
+                    ty: Type::Named("Token".to_string()),
+                    modifier: ParamModifier::Linear,
+                }],
+                return_type: None,
+                effect_row: None,
+                body: Block {
+                    statements: vec![Statement::Pass],
+                },
+            })],
+        });
+
+        assert!(matches!(
+            result,
+            Err(SemanticError::LinearityError(message)) if message.contains("token")
+        ));
+    }
+
+    #[test]
+    fn test_linear_parameter_can_be_consumed_once() {
+        let mut analyzer = Analyzer::new();
+        let result = analyzer.analyze(Module {
+            items: vec![Item::Function(Function {
+                name: "consume".to_string(),
+                is_async: false,
+                attributes: vec![],
+                params: vec![Param {
+                    name: "token".to_string(),
+                    ty: Type::Named("Token".to_string()),
+                    modifier: ParamModifier::Linear,
+                }],
+                return_type: Some(Type::Named("Token".to_string())),
+                effect_row: None,
+                body: Block {
+                    statements: vec![Statement::Return(Some(Expression::Identifier(
+                        "token".to_string(),
+                    )))],
+                },
+            })],
+        });
+
+        assert!(result.is_ok(), "linear parameter should be consumable once");
+    }
+
+    #[test]
+    fn test_linear_parameter_cannot_be_borrowed() {
+        let mut analyzer = Analyzer::new();
+        let result = analyzer.analyze(Module {
+            items: vec![Item::Function(Function {
+                name: "consume".to_string(),
+                is_async: false,
+                attributes: vec![],
+                params: vec![Param {
+                    name: "token".to_string(),
+                    ty: Type::Named("Token".to_string()),
+                    modifier: ParamModifier::Linear,
+                }],
+                return_type: None,
+                effect_row: None,
+                body: Block {
+                    statements: vec![Statement::Expression(Expression::Borrow {
+                        mutable: false,
+                        expr: Box::new(Expression::Identifier("token".to_string())),
+                    })],
+                },
+            })],
+        });
+
+        assert!(matches!(
+            result,
+            Err(SemanticError::LinearityError(message)) if message.contains("borrowed")
+        ));
+    }
+
+    #[test]
+    fn test_linear_parameter_used_twice_errors() {
+        let mut analyzer = Analyzer::new();
+        let result = analyzer.analyze(Module {
+            items: vec![Item::Function(Function {
+                name: "consume".to_string(),
+                is_async: false,
+                attributes: vec![],
+                params: vec![Param {
+                    name: "token".to_string(),
+                    ty: Type::Named("Token".to_string()),
+                    modifier: ParamModifier::Linear,
+                }],
+                return_type: Some(Type::Named("Token".to_string())),
+                effect_row: None,
+                body: Block {
+                    statements: vec![
+                        Statement::Expression(Expression::Identifier("token".to_string())),
+                        Statement::Return(Some(Expression::Identifier("token".to_string()))),
+                    ],
+                },
+            })],
+        });
+
+        assert!(matches!(
+            result,
+            Err(SemanticError::LinearityError(message)) if message.contains("more than once")
+        ));
     }
 
     #[test]
@@ -193,6 +374,7 @@ mod tests {
             params: vec![Param {
                 name: "x".to_string(),
                 ty: Type::Named("T".to_string()),
+                modifier: ParamModifier::Normal,
             }],
             return_type: Some(Type::Named("T".to_string())),
             effect_row: None,

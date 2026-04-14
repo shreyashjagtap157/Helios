@@ -1,0 +1,485 @@
+module std::alloc
+
+// Heap primitives extracted from std::core.
+// Core re-exports this module so existing callers keep working.
+
+import std::core::{Clone, Debug, Display, PartialEq, Option, String, panic, size_of, align_of}
+
+// ============================================
+// Layout
+// ============================================
+
+struct Layout:
+    size: usize
+    align: usize
+
+impl Layout:
+    fn new(size: usize, align: usize) -> Layout:
+        let effective_align = if align == 0:
+            1
+        else:
+            align
+        Layout { size: size, align: effective_align }
+
+    fn from_size_align_unchecked(size: usize, align: usize) -> Layout:
+        let effective_align = if align == 0:
+            1
+        else:
+            align
+        Layout { size: size, align: effective_align }
+
+    fn for_value<T>(_value: &T) -> Layout:
+        Layout { size: size_of::<T>(), align: align_of::<T>() }
+
+    fn array<T>(count: usize) -> Layout:
+        Layout { size: size_of::<T>() * count, align: align_of::<T>() }
+
+    fn size(&self) -> usize:
+        self.size
+
+    fn align(&self) -> usize:
+        self.align
+
+    fn pad_to_align(&self) -> Layout:
+        Layout {
+            size: align_up(self.size, self.align),
+            align: self.align,
+        }
+
+// ============================================
+// Pointer Helpers
+// ============================================
+
+fn null<T>() -> *const T:
+    0 as *const T
+
+fn null_mut<T>() -> *mut T:
+    0 as *mut T
+
+fn is_null<T>(ptr: *const T) -> bool:
+    ptr as usize == 0
+
+fn align_up(addr: usize, align: usize) -> usize:
+    if align == 0:
+        addr
+    else:
+        (addr + align - 1) & !(align - 1)
+
+fn align_down(addr: usize, align: usize) -> usize:
+    if align == 0:
+        addr
+    else:
+        addr & !(align - 1)
+
+fn is_aligned(addr: usize, align: usize) -> bool:
+    if align == 0:
+        true
+    else:
+        (addr & (align - 1)) == 0
+
+fn swap<T>(a: &mut T, b: &mut T):
+    let temp = read(a as *const T)
+    write(a as *mut T, read(b as *const T))
+    write(b as *mut T, temp)
+
+fn replace<T>(dest: &mut T, src: T) -> T:
+    let old = read(dest as *const T)
+    write(dest as *mut T, src)
+    old
+
+// ============================================
+// Allocation Helpers
+// ============================================
+
+fn alloc(size: usize) -> *mut u8:
+    alloc_aligned(size, align_of::<usize>())
+
+fn alloc_aligned(size: usize, align: usize) -> *mut u8:
+    let effective_align = if align == 0:
+        1
+    else:
+        align
+    if size == 0:
+        return effective_align as *mut u8
+    unsafe:
+        return __intrinsic_alloc(size, effective_align) as *mut u8
+
+fn alloc_layout(layout: Layout) -> *mut u8:
+    alloc_aligned(layout.size, layout.align)
+
+fn dealloc(ptr: *mut u8, size: usize):
+    if ptr as usize == 0 or size == 0:
+        return
+    unsafe:
+        __intrinsic_dealloc(ptr as usize)
+
+fn dealloc_layout(ptr: *mut u8, layout: Layout):
+    dealloc(ptr, layout.size)
+
+fn realloc_mem(ptr: *mut u8, _old_size: usize, new_size: usize) -> *mut u8:
+    if new_size == 0:
+        return null_mut()
+    if ptr as usize == 0:
+        return alloc(new_size)
+    unsafe:
+        return __intrinsic_realloc(ptr as usize, new_size) as *mut u8
+
+fn realloc_layout(ptr: *mut u8, old_layout: Layout, new_layout: Layout) -> *mut u8:
+    realloc_mem(ptr, old_layout.size, new_layout.size)
+
+fn read<T>(src: *const T) -> T:
+    unsafe:
+        __intrinsic_read::<T>(src as usize)
+
+fn write<T>(dst: *mut T, value: T):
+    unsafe:
+        __intrinsic_write::<T>(dst as usize, value)
+
+fn copy<T>(src: *const T, dst: *mut T, count: usize):
+    unsafe:
+        __intrinsic_copy(src as usize, dst as usize, count * size_of::<T>())
+
+fn copy_nonoverlapping<T>(src: *const T, dst: *mut T, count: usize):
+    unsafe:
+        __intrinsic_copy(src as usize, dst as usize, count * size_of::<T>())
+
+fn write_bytes<T>(dst: *mut T, value: u8, count: usize):
+    let total = count * size_of::<T>()
+    let mut index = 0
+    let base = dst as usize
+    while index < total:
+        unsafe:
+            __intrinsic_write::<u8>(base + index, value)
+        index += 1
+
+// ============================================
+// Atomic Ordering and Primitives
+// ============================================
+
+enum Ordering:
+    Relaxed
+    Acquire
+    Release
+    AcqRel
+    SeqCst
+
+extern "intrinsic":
+    fn __intrinsic_alloc(size: usize, align: usize) -> usize
+    fn __intrinsic_dealloc(ptr: usize)
+    fn __intrinsic_realloc(ptr: usize, new_size: usize) -> usize
+    fn __intrinsic_write<T>(ptr: usize, value: T)
+    fn __intrinsic_read<T>(ptr: usize) -> T
+    fn __intrinsic_copy(src: usize, dst: usize, size: usize)
+    fn __intrinsic_atomic_load_usize(ptr: &usize, order: Ordering) -> usize
+    fn __intrinsic_atomic_store_usize(ptr: &usize, value: usize, order: Ordering)
+    fn __intrinsic_atomic_fetch_add_usize(ptr: &usize, value: usize, order: Ordering) -> usize
+    fn __intrinsic_atomic_fetch_sub_usize(ptr: &usize, value: usize, order: Ordering) -> usize
+
+struct AtomicUsize:
+    inner: usize
+
+impl AtomicUsize:
+    fn new(value: usize) -> AtomicUsize:
+        AtomicUsize { inner: value }
+
+    fn load(&self, order: Ordering) -> usize:
+        __intrinsic_atomic_load_usize(&self.inner, order)
+
+    fn store(&self, value: usize, order: Ordering):
+        __intrinsic_atomic_store_usize(&self.inner, value, order)
+
+    fn fetch_add(&self, value: usize, order: Ordering) -> usize:
+        __intrinsic_atomic_fetch_add_usize(&self.inner, value, order)
+
+    fn fetch_sub(&self, value: usize, order: Ordering) -> usize:
+        __intrinsic_atomic_fetch_sub_usize(&self.inner, value, order)
+
+// ============================================
+// Box
+// ============================================
+
+struct Box<T>:
+    ptr: *mut T
+
+impl<T> Box<T>:
+    fn new(value: T) -> Box<T>:
+        let layout = Layout::from_size_align_unchecked(size_of::<T>(), align_of::<T>())
+        let ptr = alloc_layout(layout) as *mut T
+        if is_null(ptr as *const T):
+            panic("Box allocation failed")
+        unsafe:
+            write(ptr, value)
+        Box { ptr: ptr }
+
+    fn from_raw(ptr: *mut T) -> Box<T>:
+        Box { ptr: ptr }
+
+    fn into_raw(mut self) -> *mut T:
+        let ptr = self.ptr
+        self.ptr = null_mut()
+        ptr
+
+    fn into_inner(mut self) -> T:
+        let ptr = self.ptr
+        self.ptr = null_mut()
+        let value = unsafe:
+            read(ptr as *const T)
+        dealloc_layout(ptr as *mut u8, Layout::from_size_align_unchecked(size_of::<T>(), align_of::<T>()))
+        value
+
+    fn as_ref(&self) -> &T:
+        unsafe:
+            &*self.ptr
+
+    fn as_mut(&mut self) -> &mut T:
+        unsafe:
+            &mut *self.ptr
+
+impl<T: Clone> Clone for Box<T>:
+    fn clone(&self) -> Box<T>:
+        Box::new(self.as_ref().clone())
+
+impl<T: PartialEq> PartialEq for Box<T>:
+    fn eq(&self, other: &Box<T>) -> bool:
+        self.as_ref().eq(other.as_ref())
+
+impl<T: Display> Display for Box<T>:
+    fn to_string(&self) -> String:
+        self.as_ref().to_string()
+
+impl<T: Debug> Debug for Box<T>:
+    fn fmt(&self) -> String:
+        self.as_ref().fmt()
+
+impl<T> Drop for Box<T>:
+    fn drop(&mut self):
+        if self.ptr as usize == 0:
+            return
+        unsafe:
+            {
+                let _value = read(self.ptr as *const T)
+            }
+        dealloc_layout(self.ptr as *mut u8, Layout::from_size_align_unchecked(size_of::<T>(), align_of::<T>()))
+
+// ============================================
+// Rc
+// ============================================
+
+struct RcInner<T>:
+    strong_count: usize
+    weak_count: usize
+    value: T
+
+struct Rc<T>:
+    inner: *mut RcInner<T>
+
+impl<T> Rc<T>:
+    fn new(value: T) -> Rc<T>:
+        let layout = Layout::from_size_align_unchecked(size_of::<RcInner<T>>(), align_of::<RcInner<T>>())
+        let inner = alloc_layout(layout) as *mut RcInner<T>
+        if is_null(inner as *const RcInner<T>):
+            panic("Rc allocation failed")
+        unsafe:
+            (*inner).strong_count = 1
+            (*inner).weak_count = 0
+            write(&mut (*inner).value as *mut T, value)
+        Rc { inner: inner }
+
+    fn clone(&self) -> Rc<T>:
+        if self.inner as usize != 0:
+            unsafe:
+                (*self.inner).strong_count += 1
+        Rc { inner: self.inner }
+
+    fn strong_count(&self) -> usize:
+        if self.inner as usize == 0:
+            0
+        else:
+            unsafe:
+                (*self.inner).strong_count
+
+    fn weak_count(&self) -> usize:
+        if self.inner as usize == 0:
+            0
+        else:
+            unsafe:
+                (*self.inner).weak_count
+
+    fn as_ref(&self) -> &T:
+        unsafe:
+            &(*self.inner).value
+
+    fn get_mut(&mut self) -> Option<&mut T>:
+        if self.strong_count() == 1 and self.weak_count() == 0:
+            unsafe:
+                Option::Some(&mut (*self.inner).value)
+        else:
+            Option::None
+
+    fn downgrade(&self) -> Weak<T>:
+        if self.inner as usize != 0:
+            unsafe:
+                (*self.inner).weak_count += 1
+        Weak { inner: self.inner }
+
+    fn ptr_eq(a: &Rc<T>, b: &Rc<T>) -> bool:
+        a.inner == b.inner
+
+impl<T> Drop for Rc<T>:
+    fn drop(&mut self):
+        if self.inner as usize == 0:
+            return
+        unsafe:
+            (*self.inner).strong_count -= 1
+            if (*self.inner).strong_count == 0:
+                {
+                    let _value = read(&(*self.inner).value as *const T)
+                }
+                if (*self.inner).weak_count == 0:
+                    dealloc_layout(self.inner as *mut u8, Layout::from_size_align_unchecked(size_of::<RcInner<T>>(), align_of::<RcInner<T>>()))
+
+impl<T: PartialEq> PartialEq for Rc<T>:
+    fn eq(&self, other: &Rc<T>) -> bool:
+        self.as_ref().eq(other.as_ref())
+
+impl<T: Display> Display for Rc<T>:
+    fn to_string(&self) -> String:
+        self.as_ref().to_string()
+
+impl<T: Debug> Debug for Rc<T>:
+    fn fmt(&self) -> String:
+        self.as_ref().fmt()
+
+// ============================================
+// Weak
+// ============================================
+
+struct Weak<T>:
+    inner: *mut RcInner<T>
+
+impl<T> Weak<T>:
+    fn upgrade(&self) -> Option<Rc<T>>:
+        if self.inner as usize == 0:
+            Option::None
+        else if self.strong_count() == 0:
+            Option::None
+        else:
+            unsafe:
+                (*self.inner).strong_count += 1
+            Option::Some(Rc { inner: self.inner })
+
+    fn strong_count(&self) -> usize:
+        if self.inner as usize == 0:
+            0
+        else:
+            unsafe:
+                (*self.inner).strong_count
+
+    fn weak_count(&self) -> usize:
+        if self.inner as usize == 0:
+            0
+        else:
+            unsafe:
+                (*self.inner).weak_count
+
+impl<T> Drop for Weak<T>:
+    fn drop(&mut self):
+        if self.inner as usize == 0:
+            return
+        unsafe:
+            (*self.inner).weak_count -= 1
+            if (*self.inner).strong_count == 0 and (*self.inner).weak_count == 0:
+                dealloc_layout(self.inner as *mut u8, Layout::from_size_align_unchecked(size_of::<RcInner<T>>(), align_of::<RcInner<T>>()))
+
+impl<T> Clone for Weak<T>:
+    fn clone(&self) -> Weak<T>:
+        if self.inner as usize != 0:
+            unsafe:
+                (*self.inner).weak_count += 1
+        Weak { inner: self.inner }
+
+// ============================================
+// Arc
+// ============================================
+
+struct ArcInner<T>:
+    strong: AtomicUsize
+    weak: AtomicUsize
+    value: T
+
+struct Arc<T>:
+    inner: *mut ArcInner<T>
+
+impl<T> Arc<T>:
+    fn new(value: T) -> Arc<T>:
+        let layout = Layout::from_size_align_unchecked(size_of::<ArcInner<T>>(), align_of::<ArcInner<T>>())
+        let inner = alloc_layout(layout) as *mut ArcInner<T>
+        if is_null(inner as *const ArcInner<T>):
+            panic("Arc allocation failed")
+        unsafe:
+            (*inner).strong = AtomicUsize::new(1)
+            (*inner).weak = AtomicUsize::new(1)
+            write(&mut (*inner).value as *mut T, value)
+        Arc { inner: inner }
+
+    fn clone(&self) -> Arc<T>:
+        if self.inner as usize != 0:
+            unsafe:
+                (*self.inner).strong.fetch_add(1, Ordering::SeqCst)
+        Arc { inner: self.inner }
+
+    fn strong_count(&self) -> usize:
+        if self.inner as usize == 0:
+            0
+        else:
+            unsafe:
+                (*self.inner).strong.load(Ordering::SeqCst)
+
+    fn weak_count(&self) -> usize:
+        if self.inner as usize == 0:
+            0
+        else:
+            unsafe:
+                let count = (*self.inner).weak.load(Ordering::SeqCst)
+                if count == 0:
+                    0
+                else:
+                    count - 1
+
+    fn as_ref(&self) -> &T:
+        unsafe:
+            &(*self.inner).value
+
+    fn get_mut(&mut self) -> Option<&mut T>:
+        if self.strong_count() == 1 and self.weak_count() == 0:
+            unsafe:
+                Option::Some(&mut (*self.inner).value)
+        else:
+            Option::None
+
+    fn ptr_eq(a: &Arc<T>, b: &Arc<T>) -> bool:
+        a.inner == b.inner
+
+impl<T> Drop for Arc<T>:
+    fn drop(&mut self):
+        if self.inner as usize == 0:
+            return
+        unsafe:
+            if (*self.inner).strong.fetch_sub(1, Ordering::SeqCst) == 1:
+                {
+                    let _value = read(&(*self.inner).value as *const T)
+                }
+                if (*self.inner).weak.fetch_sub(1, Ordering::SeqCst) == 1:
+                    dealloc_layout(self.inner as *mut u8, Layout::from_size_align_unchecked(size_of::<ArcInner<T>>(), align_of::<ArcInner<T>>()))
+
+impl<T: PartialEq> PartialEq for Arc<T>:
+    fn eq(&self, other: &Arc<T>) -> bool:
+        self.as_ref().eq(other.as_ref())
+
+impl<T: Display> Display for Arc<T>:
+    fn to_string(&self) -> String:
+        self.as_ref().to_string()
+
+impl<T: Debug> Debug for Arc<T>:
+    fn fmt(&self) -> String:
+        self.as_ref().fmt()

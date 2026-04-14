@@ -112,6 +112,12 @@ pub struct TraitResolver {
     gat_cache: HashMap<(String, String, String), Type>,
 }
 
+impl Default for TraitResolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TraitResolver {
     pub fn new() -> Self {
         let mut resolver = Self {

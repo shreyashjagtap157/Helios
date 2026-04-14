@@ -22,6 +22,12 @@ pub struct TypeVarSubst {
     next_var_id: usize,
 }
 
+impl Default for TypeVarSubst {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TypeVarSubst {
     pub fn new() -> Self {
         Self {
@@ -88,6 +94,12 @@ pub enum InferConstraint {
 pub struct ConstraintSolver {
     constraints: VecDeque<InferConstraint>,
     subst: TypeVarSubst,
+}
+
+impl Default for ConstraintSolver {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ConstraintSolver {
@@ -188,7 +200,7 @@ impl ConstraintSolver {
             Type::Slice(elem) => self.occurs_check(var_id, &elem),
             Type::Function(params, ret) => {
                 params.iter().any(|p| self.occurs_check(var_id, p))
-                    || ret.as_ref().map_or(false, |r| self.occurs_check(var_id, r))
+                    || ret.as_ref().is_some_and(|r| self.occurs_check(var_id, r))
             }
             Type::Generic(_, args) => args.iter().any(|a| self.occurs_check(var_id, a)),
             Type::WithOwnership(inner, _) => self.occurs_check(var_id, &inner),

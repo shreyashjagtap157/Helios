@@ -72,6 +72,15 @@ mod phase_3_tests {
         let _checker = BorrowChecker::new();
         assert!(true);
     }
+
+    #[test]
+    fn test_polonius_stress_artifact_present() {
+        let contents = include_str!("../../tests/ui/polonius_stress.omni");
+        assert!(contents.contains("fn touch_pair"));
+        assert!(contents.contains("fn nested_borrow_flow"));
+        assert!(contents.contains("loop:"));
+        assert!(contents.contains("match"));
+    }
     #[test]
     fn test_mir() {
         assert!(true);

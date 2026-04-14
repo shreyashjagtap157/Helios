@@ -34,8 +34,15 @@ mod semantic;
 // `pprof` is only available on Unix targets (native signal-based sampling).
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
+use serde_json::json;
 use std::path::PathBuf;
 use std::time::Instant;
+
+#[derive(Debug, Default, Clone)]
+struct ExternalLinkDirectives {
+    link_libs: Vec<String>,
+    link_paths: Vec<String>,
+}
 
 fn stage_trace_enabled() -> bool {
     std::env::var("OMNI_STAGE_TRACE")
@@ -177,9 +184,50 @@ struct Args {
     #[arg(long)]
     emit_typed_ast: bool,
 
+    /// Emit diagnostics as JSON lines (partial coverage in compile pipeline)
+    #[arg(long)]
+    diagnostics_json: bool,
+
     /// Arguments to pass to the program when using --run
     #[arg(last = true)]
     program_args: Vec<String>,
+}
+
+fn emit_diagnostic(args: &Args, level: &str, code: Option<&str>, message: &str) {
+    let machine_fix = suggested_machine_fix(code, message);
+
+    if args.diagnostics_json {
+        let payload = json!({
+            "level": level,
+            "code": code,
+            "message": message,
+            "fix": machine_fix,
+        });
+        eprintln!("{}", payload);
+        return;
+    }
+
+    if let Some(code) = code {
+        eprintln!("{}[{}]: {}", level, code, message);
+    } else {
+        eprintln!("{}: {}", level, message);
+    }
+
+    if let Some(fix) = machine_fix {
+        eprintln!("help: suggested fix: {}", fix);
+    }
+}
+
+fn suggested_machine_fix(code: Option<&str>, message: &str) -> Option<&'static str> {
+    match code {
+        Some("E005") => Some("Add an explicit type annotation or insert a cast to align expected and actual types."),
+        Some("E006") => Some("Reorder uses to avoid overlapping borrows, or clone/split the value before borrowing."),
+        Some("E007") if message.contains("effect:") => {
+            Some("Annotate the function with the required effect or propagate the effect in the caller signature.")
+        }
+        Some("E007") => Some("Use a memory operation compatible with the selected mode/zone, or move the operation into an allowed zone."),
+        _ => None,
+    }
 }
 
 fn main() -> Result<()> {
@@ -342,6 +390,8 @@ fn main() -> Result<()> {
 }
 
 fn compile(source: &str, args: &Args) -> Result<()> {
+    let external_link_directives = parse_external_link_directives();
+
     // Validate --mode early with a clear error
     let module_mode: modes::ModuleMode = args
         .mode
@@ -427,7 +477,7 @@ fn compile(source: &str, args: &Args) -> Result<()> {
 
     // Phase 2.0.1: Conditional compilation (#[cfg(...)] filtering)
     log::debug!("Phase 2.0.1: Conditional compilation (cfg filtering)");
-    let ast = apply_cfg_attributes(ast);
+    let ast = apply_cfg_attributes(ast, &parse_external_cfg_flags());
 
     // --emit-ast: dump parsed AST and exit
     if args.emit_ast {
@@ -461,7 +511,7 @@ fn compile(source: &str, args: &Args) -> Result<()> {
 
     if !mz_checker.is_valid() {
         for v in mz_checker.validate() {
-            eprintln!("warning[E007]: memory zone: {}", v);
+            emit_diagnostic(args, "warning", Some("E007"), &format!("memory zone: {}", v));
         }
     }
 
@@ -472,18 +522,18 @@ fn compile(source: &str, args: &Args) -> Result<()> {
     match type_result {
         Ok(result) => {
             for w in &result.warnings {
-                eprintln!("warning: type inference: {}", w);
+                emit_diagnostic(args, "warning", None, &format!("type inference: {}", w));
             }
         }
         Err(errors) => {
             let hard_errors: Vec<_> = errors.iter().filter(|e| is_hard_type_error(e)).collect();
             let warnings: Vec<_> = errors.iter().filter(|e| !is_hard_type_error(e)).collect();
             for w in &warnings {
-                eprintln!("warning: type inference: {}", w);
+                emit_diagnostic(args, "warning", None, &format!("type inference: {}", w));
             }
             if !hard_errors.is_empty() {
                 for e in &hard_errors {
-                    eprintln!("error[E005]: type error: {}", e);
+                    emit_diagnostic(args, "error", Some("E005"), &format!("type error: {}", e));
                 }
                 return Err(anyhow::anyhow!(
                     "Type checking failed with {} error(s)",
@@ -501,7 +551,7 @@ fn compile(source: &str, args: &Args) -> Result<()> {
     let borrow_errors = semantic::polonius::run_polonius(&ast);
     if !borrow_errors.is_empty() {
         for e in &borrow_errors {
-            eprintln!("error[E006]: borrow check: {}", e);
+            emit_diagnostic(args, "error", Some("E006"), &format!("borrow check: {}", e));
         }
         anyhow::bail!(
             "{} borrow checking error(s) — ownership violations must be fixed",
@@ -514,6 +564,24 @@ fn compile(source: &str, args: &Args) -> Result<()> {
     let sem_t0 = stage_enter("phase3.semantic_analysis");
     let typed_ast = semantic::analyze(ast)?;
     stage_exit("phase3.semantic_analysis", sem_t0);
+
+    // Phase 3.5: Effect system validation (Phase 8)
+    // Validates effect handlers, effect polymorphism, structured concurrency
+    log::debug!("Phase 3.5: Effect system validation");
+    monitor::update_heartbeat();
+    let effect_result = semantic::phase8_effects::validate_effects(&typed_ast);
+    match effect_result {
+        Ok(_) => {}
+        Err(effects_errors) => {
+            for e in &effects_errors {
+                emit_diagnostic(args, "error", Some("E007"), &format!("effect: {}", e));
+            }
+            anyhow::bail!(
+                "{} effect error(s) — effects must be handled",
+                effects_errors.len()
+            );
+        }
+    }
 
     // --emit-typed-ast: dump typed AST and exit
     if args.emit_typed_ast {
@@ -544,7 +612,9 @@ fn compile(source: &str, args: &Args) -> Result<()> {
         let out = codegen::ovm_direct::generate_ovm_direct(&typed_ast, &output_path)
             .map_err(|e| anyhow::anyhow!("{}", e));
         stage_exit("phase4_5.ovm_direct_codegen", ovm_t0);
-        return out;
+        out?;
+        write_link_directives_sidecar(&output_path, &external_link_directives)?;
+        return Ok(());
     }
 
     // Phase 4: IR generation (for LLVM/native targets or --emit-ir)
@@ -568,6 +638,8 @@ fn compile(source: &str, args: &Args) -> Result<()> {
 
     codegen::generate_with_target(omni_ir, &output_path, args.opt_level, args.target.into())
         .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    write_link_directives_sidecar(&output_path, &external_link_directives)?;
 
     // DWARF Emission
     if args.debug_info {
@@ -877,7 +949,69 @@ fn resolve_imports_impl(
 ///   - `#[cfg(target_os = "<os>")]`       — matches a specific OS (linux, macos, windows)
 ///
 /// Items without any `#[cfg(...)]` attribute are always retained.
-fn apply_cfg_attributes(module: parser::ast::Module) -> parser::ast::Module {
+fn parse_external_cfg_flags() -> std::collections::HashSet<String> {
+    let raw = std::env::var("OMNI_CFG_FLAGS").unwrap_or_default();
+    raw.split(';')
+        .map(str::trim)
+        .filter(|flag| !flag.is_empty())
+        .map(|flag| flag.to_string())
+        .collect()
+}
+
+fn parse_external_link_directives() -> ExternalLinkDirectives {
+    fn split_env_list(var_name: &str) -> Vec<String> {
+        std::env::var(var_name)
+            .unwrap_or_default()
+            .split(';')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string())
+            .collect()
+    }
+
+    ExternalLinkDirectives {
+        link_libs: split_env_list("OMNI_LINK_LIBS"),
+        link_paths: split_env_list("OMNI_LINK_PATHS"),
+    }
+}
+
+fn write_link_directives_sidecar(
+    output_path: &std::path::Path,
+    directives: &ExternalLinkDirectives,
+) -> Result<()> {
+    if directives.link_libs.is_empty() && directives.link_paths.is_empty() {
+        return Ok(());
+    }
+
+    let file_name = output_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("output");
+    let sidecar = output_path.with_file_name(format!("{file_name}.link"));
+
+    let mut content = String::new();
+    content.push_str("# omni link directives\n");
+    for lib in &directives.link_libs {
+        content.push_str("link_lib=");
+        content.push_str(lib);
+        content.push('\n');
+    }
+    for path in &directives.link_paths {
+        content.push_str("link_path=");
+        content.push_str(path);
+        content.push('\n');
+    }
+
+    std::fs::write(&sidecar, content.as_bytes())
+        .map_err(|e| anyhow::anyhow!("failed to write link sidecar {:?}: {}", sidecar, e))?;
+    log::info!("Wrote linker directives sidecar to {:?}", sidecar);
+    Ok(())
+}
+
+fn apply_cfg_attributes(
+    module: parser::ast::Module,
+    external_cfg_flags: &std::collections::HashSet<String>,
+) -> parser::ast::Module {
     let os = std::env::consts::OS; // "linux", "macos", "windows", etc.
     let family = std::env::consts::FAMILY; // "unix" or "windows"
 
@@ -886,9 +1020,9 @@ fn apply_cfg_attributes(module: parser::ast::Module) -> parser::ast::Module {
         .into_iter()
         .filter(|item| {
             let attrs = item_attributes(item);
-            cfg_attrs_match(attrs, os, family)
+            cfg_attrs_match(attrs, os, family, external_cfg_flags)
         })
-        .map(|item| apply_cfg_to_inner_items(item, os, family))
+        .map(|item| apply_cfg_to_inner_items(item, os, family, external_cfg_flags))
         .collect();
 
     parser::ast::Module { items }
@@ -916,14 +1050,19 @@ fn item_attributes(item: &parser::ast::Item) -> &[String] {
 
 /// Recursively apply cfg filtering to nested items (e.g. methods inside
 /// impl blocks, functions inside modules).
-fn apply_cfg_to_inner_items(item: parser::ast::Item, os: &str, family: &str) -> parser::ast::Item {
+fn apply_cfg_to_inner_items(
+    item: parser::ast::Item,
+    os: &str,
+    family: &str,
+    external_cfg_flags: &std::collections::HashSet<String>,
+) -> parser::ast::Item {
     match item {
         parser::ast::Item::Module(mut m) => {
             m.items = m
                 .items
                 .into_iter()
-                .filter(|i| cfg_attrs_match(item_attributes(i), os, family))
-                .map(|i| apply_cfg_to_inner_items(i, os, family))
+                .filter(|i| cfg_attrs_match(item_attributes(i), os, family, external_cfg_flags))
+                .map(|i| apply_cfg_to_inner_items(i, os, family, external_cfg_flags))
                 .collect();
             parser::ast::Item::Module(m)
         }
@@ -931,7 +1070,7 @@ fn apply_cfg_to_inner_items(item: parser::ast::Item, os: &str, family: &str) -> 
             imp.methods = imp
                 .methods
                 .into_iter()
-                .filter(|f| cfg_attrs_match(&f.attributes, os, family))
+                .filter(|f| cfg_attrs_match(&f.attributes, os, family, external_cfg_flags))
                 .collect();
             parser::ast::Item::Impl(imp)
         }
@@ -939,7 +1078,7 @@ fn apply_cfg_to_inner_items(item: parser::ast::Item, os: &str, family: &str) -> 
             t.methods = t
                 .methods
                 .into_iter()
-                .filter(|f| cfg_attrs_match(&f.attributes, os, family))
+                .filter(|f| cfg_attrs_match(&f.attributes, os, family, external_cfg_flags))
                 .collect();
             parser::ast::Item::Trait(t)
         }
@@ -947,7 +1086,7 @@ fn apply_cfg_to_inner_items(item: parser::ast::Item, os: &str, family: &str) -> 
             s.methods = s
                 .methods
                 .into_iter()
-                .filter(|f| cfg_attrs_match(&f.attributes, os, family))
+                .filter(|f| cfg_attrs_match(&f.attributes, os, family, external_cfg_flags))
                 .collect();
             parser::ast::Item::Struct(s)
         }
@@ -955,7 +1094,7 @@ fn apply_cfg_to_inner_items(item: parser::ast::Item, os: &str, family: &str) -> 
             e.functions = e
                 .functions
                 .into_iter()
-                .filter(|f| cfg_attrs_match(&f.attributes, os, family))
+                .filter(|f| cfg_attrs_match(&f.attributes, os, family, external_cfg_flags))
                 .collect();
             parser::ast::Item::Extern(e)
         }
@@ -967,7 +1106,12 @@ fn apply_cfg_to_inner_items(item: parser::ast::Item, os: &str, family: &str) -> 
 /// If there are no cfg attributes, the item is unconditionally included.
 ///
 /// Also recognizes the `@cfg(...)` decorator syntax and normalizes it to `#[cfg(...)]`.
-fn cfg_attrs_match(attrs: &[String], os: &str, family: &str) -> bool {
+fn cfg_attrs_match(
+    attrs: &[String],
+    os: &str,
+    family: &str,
+    external_cfg_flags: &std::collections::HashSet<String>,
+) -> bool {
     for attr in attrs {
         // Normalize @cfg(...) → #[cfg(...)] for matching purposes
         let normalized = if attr.starts_with("@cfg(") {
@@ -977,7 +1121,7 @@ fn cfg_attrs_match(attrs: &[String], os: &str, family: &str) -> bool {
         };
 
         if let Some(condition) = extract_cfg_condition(&normalized) {
-            if !evaluate_cfg_condition(condition, os, family) {
+            if !evaluate_cfg_condition(condition, os, family, external_cfg_flags) {
                 return false;
             }
         }
@@ -1007,14 +1151,74 @@ fn extract_cfg_condition(attr: &str) -> Option<&str> {
 ///
 /// The condition string comes from the parsed attribute. Due to how the parser
 /// joins tokens, `target_os = "linux"` is stored as `target_os, =, "linux"`.
-fn evaluate_cfg_condition(condition: &str, os: &str, family: &str) -> bool {
+fn evaluate_cfg_condition(
+    condition: &str,
+    os: &str,
+    family: &str,
+    external_cfg_flags: &std::collections::HashSet<String>,
+) -> bool {
     let cond = condition.trim();
+
+    if let Some(inner) = cfg_function_args(cond, "any") {
+        let args = split_cfg_args(inner);
+        if args.is_empty() {
+            return false;
+        }
+        return args
+            .iter()
+            .any(|arg| evaluate_cfg_condition(arg, os, family, external_cfg_flags));
+    }
+
+    if let Some(inner) = cfg_function_args(cond, "all") {
+        let args = split_cfg_args(inner);
+        if args.is_empty() {
+            return false;
+        }
+        return args
+            .iter()
+            .all(|arg| evaluate_cfg_condition(arg, os, family, external_cfg_flags));
+    }
+
+    if let Some(inner) = cfg_function_args(cond, "not") {
+        let args = split_cfg_args(inner);
+        if args.len() != 1 {
+            return false;
+        }
+        return !evaluate_cfg_condition(&args[0], os, family, external_cfg_flags);
+    }
+
+    if external_cfg_flags.contains(cond) {
+        return true;
+    }
 
     // Simple platform family: cfg(unix), cfg(windows)
     match cond {
         "unix" => return family == "unix",
         "windows" => return family == "windows",
         _ => {}
+    }
+
+    if cond.starts_with("feature") {
+        let parts: Vec<&str> = cond.splitn(3, ", ").collect();
+        if parts.len() == 3 && parts[0] == "feature" && parts[1] == "=" {
+            let value = parts[2].trim_matches('"');
+            return external_cfg_flags.contains(&format!("feature={value}"));
+        }
+        if let Some(rest) = cond.strip_prefix("feature") {
+            let rest = rest.trim();
+            if let Some(rest) = rest.strip_prefix('=') {
+                let value = rest.trim().trim_matches('"');
+                return external_cfg_flags.contains(&format!("feature={value}"));
+            }
+        }
+        return false;
+    }
+
+    if cond
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return false;
     }
 
     // target_os = "value" — stored as "target_os, =, \"value\"" by the parser
@@ -1042,6 +1246,222 @@ fn evaluate_cfg_condition(condition: &str, os: &str, family: &str) -> bool {
         cond
     );
     true
+}
+
+fn cfg_function_args<'a>(cond: &'a str, name: &str) -> Option<&'a str> {
+    let prefix = format!("{name}(");
+    if cond.starts_with(&prefix) && cond.ends_with(')') {
+        return Some(&cond[prefix.len()..cond.len() - 1]);
+    }
+
+    // Parser-tokenized fallback form: `name, (, ... , )`
+    let tokenized_prefix = format!("{name}, (");
+    let tokenized_suffix = ", )";
+    if cond.starts_with(&tokenized_prefix) && cond.ends_with(tokenized_suffix) {
+        return Some(&cond[tokenized_prefix.len()..cond.len() - tokenized_suffix.len()]);
+    }
+
+    None
+}
+
+fn split_cfg_args(inner: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut depth = 0usize;
+    let mut current = String::new();
+    let chars: Vec<char> = inner.chars().collect();
+    let mut idx = 0usize;
+
+    while idx < chars.len() {
+        let ch = chars[idx];
+        match ch {
+            '(' => {
+                depth += 1;
+                current.push(ch);
+            }
+            ')' => {
+                depth = depth.saturating_sub(1);
+                current.push(ch);
+            }
+            ',' => {
+                let next_is_space = idx + 1 < chars.len() && chars[idx + 1] == ' ';
+                if depth == 0 && next_is_space {
+                    let candidate = current.trim();
+                    if !candidate.is_empty() {
+                        args.push(candidate.to_string());
+                    }
+                    current.clear();
+                    idx += 1;
+                } else {
+                    current.push(ch);
+                }
+            }
+            _ => current.push(ch),
+        }
+        idx += 1;
+    }
+
+    let tail = current.trim();
+    if !tail.is_empty() {
+        args.push(tail.to_string());
+    }
+
+    args
+}
+
+#[cfg(test)]
+mod cfg_condition_tests {
+    use super::*;
+
+    #[test]
+    fn feature_condition_respects_external_flags() {
+        let mut flags = std::collections::HashSet::new();
+        flags.insert("feature=demo".to_string());
+
+        assert!(evaluate_cfg_condition(
+            "feature, =, \"demo\"",
+            "linux",
+            "unix",
+            &flags
+        ));
+        assert!(!evaluate_cfg_condition(
+            "feature, =, \"other\"",
+            "linux",
+            "unix",
+            &flags
+        ));
+    }
+
+    #[test]
+    fn custom_flag_condition_respects_external_flags() {
+        let mut flags = std::collections::HashSet::new();
+        flags.insert("my_custom_cfg".to_string());
+
+        assert!(evaluate_cfg_condition(
+            "my_custom_cfg",
+            "linux",
+            "unix",
+            &flags
+        ));
+        assert!(!evaluate_cfg_condition(
+            "missing_custom_cfg",
+            "linux",
+            "unix",
+            &flags
+        ));
+    }
+
+    #[test]
+    fn cfg_any_all_not_conditions_are_supported() {
+        let mut flags = std::collections::HashSet::new();
+        flags.insert("feature=demo".to_string());
+        flags.insert("custom_build_flag".to_string());
+
+        assert!(evaluate_cfg_condition(
+            "any(windows, feature = \"demo\")",
+            "linux",
+            "unix",
+            &flags
+        ));
+        assert!(evaluate_cfg_condition(
+            "all(unix, not(windows), feature = \"demo\")",
+            "linux",
+            "unix",
+            &flags
+        ));
+        assert!(!evaluate_cfg_condition(
+            "all(unix, feature = \"missing\")",
+            "linux",
+            "unix",
+            &flags
+        ));
+        assert!(evaluate_cfg_condition(
+            "not(windows)",
+            "linux",
+            "unix",
+            &flags
+        ));
+        assert!(evaluate_cfg_condition(
+            "any(feature = \"missing\", custom_build_flag)",
+            "linux",
+            "unix",
+            &flags
+        ));
+    }
+
+    #[test]
+    fn parse_external_link_directives_splits_values() {
+        std::env::set_var("OMNI_LINK_LIBS", "static=foo; dylib=bar ");
+        std::env::set_var("OMNI_LINK_PATHS", " /tmp/a ;/tmp/b");
+
+        let directives = parse_external_link_directives();
+        assert_eq!(directives.link_libs, vec!["static=foo", "dylib=bar"]);
+        assert_eq!(directives.link_paths, vec!["/tmp/a", "/tmp/b"]);
+
+        std::env::remove_var("OMNI_LINK_LIBS");
+        std::env::remove_var("OMNI_LINK_PATHS");
+    }
+
+    #[test]
+    fn write_link_directives_sidecar_writes_expected_entries() {
+        let root = std::env::temp_dir().join(format!(
+            "omni-link-sidecar-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("create temp dir");
+        let output = root.join("demo.ovm");
+
+        let directives = ExternalLinkDirectives {
+            link_libs: vec!["static=foo".to_string()],
+            link_paths: vec!["/tmp/omni".to_string()],
+        };
+
+        write_link_directives_sidecar(&output, &directives).expect("write sidecar");
+
+        let sidecar = root.join("demo.ovm.link");
+        let content = std::fs::read_to_string(&sidecar).expect("read sidecar");
+        assert!(content.contains("link_lib=static=foo"));
+        assert!(content.contains("link_path=/tmp/omni"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn diagnostics_json_payload_contains_expected_fields() {
+        let payload = json!({
+            "level": "error",
+            "code": "E005",
+            "message": "type error: mismatch",
+            "fix": "Add an explicit type annotation or insert a cast to align expected and actual types.",
+        });
+        let value: serde_json::Value =
+            serde_json::from_str(&payload.to_string()).expect("valid json payload");
+
+        assert_eq!(value["level"], "error");
+        assert_eq!(value["code"], "E005");
+        assert_eq!(value["message"], "type error: mismatch");
+        assert_eq!(
+            value["fix"],
+            "Add an explicit type annotation or insert a cast to align expected and actual types."
+        );
+    }
+
+    #[test]
+    fn suggested_machine_fix_returns_expected_message() {
+        let type_fix = suggested_machine_fix(Some("E005"), "type error: mismatch");
+        assert!(type_fix
+            .expect("type fix")
+            .contains("explicit type annotation"));
+
+        let borrow_fix = suggested_machine_fix(Some("E006"), "borrow check: overlap");
+        assert!(borrow_fix.expect("borrow fix").contains("overlapping borrows"));
+
+        let none_fix = suggested_machine_fix(None, "informational");
+        assert!(none_fix.is_none());
+    }
 }
 
 /// Determine whether a type error is a "hard" (fatal) error.

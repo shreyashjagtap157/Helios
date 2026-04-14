@@ -25,6 +25,12 @@ pub struct TypeCache {
     assoc_cache: Arc<Mutex<HashMap<(String, String), Type>>>,
 }
 
+impl Default for TypeCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TypeCache {
     pub fn new() -> Self {
         Self {
@@ -183,6 +189,12 @@ pub struct ConstraintSolvingOptimizer {
     solution_cache: HashMap<String, Vec<(String, String)>>,
     /// Track most common constraint patterns
     pattern_frequency: HashMap<String, usize>,
+}
+
+impl Default for ConstraintSolvingOptimizer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ConstraintSolvingOptimizer {

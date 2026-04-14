@@ -4,6 +4,7 @@ module std::core
 pub use std::tensor
 pub use std::async
 pub use std::serde
+pub use std::alloc
 
 // ============================================
 // Primitive Types & Traits
@@ -337,90 +338,6 @@ impl Iterator for StringChars:
         Option::Some(c)
 
 // ============================================
-// Memory Management
-// ============================================
-
-struct Box<T>:
-    ptr: usize
-    _marker: PhantomData<T>
-    
-    fn new(value: T) -> Box<T>:
-        // Intrinsic allocation
-        let size = size_of::<T>()
-        let ptr = __intrinsic_alloc(size, align_of::<T>())
-        __intrinsic_write(ptr, value)
-        Box { ptr, _marker: PhantomData }
-        
-    fn as_ref(&self) -> &T:
-        __intrinsic_read(self.ptr)
-        
-    fn as_mut(&mut self) -> &mut T:
-        __intrinsic_read_mut(self.ptr)
-        
-    fn into_inner(self) -> T:
-        let value = __intrinsic_read(self.ptr)
-        __intrinsic_dealloc(self.ptr)
-        value
-
-impl<T> Drop for Box<T>:
-    fn drop(&mut self):
-        // Call destructor on inner value
-        let inner: &mut T = __intrinsic_read_mut(self.ptr)
-        inner.drop()
-        __intrinsic_dealloc(self.ptr)
-
-struct Rc<T>:
-    ptr: usize  // Points to RcInner<T>
-    
-struct RcInner<T>:
-    strong_count: usize
-    weak_count: usize
-    value: T
-    
-impl<T> Rc<T>:
-    fn new(value: T) -> Rc<T>:
-        let inner = RcInner {
-            strong_count: 1,
-            weak_count: 0,
-            value
-        }
-        let ptr = __intrinsic_alloc(size_of::<RcInner<T>>(), align_of::<RcInner<T>>())
-        __intrinsic_write(ptr, inner)
-        Rc { ptr }
-        
-    fn clone(&self) -> Rc<T>:
-        let inner: &mut RcInner<T> = __intrinsic_read_mut(self.ptr)
-        inner.strong_count += 1
-        Rc { ptr: self.ptr }
-        
-    fn strong_count(&self) -> usize:
-        let inner: &RcInner<T> = __intrinsic_read(self.ptr)
-        inner.strong_count
-
-impl<T> Drop for Rc<T>:
-    fn drop(&mut self):
-        let inner: &mut RcInner<T> = __intrinsic_read_mut(self.ptr)
-        inner.strong_count -= 1
-        if inner.strong_count == 0:
-            inner.value.drop()
-            if inner.weak_count == 0:
-                __intrinsic_dealloc(self.ptr)
-
-struct Arc<T>:
-    ptr: usize  // Thread-safe reference counting
-    
-impl<T: Send + Sync> Arc<T>:
-    fn new(value: T) -> Arc<T>:
-        let inner = ArcInner {
-            strong_count: AtomicUsize::new(1),
-            weak_count: AtomicUsize::new(0),
-            value
-        }
-        let ptr = __intrinsic_alloc(size_of::<ArcInner<T>>(), align_of::<ArcInner<T>>())
-        __intrinsic_write(ptr, inner)
-        Arc { ptr }
-
-// ============================================
 // Error Handling
 // ============================================
 
@@ -537,6 +454,174 @@ impl Hasher for FnvHasher:
         for b in bytes:
             self.state ^= b as u64
             self.state = self.state.wrapping_mul(0x100000001b3)  // FNV prime
+
+// ============================================
+// Generational References (v2.0)
+// ============================================
+
+// Gen<T> - generational reference for safe cyclic data structures
+// Uses generation counters to detect use-after-free
+struct Gen<T>:
+    ptr: usize
+    generation: u32
+    
+    fn new(value: T, arena: &mut GenArena<T>) -> Gen<T>:
+        arena.alloc(value)
+    
+    fn get(arena: &GenArena<T>) -> Option<&T>:
+        if self.generation == arena.get_generation(self.ptr):
+            Some(arena.get(self.ptr))
+        else:
+            None
+    
+    fn get_mut(arena: &mut GenArena<T>) -> Option<&mut T>:
+        if self.generation == arena.get_generation(self.ptr):
+            Some(arena.get_mut(self.ptr))
+        else:
+            None
+    
+    fn is_valid(arena: &GenArena<T>) -> bool:
+        self.generation == arena.get_generation(self.ptr)
+
+struct GenArena<T>:
+    data: Vec<Option<T>>
+    generations: Vec<u32>
+    free_list: Vec<usize>
+    next_id: u32
+    
+    fn new() -> GenArena<T>:
+        GenArena {
+            data: Vec::new(),
+            generations: Vec::new(),
+            free_list: Vec::new(),
+            next_id: 1
+        }
+    
+    fn alloc(&mut self, value: T) -> Gen<T>:
+        let idx = if self.free_list.len() > 0:
+            self.free_list.pop()
+        else:
+            let new_idx = self.data.len()
+            self.data.push(Option::None)
+            self.generations.push(0)
+            new_idx
+        
+        self.data[idx] = Option::Some(value)
+        let gen = self.next_id
+        self.generations[idx] = gen
+        self.next_id += 1
+        Gen { ptr: idx, generation: gen }
+    
+    fn get(&self, idx: usize) -> &T:
+        self.data[idx].as_ref().unwrap()
+    
+    fn get_mut(&mut self, idx: usize) -> &mut T:
+        self.data[idx].as_mut().unwrap()
+    
+    fn get_generation(&self, idx: usize) -> u32:
+        self.generations[idx]
+    
+    fn remove(&mut self, idx: usize):
+        self.data[idx] = Option::None
+        self.free_list.push(idx)
+
+impl<T> Drop for GenArena<T>:
+    fn drop(&mut self):
+        // All items dropped when arena drops
+        ()
+
+// ============================================
+// SlotMap (v2.0)
+// ============================================
+
+// SlotMap<T> - dense mapping with stable handles
+// Common in game engines and graph libraries
+struct SlotMap<T>:
+    slots: Vec<Slot<T>>
+    free_list: Vec< usize>
+    next_key: u32
+
+struct Slot<T>:
+    key: u32
+    version: u32
+    value: T
+
+struct Key:
+    index: u32
+    version: u32
+    
+    fn new(index: u32, version: u32) -> Key:
+        Key { index, version }
+
+impl<T> SlotMap<T>:
+    fn new() -> SlotMap<T>:
+        SlotMap {
+            slots: Vec::new(),
+            free_list: Vec::new(),
+            next_key: 1
+        }
+    
+    fn insert(&mut self, value: T) -> Key:
+        let idx = if self.free_list.len() > 0:
+            self.free_list.pop()
+        else:
+            let new_idx = self.slots.len()
+            self.slots.push(Slot {
+                key: self.next_key,
+                version: 1,
+                value: value
+            })
+            self.next_key += 1
+            return Key { index: new_idx as u32, version: 1 }
+        
+        self.slots[idx] = Slot {
+            key: self.next_key,
+            version: 1,
+            value: value
+        }
+        self.next_key += 1
+        Key { index: idx as u32, version: 1 }
+    
+    fn get(&self, key: Key) -> Option<&T>:
+        let idx = key.index as usize
+        if idx >= self.slots.len():
+            return Option::None
+        let slot = &self.slots[idx]
+        if slot.version == key.version:
+            Option::Some(&slot.value)
+        else:
+            Option::None
+    
+    fn get_mut(&mut self, key: Key) -> Option<&mut T>:
+        let idx = key.index as usize
+        if idx >= self.slots.len():
+            return Option::None
+        let slot = &mut self.slots[idx]
+        if slot.version == key.version:
+            Option::Some(&mut slot.value)
+        else:
+            Option::None
+    
+    fn remove(&mut self, key: Key) -> Option<T>:
+        let idx = key.index as usize
+        if idx >= self.slots.len():
+            return Option::None
+        let slot = &mut self.slots[idx]
+        if slot.version == key.version:
+            slot.version += 1
+            self.free_list.push(idx)
+            Option::Some(slot.value)
+        else:
+            Option::None
+    
+    fn contains(&self, key: Key) -> bool:
+        self.get(key).is_some()
+    
+    fn len(&self) -> usize:
+        self.slots.len() - self.free_list.len()
+    
+    fn is_empty(&self) -> bool:
+        self.len() == 0
 
 // ============================================
 // Intrinsics

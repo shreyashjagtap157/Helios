@@ -43,6 +43,12 @@ pub struct Runtime {
     running: Arc<AtomicBool>,
 }
 
+impl Default for Runtime {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Runtime {
     pub fn new() -> Self {
         Runtime {

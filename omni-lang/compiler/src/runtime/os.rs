@@ -66,7 +66,7 @@ pub fn handle_call(func: &str, args: &[RuntimeValue]) -> Result<RuntimeValue, St
             #[cfg(target_os = "windows")]
             {
                 match Command::new("powershell")
-                    .args(&["-command", "Get-Clipboard"])
+                    .args(["-command", "Get-Clipboard"])
                     .output()
                 {
                     Ok(output) => {
@@ -113,7 +113,7 @@ pub fn handle_call(func: &str, args: &[RuntimeValue]) -> Result<RuntimeValue, St
             #[cfg(target_os = "windows")]
             {
                 let _ = Command::new("powershell")
-                    .args(&[
+                    .args([
                         "-command",
                         &format!("Set-Clipboard '{}'", text.replace("'", "''")),
                     ])
@@ -171,7 +171,7 @@ pub fn handle_call(func: &str, args: &[RuntimeValue]) -> Result<RuntimeValue, St
                     title.replace("'", "''")
                 );
                 let _ = Command::new("powershell")
-                    .args(&["-command", &script])
+                    .args(["-command", &script])
                     .output();
             }
             #[cfg(target_os = "linux")]

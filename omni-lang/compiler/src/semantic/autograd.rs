@@ -32,6 +32,12 @@ pub(crate) enum OpType {
     Custom(String),
 }
 
+impl Default for GradientTape {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GradientTape {
     pub fn new() -> Self {
         Self {

@@ -1,0 +1,89 @@
+module compiler::tests::ui::polonius_stress
+
+import std::core
+
+struct Pair:
+    left: i32
+    right: i32
+
+fn touch_pair(pair: &mut Pair, flip: bool) -> i32:
+    let mut total = 0
+    let mut rounds = 0
+
+    while rounds < 4:
+        match flip:
+            true =>
+                let left = &mut pair.left
+                total += *left
+                if total > 12:
+                    return total
+                *left = *left + 1
+            false =>
+                let right = &mut pair.right
+                if *right > 3:
+                    let alias = &mut pair.left
+                    total += *alias
+                    if total > 20:
+                        return total
+                else:
+                    *right = *right + 2
+
+        if total > 30:
+            break
+
+        rounds += 1
+
+    total
+
+fn nested_borrow_flow(flag: bool, a: &mut i32, b: &mut i32) -> i32:
+    let mut acc = 0
+    loop:
+        match flag:
+            true =>
+                let first = a
+                acc += *first
+                if acc > 5:
+                    return acc
+
+                let second = b
+                if *second < 0:
+                    return acc
+                *second = *second + 1
+            false =>
+                let alt = b
+                match *alt > 10:
+                    true =>
+                        let shadow = a
+                        acc += *shadow
+                        if acc > 8:
+                            return acc
+                    false =>
+                        *alt = *alt + 1
+
+        if acc > 40:
+            break
+        acc += 1
+
+    acc
+
+fn alias_then_return(value: &mut i32, gate: bool) -> i32:
+    let mut result = 0
+    let mut current = value
+
+    if gate:
+        let branch = current
+        result += *branch
+        if result > 3:
+            return result
+        *branch = *branch + 1
+    else:
+        let branch = current
+        match *branch > 0:
+            true =>
+                result += *branch
+                if result > 10:
+                    return result
+            false =>
+                *branch = 1
+
+    result + *current

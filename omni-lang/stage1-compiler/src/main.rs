@@ -44,7 +44,10 @@ fn run() -> Result<(), String> {
 
     match command {
         "check" => {
-            println!("ok: {} passed lexer/parser/semantic/ir pipeline", input_path.display());
+            println!(
+                "ok: {} passed lexer/parser/semantic/ir pipeline",
+                input_path.display()
+            );
             Ok(())
         }
         "emit-ir" => {
@@ -122,6 +125,20 @@ mod tests {
         let source = "fn main() -> i64 { return 0; }";
         let ir = compile_to_ir(source).expect("minimal program should compile to ir");
         assert!(!ir.functions.is_empty());
+    }
+
+    #[test]
+    fn compile_to_ir_infers_return_type_for_unannotated_function() {
+        let source = "fn main():\n    return 0";
+        let ir = compile_to_ir(source).expect("unannotated return should be inferred");
+        assert_eq!(ir.functions[0].return_type, ast::Type::I64);
+    }
+
+    #[test]
+    fn compile_to_ir_defaults_unannotated_side_effect_function_to_void() {
+        let source = "fn main():\n    println(\"ok\")";
+        let ir = compile_to_ir(source).expect("side-effect-only function should compile");
+        assert_eq!(ir.functions[0].return_type, ast::Type::Void);
     }
 
     #[test]

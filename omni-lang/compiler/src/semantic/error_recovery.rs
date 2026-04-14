@@ -172,6 +172,12 @@ pub struct ErrorRecovery {
     recovery_patterns: HashMap<String, Vec<String>>,
 }
 
+impl Default for ErrorRecovery {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ErrorRecovery {
     pub fn new() -> Self {
         let mut recovery_patterns = HashMap::new();
@@ -248,6 +254,12 @@ pub struct DiagnosticCollector {
     errors: Vec<SemanticError>,
     warnings: Vec<String>,
     notes: Vec<String>,
+}
+
+impl Default for DiagnosticCollector {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DiagnosticCollector {

@@ -89,7 +89,7 @@ The repository contains **two parallel compiler implementations** that share no 
 
 ### 1.3 Build and Compilation Status
 
-- **`cargo build --workspace`**: Cannot be determined without running, but the project has two separate Cargo workspaces (`compiler/` and `tools/`; [ovm/](file:///d:/Project/Helios/omni-lang/build/hello.ovm) and `stage1-compiler/` are independent).
+- **`cargo build --workspace`**: Root workspace now exists at `omni-lang/Cargo.toml`; legacy per-crate lockfiles remain, but builds can be driven from the repository root.
 - **Parallel OLD/NEW modules**: Both exist in `compiler/src/` simultaneously. The [main.rs](file:///d:/Project/Helios/omni-lang/ovm/src/main.rs) uses `#[path = ...]` attributes to import the NEW modules while the OLD files coexist.
 - **CI**: No CI configuration found (no `.github/workflows/`, no `.gitlab-ci.yml`, no `Cargo.workspace` at root).
 - **`omnc-stage0.exe`**: A 3.8MB compiled binary exists in `build/`.

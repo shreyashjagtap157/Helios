@@ -40,6 +40,12 @@ pub struct ConstSubstitution {
     mappings: HashMap<String, ConstValue>,
 }
 
+impl Default for ConstSubstitution {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ConstSubstitution {
     pub fn new() -> Self {
         Self {
@@ -67,6 +73,12 @@ impl ConstSubstitution {
 /// Const expression evaluator
 pub struct ConstEvaluator {
     const_bindings: HashMap<String, ConstValue>,
+}
+
+impl Default for ConstEvaluator {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ConstEvaluator {

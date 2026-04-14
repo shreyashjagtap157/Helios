@@ -151,11 +151,21 @@ pub struct EffectRow {
     pub effects: Vec<EffectSymbol>,
 }
 
+/// Function parameter modifier
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ParamModifier {
+    #[default]
+    Normal,
+    Inout,
+    Linear,
+}
+
 /// Function parameter
 #[derive(Debug, Clone)]
 pub struct Param {
     pub name: String,
     pub ty: Type,
+    pub modifier: ParamModifier,
 }
 
 /// Trait definition
@@ -244,6 +254,19 @@ pub enum Type {
     Tuple(Vec<Type>),          // (T1, T2, ...)
     Nullable(Box<Type>),       // T?
     Infer,                     // Type to be inferred
+
+    // Error set types (v2.0 spec: finite named sets of errors)
+    ErrorSet {
+        name: String,
+        variants: Vec<ErrorVariant>,
+    },
+}
+
+/// Error variant within an error set
+#[derive(Debug, Clone, PartialEq)]
+pub struct ErrorVariant {
+    pub name: String,
+    pub fields: Vec<(String, Type)>,
 }
 
 impl PartialEq for Type {
@@ -440,6 +463,12 @@ pub enum Expression {
     },
     Lambda {
         params: Vec<Param>,
+        body: Box<Expression>,
+        is_async: bool,
+    },
+    LetChain {
+        name: String,
+        value: Box<Expression>,
         body: Box<Expression>,
     },
     If {

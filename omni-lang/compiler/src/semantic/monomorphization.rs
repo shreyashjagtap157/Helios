@@ -12,6 +12,12 @@ pub struct TypeSubstitution {
     pub mapping: HashMap<String, Type>,
 }
 
+impl Default for TypeSubstitution {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TypeSubstitution {
     pub fn new() -> Self {
         Self {

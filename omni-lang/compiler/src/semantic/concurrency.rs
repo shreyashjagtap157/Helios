@@ -7,8 +7,8 @@
 //! - Replay debugging infrastructure
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Condvar, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -332,7 +332,11 @@ impl ActorSystem {
         }
     }
 
-    pub fn dispatch_message(&mut self, actor_id: &str, msg: ActorMessage) -> Result<ActorResponse, String> {
+    pub fn dispatch_message(
+        &mut self,
+        actor_id: &str,
+        msg: ActorMessage,
+    ) -> Result<ActorResponse, String> {
         let actor = self.actors.get_mut(actor_id).ok_or("Actor not found")?;
         actor.state = ActorState::Running;
 
@@ -545,12 +549,18 @@ impl TensorModule {
     }
 
     pub fn detect_simd_width() -> usize {
-        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "sse2"))]
+        #[cfg(all(
+            any(target_arch = "x86", target_arch = "x86_64"),
+            target_feature = "sse2"
+        ))]
         {
             4
         }
 
-        #[cfg(not(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "sse2")))]
+        #[cfg(not(all(
+            any(target_arch = "x86", target_arch = "x86_64"),
+            target_feature = "sse2"
+        )))]
         {
             1
         }

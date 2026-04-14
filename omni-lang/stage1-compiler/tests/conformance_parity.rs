@@ -29,6 +29,10 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
+fn workspace_release_dir() -> PathBuf {
+    repo_root().join("omni-lang").join("target").join("release")
+}
+
 fn run_stage1_check(stage1_bin: &Path, input: &Path) -> bool {
     Command::new(stage1_bin)
         .arg("check")
@@ -52,19 +56,19 @@ fn run_omnc_emit(omnc_bin: &Path, input: &Path) -> bool {
 #[test]
 fn conformance_matrix_stays_stable() {
     let root = repo_root();
-    let compiler_dir = root.join("omni-lang").join("compiler");
+    let release_dir = workspace_release_dir();
 
-    let stage1_bin = bin_with_ext(&compiler_dir.join("target").join("release"), "omni_stage1");
-    let omnc_bin = bin_with_ext(&compiler_dir.join("target").join("release"), "omnc");
+    let stage1_bin = bin_with_ext(&release_dir, "omni_stage1");
+    let omnc_bin = bin_with_ext(&release_dir, "omnc");
 
     assert!(
         stage1_bin.exists(),
-        "missing stage1 binary at {}. build with cargo build --release in omni-lang/compiler",
+        "missing stage1 binary at {}. build with cargo build --release in omni-lang",
         stage1_bin.display()
     );
     assert!(
         omnc_bin.exists(),
-        "missing omnc binary at {}. build with cargo build --release in omni-lang/compiler",
+        "missing omnc binary at {}. build with cargo build --release in omni-lang",
         omnc_bin.display()
     );
 

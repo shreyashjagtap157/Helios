@@ -60,6 +60,12 @@ pub struct PropertyContainer {
     pub property_order: Vec<String>, // Track definition order
 }
 
+impl Default for PropertyContainer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PropertyContainer {
     pub fn new() -> Self {
         PropertyContainer {
@@ -130,6 +136,7 @@ impl PropertyContainer {
             params: vec![Param {
                 name: "value".to_string(),
                 ty: prop.type_expr.clone(),
+                modifier: ParamModifier::Normal,
             }],
             return_type: None,
             body: Block {
@@ -226,6 +233,12 @@ impl SealedTraitInfo {
 #[derive(Clone, Debug)]
 pub struct SealedClassValidator {
     pub sealed_classes: HashMap<String, SealedTraitInfo>,
+}
+
+impl Default for SealedClassValidator {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SealedClassValidator {

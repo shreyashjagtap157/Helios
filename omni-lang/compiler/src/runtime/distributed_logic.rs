@@ -19,7 +19,7 @@ impl ZeroOptimizer {
         T: Clone + Default,
     {
         let total_params = full_param.len();
-        let chunk_size = (total_params + self.world_size - 1) / self.world_size;
+        let chunk_size = total_params.div_ceil(self.world_size);
 
         let start_idx = self.rank * chunk_size;
         let end_idx = (start_idx + chunk_size).min(total_params);
@@ -76,7 +76,7 @@ impl ZeroOptimizer {
             return gradients.to_vec();
         }
 
-        let chunk_size = (gradients.len() + self.world_size - 1) / self.world_size;
+        let chunk_size = gradients.len().div_ceil(self.world_size);
         let start = self.rank * chunk_size;
         let end = (start + chunk_size).min(gradients.len());
 
@@ -184,7 +184,7 @@ impl TopologyDiscovery {
         }
 
         // Heuristic: GPUs on same NUMA node get NVLink, cross-NUMA get PCIe
-        let gpus_per_socket = (gpu_count + 1) / 2;
+        let gpus_per_socket = gpu_count.div_ceil(2);
 
         for i in 0..gpu_count {
             for j in 0..gpu_count {

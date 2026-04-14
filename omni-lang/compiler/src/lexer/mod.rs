@@ -45,6 +45,10 @@ pub enum TokenKind {
     Fn,
     #[token("let")]
     Let,
+    #[token("inout")]
+    Inout,
+    #[token("linear")]
+    Linear,
     #[token("mut")]
     Mut,
     #[token("if")]
@@ -143,6 +147,10 @@ pub enum TokenKind {
     Finally,
     #[token("elif")]
     Elif,
+    #[token("error")]
+    Error,
+    #[token("set")]
+    SetKw,
     #[token("self")]
     SelfValue,
     #[token("super")]
@@ -686,6 +694,8 @@ mod tests {
             ("struct", TokenKind::Struct),
             ("fn", TokenKind::Fn),
             ("let", TokenKind::Let),
+            ("inout", TokenKind::Inout),
+            ("linear", TokenKind::Linear),
             ("mut", TokenKind::Mut),
             ("if", TokenKind::If),
             ("else", TokenKind::Else),

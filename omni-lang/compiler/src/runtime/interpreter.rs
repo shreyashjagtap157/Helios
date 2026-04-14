@@ -64,8 +64,9 @@ struct SharedOvmState {
 }
 
 /// Stack value in the OVM
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub enum OvmValue {
+    #[default]
     Null,
     Int(i64),
     Float(f64),
@@ -77,12 +78,6 @@ pub enum OvmValue {
     String(String),                // Interned string
     Array(Vec<OvmValue>),          // Array value
     Struct(String, Vec<OvmValue>), // Struct (typename, fields)
-}
-
-impl Default for OvmValue {
-    fn default() -> Self {
-        OvmValue::Null
-    }
 }
 
 impl OvmValue {
@@ -181,6 +176,12 @@ pub struct AsyncExecutor {
     next_task_id: usize,
 }
 
+impl Default for AsyncExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AsyncExecutor {
     pub fn new() -> Self {
         AsyncExecutor {
@@ -271,6 +272,12 @@ pub struct OvmInterpreter {
     channel_senders: HashMap<u64, ChannelSender>,
     channel_receivers: HashMap<u64, ChannelReceiver>,
     next_handle_id: u64,
+}
+
+impl Default for OvmInterpreter {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl OvmInterpreter {
@@ -556,7 +563,7 @@ impl OvmInterpreter {
             Box::new(|_, args| {
                 if args.len() >= 2 {
                     if let (Some(OvmValue::String(a)), Some(OvmValue::String(b))) =
-                        (args.get(0), args.get(1))
+                        (args.first(), args.get(1))
                     {
                         return Ok(OvmValue::String(format!("{}{}", a, b)));
                     }
@@ -589,7 +596,7 @@ impl OvmInterpreter {
             "array_get".to_string(),
             Box::new(|_, args| {
                 if args.len() >= 2 {
-                    if let (Some(OvmValue::Array(arr)), Some(idx)) = (args.get(0), args.get(1)) {
+                    if let (Some(OvmValue::Array(arr)), Some(idx)) = (args.first(), args.get(1)) {
                         let i = idx.as_int().unwrap_or(0) as usize;
                         if i < arr.len() {
                             return Ok(arr[i].clone());
@@ -2870,6 +2877,12 @@ impl RuntimeValue {
     }
 }
 
+impl Default for Scope {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Scope {
     pub fn new() -> Self {
         Scope {
@@ -2894,6 +2907,12 @@ impl Scope {
 
     pub fn set(&mut self, name: String, value: RuntimeValue) {
         self.variables.insert(name, value);
+    }
+}
+
+impl Default for Interpreter {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -3529,7 +3548,80 @@ impl Interpreter {
                             }
                         }
                     }
-                    _ => {} // Index assignment - simplified
+                    Expression::Index(collection_expr, index_expr) => {
+                        if let Expression::Identifier(var_name) = collection_expr.as_ref() {
+                            let current_collection = self
+                                .global_scope
+                                .borrow()
+                                .get(var_name)
+                                .ok_or_else(|| anyhow!("Undefined variable: {}", var_name))?;
+                            let index_value = self.eval_expr(index_expr)?;
+
+                            match current_collection {
+                                RuntimeValue::Array(mut items) | RuntimeValue::List(mut items) => {
+                                    let idx = match index_value {
+                                        RuntimeValue::Integer(i) if i >= 0 => i as usize,
+                                        other => {
+                                            return Err(anyhow!(
+                                                "Array index must be non-negative integer, got {:?}",
+                                                other
+                                            ))
+                                        }
+                                    };
+
+                                    if idx >= items.len() {
+                                        return Err(anyhow!(
+                                            "Array index {} out of bounds (length {})",
+                                            idx,
+                                            items.len()
+                                        ));
+                                    }
+
+                                    let final_val = if let Some(binop) = op {
+                                        let current = items[idx].clone();
+                                        self.apply_binary_op(binop, current, new_val)?
+                                    } else {
+                                        new_val
+                                    };
+                                    items[idx] = final_val;
+                                    self.global_scope
+                                        .borrow_mut()
+                                        .set(var_name.clone(), RuntimeValue::Array(items));
+                                }
+                                RuntimeValue::Map(mut m) => {
+                                    let key = match index_value {
+                                        RuntimeValue::String(s) => s,
+                                        other => {
+                                            return Err(anyhow!(
+                                                "Map index must be string key, got {:?}",
+                                                other
+                                            ))
+                                        }
+                                    };
+                                    let final_val = if let Some(binop) = op {
+                                        let current = m
+                                            .get(&key)
+                                            .cloned()
+                                            .ok_or_else(|| anyhow!("No key '{}' on map", key))?;
+                                        self.apply_binary_op(binop, current, new_val)?
+                                    } else {
+                                        new_val
+                                    };
+                                    m.insert(key, final_val);
+                                    self.global_scope
+                                        .borrow_mut()
+                                        .set(var_name.clone(), RuntimeValue::Map(m));
+                                }
+                                other => {
+                                    return Err(anyhow!(
+                                        "Cannot assign by index on {:?}",
+                                        other
+                                    ))
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
                 }
                 Ok(RuntimeValue::Null)
             }
@@ -3740,7 +3832,7 @@ impl Interpreter {
                     eval_args.push(self.eval_expr(arg)?);
                 }
                 match func_val {
-                    RuntimeValue::Function(func) => self.call_function_ast(&*func, &eval_args),
+                    RuntimeValue::Function(func) => self.call_function_ast(&func, &eval_args),
                     RuntimeValue::NativeFunction(name) => self.call_builtin(&name, &eval_args),
                     _ => Err(anyhow!("Cannot call {:?} as a function", func_val)),
                 }
@@ -3829,10 +3921,14 @@ impl Interpreter {
                 }
                 Ok(RuntimeValue::Array(vals)) // Tuples as arrays for now
             }
-            Expression::Lambda { params, body } => {
+            Expression::Lambda {
+                params,
+                body,
+                is_async,
+            } => {
                 let func = crate::parser::ast::Function {
                     name: "<lambda>".to_string(),
-                    is_async: false,
+                    is_async: *is_async,
                     attributes: vec![],
                     params: params.clone(),
                     return_type: None,
@@ -4145,7 +4241,7 @@ impl Interpreter {
                     .map_err(|_| anyhow!("Cannot convert '{}' to float", s)),
                 _ => Err(anyhow!("float() cannot convert given type")),
             },
-            "range" => match (args.get(0), args.get(1), args.get(2)) {
+            "range" => match (args.first(), args.get(1), args.get(2)) {
                 (Some(RuntimeValue::Integer(end)), None, None) => {
                     let items: Vec<RuntimeValue> = (0..*end).map(RuntimeValue::Integer).collect();
                     Ok(RuntimeValue::Array(items))
@@ -4281,7 +4377,7 @@ impl Interpreter {
                 Some(RuntimeValue::Integer(i)) => Ok(RuntimeValue::Integer(i.abs())),
                 _ => Err(anyhow!("abs() requires a numeric argument")),
             },
-            "__math_pow" => match (args.get(0), args.get(1)) {
+            "__math_pow" => match (args.first(), args.get(1)) {
                 (Some(RuntimeValue::Float(b)), Some(RuntimeValue::Float(e))) => {
                     Ok(RuntimeValue::Float(b.powf(*e)))
                 }
@@ -4296,7 +4392,7 @@ impl Interpreter {
                 }
                 _ => Err(anyhow!("pow() requires two numeric arguments")),
             },
-            "__math_min" => match (args.get(0), args.get(1)) {
+            "__math_min" => match (args.first(), args.get(1)) {
                 (Some(RuntimeValue::Integer(a)), Some(RuntimeValue::Integer(b))) => {
                     Ok(RuntimeValue::Integer(*a.min(b)))
                 }
@@ -4305,7 +4401,7 @@ impl Interpreter {
                 }
                 _ => Err(anyhow!("min() requires two numeric arguments")),
             },
-            "__math_max" => match (args.get(0), args.get(1)) {
+            "__math_max" => match (args.first(), args.get(1)) {
                 (Some(RuntimeValue::Integer(a)), Some(RuntimeValue::Integer(b))) => {
                     Ok(RuntimeValue::Integer(*a.max(b)))
                 }
@@ -4346,7 +4442,7 @@ impl Interpreter {
             // ── File I/O builtins ──
             "write_file" => {
                 let path = args
-                    .get(0)
+                    .first()
                     .ok_or_else(|| anyhow!("write_file(path, content) needs path"))?
                     .display_string();
                 let content = args
@@ -4359,7 +4455,7 @@ impl Interpreter {
             }
             "read_file" => {
                 let path = args
-                    .get(0)
+                    .first()
                     .ok_or_else(|| anyhow!("read_file(path) needs path"))?
                     .display_string();
                 let content = std::fs::read_to_string(&path)
@@ -4368,14 +4464,14 @@ impl Interpreter {
             }
             "file_exists" => {
                 let path = args
-                    .get(0)
+                    .first()
                     .ok_or_else(|| anyhow!("file_exists(path) needs path"))?
                     .display_string();
                 Ok(RuntimeValue::Boolean(std::path::Path::new(&path).exists()))
             }
             "shell_exec" => {
                 let cmd = args
-                    .get(0)
+                    .first()
                     .ok_or_else(|| anyhow!("shell_exec(cmd) needs cmd"))?
                     .display_string();
                 let output = std::process::Command::new("sh")
@@ -4440,7 +4536,7 @@ impl Interpreter {
                 }
                 _ => Err(anyhow!("split() requires a string separator")),
             },
-            (RuntimeValue::String(s), "replace") => match (args.get(0), args.get(1)) {
+            (RuntimeValue::String(s), "replace") => match (args.first(), args.get(1)) {
                 (Some(RuntimeValue::String(old)), Some(RuntimeValue::String(new))) => {
                     Ok(RuntimeValue::String(s.replace(old.as_str(), new.as_str())))
                 }
@@ -4575,7 +4671,7 @@ impl Interpreter {
                 _ => Err(anyhow!("contains_key() requires a string argument")),
             },
             (RuntimeValue::Map(m), "insert") => {
-                if let (Some(RuntimeValue::String(k)), Some(v)) = (args.get(0), args.get(1)) {
+                if let (Some(RuntimeValue::String(k)), Some(v)) = (args.first(), args.get(1)) {
                     let mut new_map = m.clone();
                     new_map.insert(k.clone(), v.clone());
                     self.last_mutated_self = Some(RuntimeValue::Map(new_map));

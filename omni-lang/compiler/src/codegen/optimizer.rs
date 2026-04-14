@@ -883,7 +883,7 @@ impl IrOptimizer {
                                     };
                                     let pre_block = IrBlock {
                                         label: pre_label,
-                                        instructions: current_instructions.drain(..).collect(),
+                                        instructions: std::mem::take(&mut current_instructions),
                                         terminator: IrTerminator::Branch(renamed_label.clone()),
                                     };
                                     new_blocks.push(pre_block);
@@ -908,7 +908,7 @@ impl IrOptimizer {
 
                             new_blocks.push(IrBlock {
                                 label: cont_label,
-                                instructions: current_instructions.drain(..).collect(),
+                                instructions: std::mem::take(&mut current_instructions),
                                 terminator: block_terminator.clone(),
                             });
 
@@ -1127,7 +1127,7 @@ impl IrOptimizer {
                         }
                     })
                     .unwrap_or_else(|| format!("{}_{}", prefix, ptr)),
-                field: field.clone(),
+                field: *field,
             },
             // Fallback: clone unchanged
             other => other.clone(),
@@ -1827,10 +1827,11 @@ impl IrOptimizer {
                         }
                     }
                     if let Some(&target_idx) = block_indices.get(else_label) {
-                        if target_idx <= i && block.instructions.len() <= self.unroll_threshold {
-                            if !to_unroll.iter().any(|(idx, _)| *idx == i) {
-                                to_unroll.push((i, unroll_factor));
-                            }
+                        if target_idx <= i
+                            && block.instructions.len() <= self.unroll_threshold
+                            && !to_unroll.iter().any(|(idx, _)| *idx == i)
+                        {
+                            to_unroll.push((i, unroll_factor));
                         }
                     }
                 }

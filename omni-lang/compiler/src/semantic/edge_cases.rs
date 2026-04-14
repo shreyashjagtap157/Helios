@@ -24,6 +24,12 @@ pub struct EdgeCaseHandler {
     current_depth: usize,
 }
 
+impl Default for EdgeCaseHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EdgeCaseHandler {
     pub fn new() -> Self {
         Self {
@@ -203,6 +209,12 @@ pub struct AdvancedUnification {
     enable_occurs_check: bool,
     /// Allow bidirectional unification
     bidirectional: bool,
+}
+
+impl Default for AdvancedUnification {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AdvancedUnification {

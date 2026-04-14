@@ -8,9 +8,10 @@ use anyhow::Result;
 use std::collections::HashMap;
 
 use super::bytecode::{CompiledFunction, OpCode, OvmModule, Value};
+#[allow(unused_imports)]
 use crate::parser::ast::{
-    BinaryOp, Block, Expression, Function, Item, Literal, MatchBody, Module, Pattern, Statement,
-    UnaryOp,
+    BinaryOp, Block, Expression, Function, Item, Literal, MatchBody, Module, Param, ParamModifier,
+    Pattern, Statement, Type, UnaryOp,
 };
 
 // ---------------------------------------------------------------------------
@@ -56,6 +57,12 @@ pub struct BytecodeCompiler {
     globals: Vec<String>,
     /// Loop context stack — each entry is `(loop_start, break_patches)`.
     loop_stack: Vec<(usize, Vec<usize>)>,
+}
+
+impl Default for BytecodeCompiler {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BytecodeCompiler {
@@ -289,11 +296,34 @@ impl BytecodeCompiler {
                         self.compile_expression(value)?;
                         self.emit(OpCode::StoreField(field_name.clone()));
                     }
-                    Expression::Index(_collection, _index_expr) => {
-                        // For index assignment we'd need a StoreIndex opcode;
-                        // for now emit the value computation as a placeholder.
-                        self.compile_expression(value)?;
-                        self.emit(OpCode::Pop); // TODO: implement StoreIndex
+                    Expression::Index(collection, index_expr) => {
+                        if let Some(compound_op) = op {
+                            // Recompute current slot value for compound assignment.
+                            self.compile_expression(collection)?;
+                            self.compile_expression(index_expr)?;
+                            self.emit(OpCode::Index);
+                            self.compile_expression(value)?;
+                            self.emit_binary_op(*compound_op);
+                        } else {
+                            self.compile_expression(value)?;
+                        }
+
+                        // StoreIndex expects stack order: value, collection, index.
+                        self.compile_expression(collection)?;
+                        self.compile_expression(index_expr)?;
+                        self.emit(OpCode::StoreIndex);
+
+                        if let Expression::Identifier(name) = collection.as_ref() {
+                            if let Some(slot) = self.resolve_local(name) {
+                                self.emit(OpCode::StoreLocal(slot));
+                            } else {
+                                self.emit(OpCode::StoreGlobal(name.clone()));
+                            }
+                        } else {
+                            // For non-identifier collections we currently do not
+                            // have a writable back-reference target.
+                            self.emit(OpCode::Pop);
+                        }
                     }
                     _ => {
                         // Unsupported assignment target – just evaluate both
@@ -714,11 +744,15 @@ impl BytecodeCompiler {
             }
 
             // -- lambda --
-            Expression::Lambda { params, body } => {
+            Expression::Lambda {
+                params,
+                body,
+                is_async,
+            } => {
                 // Compile the lambda as a nested function and reference it
                 let lambda_func = Function {
                     name: format!("__lambda_{}", self.module.functions.len()),
-                    is_async: false,
+                    is_async: *is_async,
                     attributes: Vec::new(),
                     params: params.clone(),
                     return_type: None,
@@ -731,6 +765,16 @@ impl BytecodeCompiler {
                 let func_name = compiled.name.clone();
                 self.module.functions.push(compiled);
                 self.emit(OpCode::LoadGlobal(func_name));
+            }
+
+            // -- let-chain --
+            Expression::LetChain { name, value, body } => {
+                self.push_scope();
+                self.compile_expression(value)?;
+                let slot = self.declare_local(name);
+                self.emit(OpCode::StoreLocal(slot));
+                self.compile_expression(body)?;
+                self.pop_scope();
             }
 
             // -- if expression --
@@ -1204,6 +1248,7 @@ mod tests {
                     params: vec![Param {
                         name: "n".into(),
                         ty: Type::I64,
+                        modifier: ParamModifier::Normal,
                     }],
                     return_type: Some(Type::I64),
                     effect_row: None,

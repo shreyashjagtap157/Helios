@@ -116,7 +116,10 @@ impl CapabilityError {
         Self::new(
             CapabilityErrorKind::LimitExceeded,
             capability.clone(),
-            format!("capability {:?} exceeds configured resource limits", capability),
+            format!(
+                "capability {:?} exceeds configured resource limits",
+                capability
+            ),
         )
     }
 
@@ -251,10 +254,8 @@ impl CapabilityPolicy {
                         match permission.to_ascii_lowercase().as_str() {
                             "read" => policy.declare(CapabilityKind::FilesystemRead),
                             "write" => policy.declare(CapabilityKind::FilesystemWrite),
-                            other => policy.declare(CapabilityKind::Custom(format!(
-                                "filesystem:{}",
-                                other
-                            ))),
+                            other => policy
+                                .declare(CapabilityKind::Custom(format!("filesystem:{}", other))),
                         }
                     }
                 }
@@ -400,7 +401,11 @@ impl Sandbox {
         Ok(())
     }
 
-    pub fn execute<R, F>(&self, required: &[CapabilityKind], operation: F) -> Result<R, CapabilityError>
+    pub fn execute<R, F>(
+        &self,
+        required: &[CapabilityKind],
+        operation: F,
+    ) -> Result<R, CapabilityError>
     where
         F: FnOnce() -> R,
     {
@@ -435,7 +440,11 @@ impl FfiSandbox {
         &self.sandbox
     }
 
-    pub fn execute<R, F>(&self, required: &[CapabilityKind], operation: F) -> Result<R, CapabilityError>
+    pub fn execute<R, F>(
+        &self,
+        required: &[CapabilityKind],
+        operation: F,
+    ) -> Result<R, CapabilityError>
     where
         F: FnOnce() -> R,
     {
@@ -459,7 +468,10 @@ mod tests {
 
         assert!(guard.revoke(&read_cap));
         assert_eq!(
-            guard.require(&CapabilityKind::FilesystemRead).unwrap_err().kind(),
+            guard
+                .require(&CapabilityKind::FilesystemRead)
+                .unwrap_err()
+                .kind(),
             &CapabilityErrorKind::Revoked
         );
     }

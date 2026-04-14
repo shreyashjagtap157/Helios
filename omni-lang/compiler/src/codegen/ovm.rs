@@ -222,6 +222,12 @@ pub struct OvmCodegen {
     pub loop_contexts: Vec<LoopContext>,
 }
 
+impl Default for OvmCodegen {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OvmCodegen {
     pub fn new() -> Self {
         OvmCodegen {

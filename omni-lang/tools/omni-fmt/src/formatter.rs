@@ -3,10 +3,10 @@
 //! Handles parsing and reformatting of Omni source code.
 
 use anyhow::Result;
-use log::trace;
 
 /// Formatter configuration options
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct FormatConfig {
     /// Number of spaces per indentation level
     pub indent_spaces: usize,
@@ -52,9 +52,7 @@ impl OmniFormatter {
     pub fn format(&self, source: &str) -> Result<String> {
         let mut result = String::with_capacity(source.len());
         let lines: Vec<&str> = source.lines().collect();
-        
-        let mut in_string = false;
-        let mut in_multiline_string = false;
+
         let mut prev_line_type = LineType::Empty;
         let mut import_block: Vec<String> = Vec::new();
         let mut collecting_imports = false;
@@ -181,8 +179,6 @@ impl OmniFormatter {
             (LineType::Module, _) if current != LineType::Empty => true,
             
             // Between functions
-            (LineType::Code, LineType::Function) => true,
-            
             _ => false,
         }
     }

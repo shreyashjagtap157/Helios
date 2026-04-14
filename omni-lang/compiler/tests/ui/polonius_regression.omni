@@ -1,0 +1,64 @@
+module compiler::tests::ui::polonius_regression
+
+import std::core
+
+struct Node:
+    value: i32
+    next: Node?
+
+// 1) Nested field borrows: borrow a field and then borrow another field
+fn nested_field_borrows(n: &mut Node) -> i32:
+    let mut acc = 0
+    // borrow next.value via field projection
+    let vref = &n.next
+    match vref:
+        Some =>
+            let nv = &mut vref.value
+            acc += *nv
+            // borrow another field of the same root through a different path
+            let root_alias = &mut n.value
+            *root_alias = *root_alias + 1
+        None =>
+            acc += 1
+    acc
+
+// 2) Loop with early returns and reassignments
+fn loop_early_return(a: &mut i32) -> i32:
+    let mut i = 0
+    while i < 10:
+        let alias = &mut a
+        if *alias > 5:
+            // update and early return
+            *alias = *alias + 2
+            return *alias
+        end
+        // reassign to test moving/assign semantics
+        *alias = *alias + 1
+        i += 1
+    end
+    *a
+
+// 3) Reassignments and moves across scopes
+fn move_and_reassign(x: &mut i32) -> i32:
+    let mut res = 0
+    {
+        let local = x
+        res += *local
+        // reassign through local alias
+        *local = *local + 3
+    }
+    // ensure x is still usable after inner scope
+    res + *x
+
+// Simple harness functions so tests are type-checked by the compiler
+fn harness1() -> i32:
+    let mut node = Node { value: 1, next: None }
+    nested_field_borrows(&mut node)
+
+fn harness2() -> i32:
+    let mut v = 0
+    loop_early_return(&mut v)
+
+fn harness3() -> i32:
+    let mut v = 2
+    move_and_reassign(&mut v)

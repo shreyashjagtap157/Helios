@@ -4,6 +4,12 @@ pub fn start_profile(_name: &str) {}
 pub fn end_profile(_name: &str) {}
 
 pub struct OmniProfiler;
+impl Default for OmniProfiler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OmniProfiler {
     pub fn new() -> Self {
         Self

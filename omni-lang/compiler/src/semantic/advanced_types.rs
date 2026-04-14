@@ -131,7 +131,7 @@ impl AsyncTraitSupport {
     pub fn register_async_method(&mut self, trait_name: &str, method_name: &str) {
         self.async_methods
             .entry(trait_name.to_string())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(method_name.to_string());
     }
 
@@ -152,7 +152,7 @@ impl AsyncTraitSupport {
 
         self.future_types
             .entry(trait_name.to_string())
-            .or_insert_with(HashMap::new)
+            .or_default()
             .insert(method_name.to_string(), future.clone());
 
         future
@@ -183,7 +183,7 @@ impl TraitUpcasting {
     pub fn register_supertrait(&mut self, subtrait: &str, supertrait: &str) {
         self.inheritance
             .entry(subtrait.to_string())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(supertrait.to_string());
         self.transitive_cache.remove(subtrait);
     }
@@ -247,7 +247,7 @@ impl NegativeBounds {
     pub fn register_negative(&mut self, type_param: &str, trait_name: &str) {
         self.negative_traits
             .entry(type_param.to_string())
-            .or_insert_with(HashSet::new)
+            .or_default()
             .insert(trait_name.to_string());
     }
 

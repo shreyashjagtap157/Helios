@@ -487,6 +487,12 @@ pub enum FeatureStatus {
     Optimized,
 }
 
+impl Default for SelfHostingFeatures {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SelfHostingFeatures {
     pub fn new() -> Self {
         let mut features = HashMap::new();

@@ -48,6 +48,12 @@ pub struct SemanticProfiler {
     stack: Vec<(String, Instant)>,
 }
 
+impl Default for SemanticProfiler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SemanticProfiler {
     pub fn new() -> Self {
         Self {
@@ -172,6 +178,12 @@ pub struct PhaseMetrics {
     pub duration: Duration,
     pub errors: usize,
     pub warnings: usize,
+}
+
+impl Default for CompilationMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CompilationMetrics {

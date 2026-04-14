@@ -18,6 +18,12 @@ pub struct NativeManager {
     next_handle: usize,
 }
 
+impl Default for NativeManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NativeManager {
     pub fn new() -> Self {
         NativeManager {
@@ -37,13 +43,13 @@ impl NativeManager {
         match (module, func) {
             // ================== IO ==================
             ("io", "print") => {
-                if let Some(val) = args.get(0) {
+                if let Some(val) = args.first() {
                     print!("{:?}", val);
                 }
                 Ok(RuntimeValue::Null)
             }
             ("io", "println") => {
-                if let Some(val) = args.get(0) {
+                if let Some(val) = args.first() {
                     println!("{:?}", val);
                 } else {
                     println!();
@@ -114,13 +120,18 @@ impl NativeManager {
                 Ok(RuntimeValue::Integer(since_the_epoch.as_secs() as i64))
             }
             ("sys", "sleep") => {
-                if let Some(RuntimeValue::Integer(ms)) = args.get(0) {
+                if let Some(RuntimeValue::Integer(ms)) = args.first() {
                     std::thread::sleep(std::time::Duration::from_millis(*ms as u64));
                 }
                 Ok(RuntimeValue::Null)
             }
             ("sys", "os_name") => Ok(RuntimeValue::String(std::env::consts::OS.to_string())),
-            ("sys", "num_cpus") => Ok(RuntimeValue::Integer(1 /* num_cpus stubbed */)),
+            ("sys", "num_cpus") => {
+                let cpus = std::thread::available_parallelism()
+                    .map(|n| n.get() as i64)
+                    .unwrap_or(1);
+                Ok(RuntimeValue::Integer(cpus))
+            }
 
             // ================== NET ==================
             ("net", "http_get") => {
@@ -153,18 +164,18 @@ impl NativeManager {
 
             // ================== AI (Tensor) ==================
             ("math", "tensor_create") => {
-                let _size = match args.get(0) {
+                let _size = match args.first() {
                     Some(RuntimeValue::Integer(n)) => *n as usize,
                     _ => 0,
                 };
-                return Err("ndarray disabled".to_string());
+                Err("ndarray disabled".to_string())
                 /* unreachable */
             }
             ("math", "tensor_matmul") => {
                 // Simplified 1D as 2D (MxK * KxN) simulation or element-wise for demo
                 // In production, this would cast Vector -> Array2 and use dot product
                 if let (Some(RuntimeValue::Vector(_a)), Some(RuntimeValue::Vector(_b))) =
-                    (args.get(0), args.get(1))
+                    (args.first(), args.get(1))
                 {
                     // For this demo, we'll do element-wise add just to prove op works as dot product requires sizing
                     // Real impl: cast raw pointers to Cblas

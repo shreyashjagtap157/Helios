@@ -44,16 +44,17 @@ pub mod enhancements;
 pub mod ir;
 #[path = "lexer/mod.rs"]
 pub mod lexer;
+pub mod memory;
 pub mod modes;
 pub mod monitor;
 pub mod optimizer;
-pub mod security;
-pub mod testing;
 #[path = "parser/mod.rs"]
 pub mod parser;
 pub mod resolver;
 pub mod runtime;
+pub mod security;
 pub mod semantic;
+pub mod testing;
 
 // Re-export key types
 pub use diagnostics::{
@@ -66,16 +67,16 @@ pub use modes::{
     allowed_zones, is_memory_op_allowed, Feature, MemoryOperation, MemoryZone, MemoryZoneChecker,
     ModuleChecker, ModuleMode, PackageManifest,
 };
+pub use resolver::{
+    resolve_all, Annotations, ConcurrencyStrategy, ExecMode, MemoryStrategy, ResolverContext,
+    ResolverDecision, ResolverLog,
+};
 pub use security::{
     CapabilityAuthority, CapabilityError, CapabilityErrorKind, CapabilityGuard, CapabilityKind,
     CapabilityPolicy, CapabilityToken, FfiSandbox, ResourceLimits, Sandbox,
 };
 pub use testing::{
     discover_tests, run_module_tests, run_tests, EffectMock, EffectTest, Ensures, Invariant,
-    Requires, Test, TestAnnotation, TestCase, TestConfig, TestFailure, TestIgnore,
-    TestResult, TestRunner, TestShouldPanic,
-};
-pub use resolver::{
-    resolve_all, Annotations, ConcurrencyStrategy, ExecMode, MemoryStrategy, ResolverContext,
-    ResolverDecision, ResolverLog,
+    Requires, Test, TestAnnotation, TestCase, TestConfig, TestFailure, TestIgnore, TestResult,
+    TestRunner, TestShouldPanic,
 };

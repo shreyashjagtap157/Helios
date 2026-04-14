@@ -1,10 +1,9 @@
 // Omni Standard Library: Input/Output
 // File access, streams, and buffers
 //
-// NOTE: This file uses #[cfg(unix)] and #[cfg(windows)] conditional
-// compilation attributes which are NOT yet implemented by the Omni compiler.
-// The platform-specific extern blocks and code paths will produce errors
-// until #[cfg] support is added. See ISSUES.md O-081.
+// NOTE: This file uses target_os-based conditional compilation attributes.
+// The platform-specific extern blocks and code paths now target Linux, macOS,
+// and Windows explicitly. See ISSUES.md O-081.
 
 module std::io
 
@@ -14,7 +13,7 @@ import std::core
 // Platform FFI
 // ============================================
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 extern "C":
     fn read(fd: i32, buf: *mut u8, count: usize) -> isize
     fn write(fd: i32, buf: *u8, count: usize) -> isize
@@ -23,7 +22,7 @@ extern "C":
     fn lseek(fd: i32, offset: i64, whence: i32) -> i64
     fn isatty(fd: i32) -> i32
 
-#[cfg(windows)]
+#[cfg(target_os = "windows")]
 extern "C":
     fn _read(fd: i32, buf: *mut u8, count: u32) -> i32
     fn _write(fd: i32, buf: *u8, count: u32) -> i32
@@ -49,11 +48,11 @@ const SEEK_SET: i32 = 0
 const SEEK_CUR: i32 = 1
 const SEEK_END: i32 = 2
 
-#[cfg(windows)]
+#[cfg(target_os = "windows")]
 const STD_INPUT_HANDLE: u32 = 0xFFFFFFF6 as u32
-#[cfg(windows)]
+#[cfg(target_os = "windows")]
 const STD_OUTPUT_HANDLE: u32 = 0xFFFFFFF5 as u32
-#[cfg(windows)]
+#[cfg(target_os = "windows")]
 const STD_ERROR_HANDLE: u32 = 0xFFFFFFF4 as u32
 
 // ============================================
@@ -205,9 +204,9 @@ pub struct IOError:
         }
     
     pub fn last_os_error() -> IOError:
-        #[cfg(unix)]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         let code = __errno_location()
-        #[cfg(windows)]
+        #[cfg(target_os = "windows")]
         let code = GetLastError()
         IOError::from_raw_os_error(code)
     
@@ -246,9 +245,9 @@ pub struct Stdin:
 
 impl Read for Stdin:
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, IOError>:
-        #[cfg(unix)]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         let result = read(STDIN_FILENO, buf.as_mut_ptr(), buf.len())
-        #[cfg(windows)]
+        #[cfg(target_os = "windows")]
         let result = _read(STDIN_FILENO, buf.as_mut_ptr(), buf.len() as u32) as isize
         
         if result < 0:
@@ -286,9 +285,9 @@ impl BufRead for StdinLock:
     fn fill_buf(&mut self) -> Result<&[u8], IOError>:
         if self.pos >= self.cap:
             // Refill internal buffer from stdin
-            #[cfg(unix)]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             let n = read(STDIN_FILENO, self.buf.as_mut_ptr(), self.buf.len())
-            #[cfg(windows)]
+            #[cfg(target_os = "windows")]
             let n = _read(STDIN_FILENO, self.buf.as_mut_ptr(), self.buf.len() as u32) as isize
             
             if n < 0:
@@ -308,9 +307,9 @@ pub struct Stdout:
 
 impl Write for Stdout:
     fn write(&mut self, buf: &[u8]) -> Result<usize, IOError>:
-        #[cfg(unix)]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         let result = write(STDOUT_FILENO, buf.as_ptr(), buf.len())
-        #[cfg(windows)]
+        #[cfg(target_os = "windows")]
         let result = _write(STDOUT_FILENO, buf.as_ptr(), buf.len() as u32) as isize
         
         if result < 0:
@@ -339,9 +338,9 @@ pub struct Stderr:
 
 impl Write for Stderr:
     fn write(&mut self, buf: &[u8]) -> Result<usize, IOError>:
-        #[cfg(unix)]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         let result = write(STDERR_FILENO, buf.as_ptr(), buf.len())
-        #[cfg(windows)]
+        #[cfg(target_os = "windows")]
         let result = _write(STDERR_FILENO, buf.as_ptr(), buf.len() as u32) as isize
         
         if result < 0:

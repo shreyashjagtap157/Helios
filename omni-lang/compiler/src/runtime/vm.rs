@@ -260,10 +260,8 @@ impl OmniVM {
         let mut worklist: Vec<usize> = self.gc_collect_roots();
 
         // Clear all marks first
-        for slot in self.heap.iter_mut() {
-            if let Some((header, _)) = slot {
-                header.mark = false;
-            }
+        for (header, _) in self.heap.iter_mut().flatten() {
+            header.mark = false;
         }
 
         // Process worklist
@@ -886,6 +884,37 @@ impl OmniVM {
                             }
                         }
                         _ => return Err(format!("Cannot index {:?} with {:?}", collection, index)),
+                    }
+                }
+
+                OpCode::StoreIndex => {
+                    let index = self.pop()?;
+                    let collection = self.pop()?;
+                    let value = self.pop()?;
+                    match (collection, index) {
+                        (VmValue::Array(mut elems), VmValue::Int(i)) => {
+                            let idx = i as usize;
+                            if idx >= elems.len() {
+                                return Err(format!(
+                                    "Array index {} out of bounds (length {})",
+                                    i,
+                                    elems.len()
+                                ));
+                            }
+                            elems[idx] = value;
+                            self.push(VmValue::Array(elems));
+                        }
+                        (VmValue::Map(mut pairs), key) => {
+                            if let Some((_, v)) = pairs.iter_mut().find(|(k, _)| *k == key) {
+                                *v = value;
+                            } else {
+                                pairs.push((key, value));
+                            }
+                            self.push(VmValue::Map(pairs));
+                        }
+                        (other, idx) => {
+                            return Err(format!("Cannot store index {:?} on {:?}", idx, other));
+                        }
                     }
                 }
 
@@ -1635,6 +1664,67 @@ mod tests {
         let mut vm = OmniVM::new();
         vm.execute(&module).unwrap();
         assert_eq!(vm.globals["val"], VmValue::Int(2));
+    }
+
+    #[test]
+    fn test_store_index_array() {
+        let module = make_module(
+            "main",
+            vec![
+                OpCode::Push(Value::Int(10)),
+                OpCode::Push(Value::Int(20)),
+                OpCode::Push(Value::Int(30)),
+                OpCode::NewArray(3),
+                OpCode::StoreGlobal("arr".into()),
+                // arr[1] = 99
+                OpCode::Push(Value::Int(99)),
+                OpCode::LoadGlobal("arr".into()),
+                OpCode::Push(Value::Int(1)),
+                OpCode::StoreIndex,
+                OpCode::StoreGlobal("arr".into()),
+                // verify arr[1]
+                OpCode::LoadGlobal("arr".into()),
+                OpCode::Push(Value::Int(1)),
+                OpCode::Index,
+                OpCode::StoreGlobal("elem".into()),
+                OpCode::Halt,
+            ],
+            0,
+        );
+
+        let mut vm = OmniVM::new();
+        vm.execute(&module).unwrap();
+        assert_eq!(vm.globals["elem"], VmValue::Int(99));
+    }
+
+    #[test]
+    fn test_store_index_map() {
+        let module = make_module(
+            "main",
+            vec![
+                OpCode::Push(Value::String("k".into())),
+                OpCode::Push(Value::Int(1)),
+                OpCode::NewMap(1),
+                OpCode::StoreGlobal("m".into()),
+                // m["k"] = 7
+                OpCode::Push(Value::Int(7)),
+                OpCode::LoadGlobal("m".into()),
+                OpCode::Push(Value::String("k".into())),
+                OpCode::StoreIndex,
+                OpCode::StoreGlobal("m".into()),
+                // verify m["k"]
+                OpCode::LoadGlobal("m".into()),
+                OpCode::Push(Value::String("k".into())),
+                OpCode::Index,
+                OpCode::StoreGlobal("val".into()),
+                OpCode::Halt,
+            ],
+            0,
+        );
+
+        let mut vm = OmniVM::new();
+        vm.execute(&module).unwrap();
+        assert_eq!(vm.globals["val"], VmValue::Int(7));
     }
 
     // -- 23. JumpIfNot -------------------------------------------------------

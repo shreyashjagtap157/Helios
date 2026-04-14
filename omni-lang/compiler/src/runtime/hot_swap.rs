@@ -12,7 +12,7 @@ use std::time::{Duration, SystemTime};
 // Thread-local safe region flag - when true, the current thread is in a safe region
 // where function pointers may be swapped without corrupting the call stack.
 thread_local! {
-    static IN_SAFE_REGION: std::cell::Cell<bool> = std::cell::Cell::new(false);
+    static IN_SAFE_REGION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Global active thread counter - tracks how many threads are executing user code
@@ -116,6 +116,12 @@ pub struct HotSwapManager {
     watch_interval: Duration,
     last_check: SystemTime,
     enabled: bool,
+}
+
+impl Default for HotSwapManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HotSwapManager {

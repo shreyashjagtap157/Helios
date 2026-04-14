@@ -10,6 +10,8 @@
 //! - Higher-ranked trait bounds
 
 use crate::parser::ast::*;
+use crate::semantic::traits::{TraitBound, TraitResolver};
+use std::collections::HashMap as StdHashMap;
 use std::collections::HashMap;
 
 /// Type variable for inference
@@ -76,6 +78,12 @@ pub enum InferenceType {
 pub struct Substitution {
     mappings: HashMap<TypeVar, InferenceType>,
     lifetime_mappings: HashMap<LifetimeVar, String>,
+}
+
+impl Default for Substitution {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Substitution {
@@ -293,17 +301,35 @@ impl ConstraintSolver {
                 }
 
                 Constraint::TraitBound(ty, _trait_name) => {
+                    let trait_name = _trait_name;
                     let ty = subst.apply(&ty);
-                    // TODO: Validate trait bound against type
-                    // For now, just check if it's a variable or concrete type
                     match ty {
                         InferenceType::Var(_) => {
                             // Constraint on type variable - defer for now
                         }
-                        InferenceType::Concrete(_) => {
-                            // Would check against trait resolver here
+                        _ => {
+                            let concrete = self
+                                .inference_type_to_type(&ty)
+                                .ok_or_else(|| {
+                                    format!(
+                                        "Cannot validate trait bound {} for non-concrete type {:?}",
+                                        trait_name, ty
+                                    )
+                                })?;
+                            let resolver = TraitResolver::new();
+                            let bounds = vec![TraitBound {
+                                type_param: "T".to_string(),
+                                trait_name: trait_name.clone(),
+                                assoc_type_bindings: StdHashMap::new(),
+                                where_clauses: Vec::new(),
+                            }];
+                            resolver.check_bounds(&concrete, &bounds).map_err(|e| {
+                                format!(
+                                    "Trait bound not satisfied: {} for {:?}: {}",
+                                    trait_name, concrete, e
+                                )
+                            })?;
                         }
-                        _ => {}
                     }
                 }
 
@@ -317,16 +343,48 @@ impl ConstraintSolver {
                     // For now, just track them - will be validated later
                 }
 
-                Constraint::AssocTypeEq(_trait_name, _type_name, _expected_ty) => {
-                    // Associated type equality constraint
-                    // Would validate that the trait's associated type matches expected_ty
-                    // For now, just record it
+                Constraint::AssocTypeEq(trait_name, type_name, expected_ty) => {
+                    let expected_ty = subst.apply(&expected_ty);
+                    let actual_ty = self
+                        .assoc_type_cache
+                        .get(&(trait_name.clone(), type_name.clone()))
+                        .cloned()
+                        .ok_or_else(|| {
+                            format!(
+                                "Associated type {}::{} is not registered",
+                                trait_name, type_name
+                            )
+                        })?;
+                    self.add_constraint(Constraint::Equals(actual_ty, expected_ty));
                 }
 
-                Constraint::WhereBound(_ty, _trait_bound) => {
-                    // Where clause constraint
-                    // Would validate that the type satisfies the trait bound
-                    // For now, just record it
+                Constraint::WhereBound(ty, trait_bound) => {
+                    let ty = subst.apply(&ty);
+                    if let InferenceType::Var(_) = ty {
+                        // Defer unresolved type variable bounds.
+                    } else {
+                        let concrete = self
+                            .inference_type_to_type(&ty)
+                            .ok_or_else(|| {
+                                format!(
+                                    "Cannot validate where bound {} for non-concrete type {:?}",
+                                    trait_bound, ty
+                                )
+                            })?;
+                        let resolver = TraitResolver::new();
+                        let bounds = vec![TraitBound {
+                            type_param: "T".to_string(),
+                            trait_name: trait_bound.clone(),
+                            assoc_type_bindings: StdHashMap::new(),
+                            where_clauses: Vec::new(),
+                        }];
+                        resolver.check_bounds(&concrete, &bounds).map_err(|e| {
+                            format!(
+                                "Where bound not satisfied: {} for {:?}: {}",
+                                trait_bound, concrete, e
+                            )
+                        })?;
+                    }
                 }
             }
         }
@@ -343,6 +401,34 @@ impl ConstraintSolver {
                 self.occurs_check(var, param) || self.occurs_check(var, ret)
             }
             _ => false,
+        }
+    }
+
+    fn inference_type_to_type(&self, ty: &InferenceType) -> Option<Type> {
+        match ty {
+            InferenceType::Concrete(inner) => Some(*inner.clone()),
+            InferenceType::Var(_) => None,
+            InferenceType::Generic(name, args) => {
+                let mut out_args = Vec::with_capacity(args.len());
+                for arg in args {
+                    out_args.push(self.inference_type_to_type(arg)?);
+                }
+                Some(Type::Generic(name.clone(), out_args))
+            }
+            InferenceType::Function(param, ret) => {
+                let p = self.inference_type_to_type(param)?;
+                let r = self.inference_type_to_type(ret)?;
+                Some(Type::Function(vec![p], Some(Box::new(r))))
+            }
+            InferenceType::TraitObject(trait_name, supertraits) => Some(Type::TraitObject {
+                principal: trait_name.clone(),
+                supertraits: supertraits.clone(),
+                lifetime: None,
+            }),
+            InferenceType::AssocType(_, trait_name, type_name) => {
+                Some(Type::AssocType(trait_name.clone(), type_name.clone()))
+            }
+            InferenceType::ConstGeneric(name, _) => Some(Type::ConstGeneric(name.clone())),
         }
     }
 }
@@ -485,6 +571,58 @@ mod tests {
         solver.add_constraint(Constraint::Equals(
             InferenceType::Var(v),
             InferenceType::Generic("Vec".to_string(), vec![InferenceType::Var(v_clone)]),
+        ));
+        assert!(solver.solve().is_err());
+    }
+
+    #[test]
+    fn test_trait_bound_validation_success() {
+        let mut solver = ConstraintSolver::new();
+        solver.add_constraint(Constraint::TraitBound(
+            InferenceType::Concrete(Box::new(Type::I64)),
+            "Copy".to_string(),
+        ));
+        assert!(solver.solve().is_ok());
+    }
+
+    #[test]
+    fn test_trait_bound_validation_failure() {
+        let mut solver = ConstraintSolver::new();
+        solver.add_constraint(Constraint::TraitBound(
+            InferenceType::Concrete(Box::new(Type::Str)),
+            "Copy".to_string(),
+        ));
+        assert!(solver.solve().is_err());
+    }
+
+    #[test]
+    fn test_assoc_type_eq_validation_success() {
+        let mut solver = ConstraintSolver::new();
+        solver.register_assoc_type(
+            "Iterator".to_string(),
+            "Item".to_string(),
+            InferenceType::Concrete(Box::new(Type::I32)),
+        );
+        solver.add_constraint(Constraint::AssocTypeEq(
+            "Iterator".to_string(),
+            "Item".to_string(),
+            Box::new(InferenceType::Concrete(Box::new(Type::I32))),
+        ));
+        assert!(solver.solve().is_ok());
+    }
+
+    #[test]
+    fn test_assoc_type_eq_validation_failure() {
+        let mut solver = ConstraintSolver::new();
+        solver.register_assoc_type(
+            "Iterator".to_string(),
+            "Item".to_string(),
+            InferenceType::Concrete(Box::new(Type::I32)),
+        );
+        solver.add_constraint(Constraint::AssocTypeEq(
+            "Iterator".to_string(),
+            "Item".to_string(),
+            Box::new(InferenceType::Concrete(Box::new(Type::Bool))),
         ));
         assert!(solver.solve().is_err());
     }

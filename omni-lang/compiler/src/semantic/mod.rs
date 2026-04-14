@@ -36,6 +36,7 @@ pub mod advanced_types; // Phase 7: advanced type system
 pub mod autograd;
 pub mod borrow_check;
 pub mod comprehensive_tests;
+pub mod concurrency; // Phase 9: Concurrency & tensor acceleration
 pub mod const_generics;
 pub mod constraints;
 pub mod edge_cases;
@@ -49,7 +50,6 @@ pub mod monomorphization;
 pub mod optimization;
 pub mod performance;
 pub mod phase8_effects; // Phase 8: Full effect system
-pub mod concurrency; // Phase 9: Concurrency & tensor acceleration
 pub mod phase_comprehensive_tests; // Phase comprehensive tests
 pub mod polonius; // Polonius-based borrow checker (v2.0)
 pub mod properties; // Properties & sealed classes support
@@ -84,6 +84,9 @@ pub enum SemanticError {
 
     #[error("Trait bound not satisfied: {0}")]
     TraitBoundError(String),
+
+    #[error("Linearity error: {0}")]
+    LinearityError(String),
 
     #[error("Move error: value {name} used after move")]
     MoveError { name: String },
@@ -509,9 +512,16 @@ pub enum TypedExprKind {
         inclusive: bool,
     },
     Lambda {
+        is_async: bool,
         params: Vec<(String, Type)>,
         body: Box<TypedExpr>,
         return_type: Type,
+        effect_row: Option<effects::EffectRow>,
+    },
+    LetChain {
+        name: String,
+        value: Box<TypedExpr>,
+        body: Box<TypedExpr>,
     },
     Tuple(Vec<TypedExpr>),
     Await(Box<TypedExpr>),
@@ -528,6 +538,348 @@ pub enum TypedExprKind {
         expr: Box<TypedExpr>,
         arms: Vec<(Pattern, TypedExpr)>,
     },
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LinearBindingUsage {
+    used_at: Option<usize>,
+}
+
+#[derive(Debug, Default)]
+struct LinearContractChecker {
+    bindings: HashMap<String, LinearBindingUsage>,
+    shadowed_bindings: Vec<Vec<String>>,
+    current_stmt: usize,
+    next_stmt: usize,
+    errors: Vec<String>,
+}
+
+impl LinearContractChecker {
+    fn new(params: &[Param]) -> Self {
+        let bindings = params
+            .iter()
+            .filter(|param| matches!(param.modifier, ParamModifier::Linear))
+            .map(|param| (param.name.clone(), LinearBindingUsage { used_at: None }))
+            .collect();
+
+        Self {
+            bindings,
+            shadowed_bindings: vec![Vec::new()],
+            current_stmt: 0,
+            next_stmt: 0,
+            errors: Vec::new(),
+        }
+    }
+
+    fn check_function(mut self, function: &Function) -> Result<(), SemanticError> {
+        if self.bindings.is_empty() {
+            return Ok(());
+        }
+
+        self.visit_block(&function.body, false);
+
+        if let Some(message) = self.errors.into_iter().next() {
+            return Err(SemanticError::LinearityError(message));
+        }
+
+        if let Some((name, _)) = self
+            .bindings
+            .iter()
+            .find(|(_, usage)| usage.used_at.is_none())
+        {
+            return Err(SemanticError::LinearityError(format!(
+                "linear parameter '{}' must be consumed exactly once before the function returns",
+                name
+            )));
+        }
+
+        Ok(())
+    }
+
+    fn visit_block(&mut self, block: &Block, inside_lambda: bool) {
+        for stmt in &block.statements {
+            self.visit_statement(stmt, inside_lambda);
+        }
+    }
+
+    fn visit_statement(&mut self, stmt: &Statement, inside_lambda: bool) {
+        let stmt_idx = self.next_stmt;
+        self.current_stmt = stmt_idx;
+        self.next_stmt += 1;
+
+        match stmt {
+            Statement::Let { name, value, .. } | Statement::Var { name, value, .. } => {
+                if let Some(expr) = value {
+                    self.visit_expression(expr, inside_lambda);
+                }
+                self.bind_local(name);
+            }
+            Statement::Assignment { target, value, .. } => {
+                self.visit_expression(target, inside_lambda);
+                self.visit_expression(value, inside_lambda);
+            }
+            Statement::Expression(expr) => {
+                self.visit_expression(expr, inside_lambda);
+            }
+            Statement::Return(expr) => {
+                if let Some(expr) = expr {
+                    self.visit_expression(expr, inside_lambda);
+                }
+            }
+            Statement::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
+                self.visit_expression(condition, inside_lambda);
+                self.with_scope(|checker| checker.visit_block(then_block, inside_lambda));
+                if let Some(block) = else_block {
+                    self.with_scope(|checker| checker.visit_block(block, inside_lambda));
+                }
+            }
+            Statement::For { var, iter, body } => {
+                self.visit_expression(iter, inside_lambda);
+                self.with_scope(|checker| {
+                    checker.bind_local(var);
+                    checker.visit_block(body, inside_lambda);
+                });
+            }
+            Statement::While { condition, body } => {
+                self.visit_expression(condition, inside_lambda);
+                self.with_scope(|checker| checker.visit_block(body, inside_lambda));
+            }
+            Statement::Loop { body } => {
+                self.with_scope(|checker| checker.visit_block(body, inside_lambda));
+            }
+            Statement::Match { expr, arms } => {
+                self.visit_expression(expr, inside_lambda);
+                for arm in arms {
+                    self.with_scope(|checker| {
+                        checker.bind_pattern(&arm.pattern);
+                        match &arm.body {
+                            MatchBody::Expr(expr) => checker.visit_expression(expr, inside_lambda),
+                            MatchBody::Block(block) => checker.visit_block(block, inside_lambda),
+                        }
+                    });
+                }
+            }
+            Statement::Defer(inner) => self.visit_statement(inner, inside_lambda),
+            Statement::Yield(expr) => {
+                if let Some(expr) = expr {
+                    self.visit_expression(expr, inside_lambda);
+                }
+            }
+            Statement::Spawn(expr) => self.visit_expression(expr, inside_lambda),
+            Statement::Select { arms } => {
+                for arm in arms {
+                    self.visit_expression(&arm.channel_op, inside_lambda);
+                    self.with_scope(|checker| {
+                        checker.bind_pattern(&arm.pattern);
+                        checker.visit_block(&arm.body, inside_lambda);
+                    });
+                }
+            }
+            Statement::Break(_) | Statement::Continue | Statement::Pass => {}
+        }
+    }
+
+    fn visit_expression(&mut self, expr: &Expression, inside_lambda: bool) {
+        match expr {
+            Expression::Identifier(name) => {
+                self.consume(name, inside_lambda);
+            }
+            Expression::Borrow { expr, .. } => {
+                if let Expression::Identifier(name) = expr.as_ref() {
+                    if self.is_linear_binding(name) {
+                        self.errors.push(format!(
+                            "linear parameter '{}' cannot be borrowed (stmt {})",
+                            name, self.current_stmt
+                        ));
+                        return;
+                    }
+                }
+                self.visit_expression(expr, inside_lambda);
+            }
+            Expression::Binary(lhs, _, rhs) => {
+                self.visit_expression(lhs, inside_lambda);
+                self.visit_expression(rhs, inside_lambda);
+            }
+            Expression::Unary(_, inner)
+            | Expression::Field(inner, _)
+            | Expression::Path(inner, _)
+            | Expression::Deref(inner)
+            | Expression::Await(inner)
+            | Expression::Some(inner)
+            | Expression::Ok(inner)
+            | Expression::Err(inner)
+            | Expression::Shared(inner)
+            | Expression::Own(inner) => self.visit_expression(inner, inside_lambda),
+            Expression::Call(callee, args) => {
+                self.visit_expression(callee, inside_lambda);
+                for arg in args {
+                    self.visit_expression(arg, inside_lambda);
+                }
+            }
+            Expression::MethodCall { receiver, args, .. } => {
+                self.visit_expression(receiver, inside_lambda);
+                for arg in args {
+                    self.visit_expression(arg, inside_lambda);
+                }
+            }
+            Expression::Index(base, index) => {
+                self.visit_expression(base, inside_lambda);
+                self.visit_expression(index, inside_lambda);
+            }
+            Expression::Array(items) | Expression::Tuple(items) => {
+                for item in items {
+                    self.visit_expression(item, inside_lambda);
+                }
+            }
+            Expression::StructLiteral { fields, .. } => {
+                for (_, value) in fields {
+                    self.visit_expression(value, inside_lambda);
+                }
+            }
+            Expression::Range { start, end, .. } => {
+                if let Some(expr) = start {
+                    self.visit_expression(expr, inside_lambda);
+                }
+                if let Some(expr) = end {
+                    self.visit_expression(expr, inside_lambda);
+                }
+            }
+            Expression::Lambda { params, body, .. } => {
+                self.with_scope(|checker| {
+                    for param in params {
+                        checker.bind_local(&param.name);
+                    }
+                    checker.visit_expression(body, true);
+                });
+            }
+            Expression::LetChain { name, value, body } => {
+                self.visit_expression(value, inside_lambda);
+                self.with_scope(|checker| {
+                    checker.bind_local(name);
+                    checker.visit_expression(body, inside_lambda);
+                });
+            }
+            Expression::If {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                self.visit_expression(condition, inside_lambda);
+                self.visit_expression(then_expr, inside_lambda);
+                if let Some(expr) = else_expr {
+                    self.visit_expression(expr, inside_lambda);
+                }
+            }
+            Expression::Match { expr, arms } => {
+                self.visit_expression(expr, inside_lambda);
+                for arm in arms {
+                    self.with_scope(|checker| {
+                        checker.bind_pattern(&arm.pattern);
+                        match &arm.body {
+                            MatchBody::Expr(expr) => checker.visit_expression(expr, inside_lambda),
+                            MatchBody::Block(block) => checker.visit_block(block, inside_lambda),
+                        }
+                    });
+                }
+            }
+            Expression::ListComprehension {
+                expr,
+                var,
+                iter,
+                filter,
+            } => {
+                self.visit_expression(iter, inside_lambda);
+                self.with_scope(|checker| {
+                    checker.bind_local(var);
+                    checker.visit_expression(expr, inside_lambda);
+                    if let Some(filter) = filter {
+                        checker.visit_expression(filter, inside_lambda);
+                    }
+                });
+            }
+            Expression::Generator { body } => {
+                self.with_scope(|checker| checker.visit_block(body, inside_lambda));
+            }
+            Expression::Literal(_) | Expression::FString(_) | Expression::None => {}
+        }
+    }
+
+    fn bind_pattern(&mut self, pattern: &Pattern) {
+        match pattern {
+            Pattern::Binding(name) => self.bind_local(name),
+            Pattern::Constructor(_, fields) | Pattern::Or(fields) => {
+                for field in fields {
+                    self.bind_pattern(field);
+                }
+            }
+            Pattern::Literal(_) | Pattern::Wildcard => {}
+        }
+    }
+
+    fn consume(&mut self, name: &str, inside_lambda: bool) {
+        if !self.is_linear_binding(name) {
+            return;
+        }
+
+        if inside_lambda {
+            self.errors.push(format!(
+                "linear parameter '{}' cannot be captured by a lambda (stmt {})",
+                name, self.current_stmt
+            ));
+            return;
+        }
+
+        let usage = self.bindings.get_mut(name).expect("linear binding should exist");
+        if let Some(first_use) = usage.used_at {
+            self.errors.push(format!(
+                "linear parameter '{}' is consumed more than once (first at stmt {}, again at stmt {})",
+                name, first_use, self.current_stmt
+            ));
+            return;
+        }
+
+        usage.used_at = Some(self.current_stmt);
+    }
+
+    fn bind_local(&mut self, binding: &str) {
+        let trimmed = binding.trim();
+        if trimmed.starts_with('(') && trimmed.ends_with(')') {
+            let inner = &trimmed[1..trimmed.len() - 1];
+            for part in inner.split(',') {
+                let name = part.trim();
+                if !name.is_empty() && name != "_" {
+                    self.bind_local(name);
+                }
+            }
+            return;
+        }
+
+        if let Some(scope) = self.shadowed_bindings.last_mut() {
+            scope.push(trimmed.to_string());
+        }
+    }
+
+    fn with_scope(&mut self, f: impl FnOnce(&mut Self)) {
+        self.shadowed_bindings.push(Vec::new());
+        f(self);
+        self.shadowed_bindings.pop();
+    }
+
+    fn is_linear_binding(&self, name: &str) -> bool {
+        if !self.bindings.contains_key(name) {
+            return false;
+        }
+
+        !self
+            .shadowed_bindings
+            .iter()
+            .rev()
+            .any(|scope| scope.iter().any(|binding| binding == name))
+    }
 }
 
 /// The main semantic analyzer
@@ -558,6 +910,16 @@ pub struct Analyzer {
     trait_resolver: traits::TraitResolver,
     /// Borrow checker for ownership enforcement
     borrow_checker: borrow_check::BorrowChecker,
+    /// Known effect rows for functions and builtins
+    function_effect_rows: HashMap<String, effects::EffectRow>,
+    /// Active effect rows for nested function/lambda bodies
+    effect_stack: Vec<effects::EffectRow>,
+}
+
+impl Default for Analyzer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Analyzer {
@@ -592,12 +954,59 @@ impl Analyzer {
             constraint_solver: constraints::ConstraintSolver::new(),
             trait_resolver: traits::TraitResolver::new(),
             borrow_checker: borrow_check::BorrowChecker::new(),
+            function_effect_rows: HashMap::new(),
+            effect_stack: Vec::new(),
         };
 
         // Register builtin functions in the root scope
         analyzer.register_builtins();
+        analyzer.register_builtin_effect_rows();
 
         analyzer
+    }
+
+    fn register_builtin_effect_rows(&mut self) {
+        let io = effects::EffectRow::just(effects::builtin::io());
+        let debug = effects::EffectRow::just(effects::builtin::debug());
+        let diverge = effects::EffectRow::just(effects::builtin::diverge());
+
+        for name in [
+            "println",
+            "print",
+            "eprintln",
+            "eprint",
+            "file_read",
+            "file_write_bytes",
+        ] {
+            self.function_effect_rows
+                .insert(name.to_string(), io.clone());
+        }
+
+        self.function_effect_rows.insert("dbg".to_string(), debug);
+        self.function_effect_rows
+            .insert("exit".to_string(), diverge.clone());
+        self.function_effect_rows
+            .insert("assert".to_string(), diverge.clone());
+        self.function_effect_rows
+            .insert("assert_eq".to_string(), diverge);
+    }
+
+    fn push_effect_scope(&mut self) {
+        self.effect_stack.push(effects::EffectRow::pure());
+    }
+
+    fn pop_effect_scope(&mut self) -> Option<effects::EffectRow> {
+        self.effect_stack.pop()
+    }
+
+    fn record_effect_row(&mut self, row: &effects::EffectRow) {
+        if let Some(current) = self.effect_stack.last_mut() {
+            *current = current.clone() + row.clone();
+        }
+    }
+
+    fn record_effect_symbol(&mut self, effect: effects::EffectSymbol) {
+        self.record_effect_row(&effects::EffectRow::just(effect));
     }
 
     /// Register all builtin functions so they are available without imports
@@ -876,7 +1285,7 @@ impl Analyzer {
             "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "bool", "char",
             "usize", "isize",
         ];
-        let basic_traits = vec!["Copy", "Clone", "Send", "Sync", "Debug", "Default"];
+        let basic_traits = ["Copy", "Clone", "Send", "Sync", "Debug", "Default"];
 
         for ty in copy_types {
             impls.insert(
@@ -946,15 +1355,13 @@ impl Analyzer {
 
         // Update symbol borrow states
         for scope in &mut self.scopes {
-            for (_, sym) in &mut scope.symbols {
+            for sym in scope.symbols.values_mut() {
                 sym.active_borrows
                     .retain(|b| b.lifetime.scope_id != scope_id);
 
                 // Reset borrow state if all borrows released
-                if sym.active_borrows.is_empty() {
-                    if sym.borrow_state != BorrowState::Moved {
-                        sym.borrow_state = BorrowState::Owned;
-                    }
+                if sym.active_borrows.is_empty() && sym.borrow_state != BorrowState::Moved {
+                    sym.borrow_state = BorrowState::Owned;
                 }
             }
         }
@@ -1315,7 +1722,7 @@ impl Analyzer {
                 format!("{}<{}>", n, args_str.join(", "))
             }
             Type::Array(inner, size) => {
-                if let Some(_) = size {
+                if size.is_some() {
                     format!("[{}; N]", self.type_to_string(inner))
                 } else {
                     format!("[{}]", self.type_to_string(inner))
@@ -1552,7 +1959,7 @@ impl Analyzer {
             let mut substitution = TypeSubstitution::new();
 
             // Map type arguments (T, U, V, etc.) to concrete types
-            let type_param_names = vec!["T", "U", "V", "W", "X"];
+            let type_param_names = ["T", "U", "V", "W", "X"];
             for (i, type_arg) in type_args.iter().enumerate() {
                 if i < type_param_names.len() {
                     substitution.add(type_param_names[i].to_string(), type_arg.clone());
@@ -1678,6 +2085,9 @@ impl Analyzer {
                 let param_types: Vec<Type> = f.params.iter().map(|p| p.ty.clone()).collect();
                 let ret_type = f.return_type.clone().map(Box::new);
                 let fn_type = Type::Function(param_types, ret_type);
+                let declared_effect_row = self
+                    .analyze_effect_row(f.effect_row.as_ref())
+                    .unwrap_or_else(effects::EffectRow::pure);
 
                 // Only register if not already defined (e.g., as a builtin)
                 if self.lookup_symbol(&f.name).is_err() {
@@ -1697,6 +2107,8 @@ impl Analyzer {
                     );
                     debug!("Forward-declared function: {}", f.name);
                 }
+                self.function_effect_rows
+                    .insert(f.name.clone(), declared_effect_row);
             }
         }
 
@@ -1752,7 +2164,7 @@ impl Analyzer {
                 Item::Impl(i) => {
                     self.type_impls
                         .entry(i.type_name.clone())
-                        .or_insert_with(Vec::new)
+                        .or_default()
                         .push(i.trait_name.clone());
                 }
                 Item::Const(c) => {
@@ -1933,6 +2345,7 @@ impl Analyzer {
 
         self.current_function = Some(f.name.clone());
         self.push_scope();
+        self.push_effect_scope();
 
         // Add parameters to scope with proper ownership tracking
         for param in &f.params {
@@ -1964,6 +2377,8 @@ impl Analyzer {
             }
         }
 
+        LinearContractChecker::new(&f.params).check_function(&f)?;
+
         let params: Vec<_> = f
             .params
             .iter()
@@ -1978,6 +2393,21 @@ impl Analyzer {
 
         // Analyze body statements with lifetime tracking
         let body = self.analyze_block(&f.body)?;
+        let body_effects = self
+            .pop_effect_scope()
+            .unwrap_or_else(effects::EffectRow::pure);
+
+        if let Some(declared) = &effect_row {
+            if !body_effects.is_subtype_of(declared) {
+                return Err(SemanticError::GenericError(format!(
+                    "function '{}' body effects {} exceed declared effects {}",
+                    f.name, body_effects, declared
+                )));
+            }
+        }
+
+        self.function_effect_rows
+            .insert(f.name.clone(), body_effects.clone());
 
         // Check that all paths return the correct type
         self.check_return_paths(&body, &return_type)?;
@@ -1990,7 +2420,7 @@ impl Analyzer {
             name: f.name,
             params,
             return_type,
-            effect_row,
+            effect_row: effect_row.or(Some(body_effects)),
             body,
             is_async: f.is_async,
         }))
@@ -2122,7 +2552,7 @@ impl Analyzer {
                 }
 
                 // Unify assignment types so placeholder '_' can absorb inferred values.
-                if let Err(_) = self.unify_types(&typed_target.ty, &typed_value.ty) {
+                if self.unify_types(&typed_target.ty, &typed_value.ty).is_err() {
                     return Err(SemanticError::new(&format!(
                         "Type mismatch in assignment: expected {:?}, found {:?}",
                         typed_target.ty, typed_value.ty
@@ -2264,10 +2694,12 @@ impl Analyzer {
                     .as_ref()
                     .map(|e| self.analyze_expression(e))
                     .transpose()?;
+                self.record_effect_symbol(effects::builtin::yield_());
                 Ok(TypedStatement::Yield(typed_expr))
             }
             Statement::Spawn(expr) => {
                 let typed_expr = self.analyze_expression(expr)?;
+                self.record_effect_symbol(effects::builtin::async_());
                 Ok(TypedStatement::Spawn(Box::new(typed_expr)))
             }
             Statement::Select { arms } => {
@@ -2383,6 +2815,11 @@ impl Analyzer {
                 let typed_func = self.analyze_expression(func)?;
                 let typed_args: Result<Vec<_>, _> =
                     args.iter().map(|a| self.analyze_expression(a)).collect();
+                if let Expression::Identifier(name) = func.as_ref() {
+                    if let Some(effect_row) = self.function_effect_rows.get(name).cloned() {
+                        self.record_effect_row(&effect_row);
+                    }
+                }
                 let return_ty = match &typed_func.ty {
                     Type::Function(_, ret) => ret
                         .as_ref()
@@ -2535,8 +2972,9 @@ impl Analyzer {
                     ty: Type::Array(Box::new(elem_ty), None),
                 })
             }
-            Expression::Lambda { params, body } => {
+            Expression::Lambda { params, body, is_async } => {
                 self.push_scope();
+                self.push_effect_scope();
                 let mut typed_params = Vec::new();
                 for p in params {
                     let p_ty = match &p.ty {
@@ -2547,16 +2985,39 @@ impl Analyzer {
                     typed_params.push((p.name.clone(), p_ty));
                 }
                 let typed_body = self.analyze_expression(body)?;
+                let lambda_effects = self.pop_effect_scope().unwrap_or_else(effects::EffectRow::pure);
                 let ret_ty = typed_body.ty.clone();
                 self.pop_scope()?;
                 let param_types: Vec<Type> = typed_params.iter().map(|(_, t)| t.clone()).collect();
                 Ok(TypedExpr {
                     kind: TypedExprKind::Lambda {
+                        is_async: *is_async,
                         params: typed_params,
                         body: Box::new(typed_body),
                         return_type: ret_ty.clone(),
+                        effect_row: if lambda_effects.is_empty() {
+                            None
+                        } else {
+                            Some(lambda_effects)
+                        },
                     },
                     ty: Type::Function(param_types, Some(Box::new(ret_ty.clone()))),
+                })
+            }
+            Expression::LetChain { name, value, body } => {
+                self.push_scope();
+                let typed_value = self.analyze_expression(value)?;
+                self.define_symbol(name.clone(), typed_value.ty.clone(), false)?;
+                let typed_body = self.analyze_expression(body)?;
+                self.pop_scope()?;
+                let body_ty = typed_body.ty.clone();
+                Ok(TypedExpr {
+                    kind: TypedExprKind::LetChain {
+                        name: name.clone(),
+                        value: Box::new(typed_value),
+                        body: Box::new(typed_body),
+                    },
+                    ty: body_ty,
                 })
             }
             Expression::Tuple(elements) => {
@@ -2579,6 +3040,7 @@ impl Analyzer {
                     }
                     other => other.clone(),
                 };
+                self.record_effect_symbol(effects::builtin::async_());
                 Ok(TypedExpr {
                     kind: TypedExprKind::Await(Box::new(typed_inner)),
                     ty: inner_ty,
@@ -3016,12 +3478,10 @@ impl Analyzer {
                 then_block,
                 else_block,
             } => {
-                let typed_cond = self
-                    .analyze_expression(condition)
-                    .unwrap_or_else(|_| TypedExpr {
-                        kind: TypedExprKind::Literal(Literal::Bool(true)),
-                        ty: Type::Bool,
-                    });
+                let typed_cond = self.analyze_expression(condition).unwrap_or(TypedExpr {
+                    kind: TypedExprKind::Literal(Literal::Bool(true)),
+                    ty: Type::Bool,
+                });
                 let typed_then = self.analyze_block(then_block).unwrap_or_default();
                 let typed_else = else_block
                     .as_ref()
@@ -3033,12 +3493,10 @@ impl Analyzer {
                 })
             }
             Statement::While { condition, body } => {
-                let typed_cond = self
-                    .analyze_expression(condition)
-                    .unwrap_or_else(|_| TypedExpr {
-                        kind: TypedExprKind::Literal(Literal::Bool(true)),
-                        ty: Type::Bool,
-                    });
+                let typed_cond = self.analyze_expression(condition).unwrap_or(TypedExpr {
+                    kind: TypedExprKind::Literal(Literal::Bool(true)),
+                    ty: Type::Bool,
+                });
                 let typed_body = self.analyze_block(body).unwrap_or_default();
                 Ok(TypedStatement::While {
                     condition: typed_cond,
