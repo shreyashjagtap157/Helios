@@ -244,6 +244,8 @@ pub enum Type {
     }, // dyn Trait + 'a
     AssocType(String, String), // Trait::Type (trait, type_name)
     ConstGeneric(String),      // const T: usize style
+    /// Variadic generic pack (e.g. `..Ts` inside generic parameter lists)
+    VariadicGeneric(String),
     WhereConstrained {
         base: Box<Type>,
         bounds: Vec<String>,
@@ -318,6 +320,7 @@ impl PartialEq for Type {
                     bounds: bo2,
                 },
             ) => b1 == b2 && bo1 == bo2,
+            (Type::VariadicGeneric(n1), Type::VariadicGeneric(n2)) => n1 == n2,
             (Type::HigherRanked { bound: b1 }, Type::HigherRanked { bound: b2 }) => b1 == b2,
             _ => false,
         }
@@ -349,6 +352,8 @@ pub enum Statement {
         name: String,
         mutable: bool,
         ty: Option<Type>,
+        /// If true, this `let` binding is linear (must be used exactly once)
+        linear: bool,
         value: Option<Expression>,
     },
     Var {

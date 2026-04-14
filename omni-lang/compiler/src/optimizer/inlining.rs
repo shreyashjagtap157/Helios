@@ -350,6 +350,7 @@ fn inline_in_block(block: &mut Block, candidates: &HashMap<String, InlineCandida
                 mutable,
                 ref ty,
                 value: Some(Expression::Call(ref func, ref args)),
+                ..
             } if matches!(func.as_ref(), Expression::Identifier(_)) => {
                 if let Expression::Identifier(fname) = func.as_ref() {
                     if let Some(candidate) = candidates.get(fname) {
@@ -364,6 +365,7 @@ fn inline_in_block(block: &mut Block, candidates: &HashMap<String, InlineCandida
                     name: name.clone(),
                     mutable,
                     ty: ty.clone(),
+                    linear: false,
                     value: Some(Expression::Call(func.clone(), args.clone())),
                 });
             }
@@ -383,6 +385,7 @@ fn build_inline_body(candidate: &InlineCandidate, args: &[Expression]) -> Vec<St
             name: param.clone(),
             mutable: false,
             ty: None,
+            linear: false,
             value: Some(arg.clone()),
         });
     }
@@ -402,6 +405,7 @@ fn rewrite_return_as_let(stmts: &mut Vec<Statement>, name: &str, mutable: bool, 
                 name: name.to_string(),
                 mutable,
                 ty,
+                linear: false,
                 value: Some(val),
             };
         }
@@ -618,6 +622,7 @@ mod tests {
                         name: "result".into(),
                         mutable: false,
                         ty: None,
+                        linear: false,
                         value: Some(Expression::Call(Box::new(ident("double")), vec![int(21)])),
                     }],
                 ),

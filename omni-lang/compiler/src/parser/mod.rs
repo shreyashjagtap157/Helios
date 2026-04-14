@@ -354,6 +354,23 @@ impl Parser {
         Ok(attr)
     }
 
+    /// Parse optional pub visibility specifiers like pub(mod) or pub(pkg).
+    fn parse_pub_visibility(&mut self) -> Result<String, ParseError> {
+        if !matches!(self.peek_kind(), Some(TokenKind::LParen)) {
+            return Ok("@pub".to_string());
+        }
+
+        self.advance(); // consume '('
+        let kind = self.parse_identifier()?;
+        self.expect(&TokenKind::RParen)?;
+
+        match kind.as_str() {
+            "mod" => Ok("@pub(mod)".to_string()),
+            "pkg" => Ok("@pub(pkg)".to_string()),
+            _ => Ok("@pub".to_string()),
+        }
+    }
+
     /// Parse a complete module.
     /// Uses panic-mode error recovery: on error, it records the error,
     /// synchronizes to the next item boundary, and continues parsing.
@@ -526,7 +543,8 @@ impl Parser {
             Some(TokenKind::Macro) => self.parse_macro(attributes),
             Some(TokenKind::Pub) => {
                 self.advance();
-                attributes.push("@pub".to_string());
+                let vis = self.parse_pub_visibility()?;
+                attributes.push(vis);
                 self.parse_item()
             }
             _ => {
@@ -1301,13 +1319,21 @@ impl Parser {
             Some(TokenKind::Identifier) => {
                 let name = self.parse_identifier()?;
                 // Check for generic parameters
-                if matches!(self.peek_kind(), Some(TokenKind::Lt)) {
+                    if matches!(self.peek_kind(), Some(TokenKind::Lt)) {
                     self.advance();
                     let mut type_args = Vec::new();
                     while !matches!(self.peek_kind(), Some(TokenKind::Gt))
                         && !matches!(self.peek_kind(), Some(TokenKind::Shr))
                     {
-                        type_args.push(self.parse_type()?);
+                        // Support variadic generics syntax: `..Ts`
+                        if matches!(self.peek_kind(), Some(TokenKind::DotDot)) {
+                            self.advance(); // consume `..`
+                            let ident = self.parse_identifier()?;
+                            type_args.push(Type::VariadicGeneric(ident));
+                        } else {
+                            type_args.push(self.parse_type()?);
+                        }
+
                         if matches!(self.peek_kind(), Some(TokenKind::Comma)) {
                             self.advance();
                         }
@@ -1712,6 +1738,12 @@ impl Parser {
     /// Parse let statement
     fn parse_let(&mut self) -> Result<Statement, ParseError> {
         self.expect(&TokenKind::Let)?;
+        // Support optional `linear` modifier: `let linear x = ...`
+        let linear = matches!(self.peek_kind(), Some(TokenKind::Linear));
+        if linear {
+            self.advance();
+        }
+
         let mutable = matches!(self.peek_kind(), Some(TokenKind::Mut));
         if mutable {
             self.advance();
@@ -1753,6 +1785,7 @@ impl Parser {
             name,
             mutable,
             ty,
+            linear,
             value,
         })
     }

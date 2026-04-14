@@ -245,6 +245,8 @@ pub enum Constraint {
 
     /// `callee_ty` must be callable with `arg_tys`, producing `ret_ty`.
     Callable(Type, Vec<Type>, Type, ConstraintOrigin),
+    /// Type must implement a trait (implied/propgated bounds)
+    TraitBound(Type, std::string::String, ConstraintOrigin),
 }
 
 /// Where a constraint originated – used for error messages.
@@ -529,6 +531,9 @@ pub struct InferenceEngine {
     /// Known struct definitions: name → fields.
     struct_defs: HashMap<std::string::String, Vec<(std::string::String, Type)>>,
 
+    /// Struct-level implied bounds discovered from AST (struct -> [(type_param, trait)])
+    struct_bounds: HashMap<std::string::String, Vec<(std::string::String, std::string::String)>>,
+
     /// Known function signatures: name → (param_types, return_type, effect_row).
     function_sigs: HashMap<std::string::String, FunctionSignature>,
 
@@ -559,6 +564,7 @@ impl InferenceEngine {
             constraints: Vec::new(),
             substitution: Substitution::new(),
             struct_defs: HashMap::new(),
+            struct_bounds: HashMap::new(),
             function_sigs: HashMap::new(),
             errors: Vec::new(),
             result: InferenceResult::new(),
@@ -815,6 +821,7 @@ impl InferenceEngine {
             ast::Type::Nullable(inner) => Type::Nullable(Box::new(self.from_ast_type(inner))),
             ast::Type::Infer => self.fresh_var(), // Create fresh type variable for inference
             ast::Type::ErrorSet { name, .. } => Type::ErrorSet(name.clone()), // Error set types
+            ast::Type::VariadicGeneric(name) => Type::Generic(name.clone()),
         }
     }
 
@@ -896,11 +903,36 @@ impl InferenceEngine {
     // -----------------------------------------------------------------
 
     fn register_struct(&mut self, sdef: &ast::StructDef) {
-        let fields: Vec<(std::string::String, Type)> = sdef
-            .fields
-            .iter()
-            .map(|f| (f.name.clone(), self.from_ast_type(&f.ty)))
-            .collect();
+        let mut fields: Vec<(std::string::String, Type)> = Vec::new();
+        for f in &sdef.fields {
+            // Detect `T where T: Trait` style annotations on field types and
+            // record them as implied struct-level bounds so we can propagate
+            // them to methods/impls later.
+            match &f.ty {
+                ast::Type::WhereConstrained { base, bounds } => {
+                    // Convert base type for field storage
+                    let base_ty = self.from_ast_type(base);
+                    fields.push((f.name.clone(), base_ty));
+
+                    // If base is a generic parameter reference like `T`, record
+                    // the implied bounds (T -> Trait).
+                    if let ast::Type::Generic(gen_name, _args) = &**base {
+                        let entry = self
+                            .struct_bounds
+                            .entry(sdef.name.clone())
+                            .or_insert_with(Vec::new);
+                        for b in bounds {
+                            entry.push((gen_name.clone(), b.clone()));
+                        }
+                    }
+                }
+                other => {
+                    let ty = self.from_ast_type(other);
+                    fields.push((f.name.clone(), ty));
+                }
+            }
+        }
+
         self.struct_defs.insert(sdef.name.clone(), fields.clone());
         self.result.struct_types.insert(sdef.name.clone(), fields);
     }
@@ -924,9 +956,86 @@ impl InferenceEngine {
         let func_ty = Type::Function(param_tys.clone(), Box::new(ret_ty.clone()));
         env.define(name, func_ty.clone());
 
+        // If this is a method on a struct (qualified name `Struct::method`),
+        // propagate any implied struct-level bounds discovered earlier into
+        // per-method trait-bound constraints so inference enforces them.
+        if let Some(pos) = name.find("::") {
+            let struct_name = &name[..pos];
+            if let Some(bounds) = self.struct_bounds.get(struct_name).cloned() {
+                for (gen_name, trait_name) in bounds.iter() {
+                    // Check params
+                    for p in &param_tys {
+                        let mut occ = Vec::new();
+                        self.collect_generic_occurrences(p, gen_name, &mut occ);
+                        for sub in occ {
+                            self.add_constraint(Constraint::TraitBound(
+                                sub,
+                                trait_name.clone(),
+                                ConstraintOrigin::new(format!(
+                                    "implied bound {} for {}::{}",
+                                    trait_name, struct_name, gen_name
+                                )),
+                            ));
+                        }
+                    }
+
+                    // Check return type
+                    let mut occ = Vec::new();
+                    self.collect_generic_occurrences(&ret_ty, gen_name, &mut occ);
+                    for sub in occ {
+                        self.add_constraint(Constraint::TraitBound(
+                            sub,
+                            trait_name.clone(),
+                            ConstraintOrigin::new(format!(
+                                "implied bound {} for {}::{}",
+                                trait_name, struct_name, gen_name
+                            )),
+                        ));
+                    }
+                }
+            }
+        }
+
         self.function_sigs
             .insert(name.to_string(), (param_tys, ret_ty, effect_row));
         self.result.function_types.insert(name.to_string(), func_ty);
+    }
+
+    /// Collect sub-types inside `ty` that are `Generic(gen_name)` and append
+    /// clones of those sub-types into `out`.
+    fn collect_generic_occurrences(&self, ty: &Type, gen_name: &str, out: &mut Vec<Type>) {
+        match ty {
+            Type::Generic(n) if n == gen_name => out.push(ty.clone()),
+            Type::Nullable(inner) => self.collect_generic_occurrences(inner, gen_name, out),
+            Type::Array(elem) => self.collect_generic_occurrences(elem, gen_name, out),
+            Type::Map(k, v) => {
+                self.collect_generic_occurrences(k, gen_name, out);
+                self.collect_generic_occurrences(v, gen_name, out);
+            }
+            Type::Tuple(elems) => {
+                for e in elems {
+                    self.collect_generic_occurrences(e, gen_name, out);
+                }
+            }
+            Type::Function(params, ret) => {
+                for p in params {
+                    self.collect_generic_occurrences(p, gen_name, out);
+                }
+                self.collect_generic_occurrences(ret, gen_name, out);
+            }
+            Type::Struct(_, fields) => {
+                for (_n, ft) in fields {
+                    self.collect_generic_occurrences(ft, gen_name, out);
+                }
+            }
+            Type::Applied(base, args) => {
+                self.collect_generic_occurrences(base, gen_name, out);
+                for a in args {
+                    self.collect_generic_occurrences(a, gen_name, out);
+                }
+            }
+            _ => {}
+        }
     }
 
     fn effect_row_from_ast(
@@ -1854,11 +1963,22 @@ impl InferenceEngine {
     fn solve_constraints(&mut self) {
         // Take constraints out so we can iterate without borrow conflicts
         let constraints = std::mem::take(&mut self.constraints);
+
+        // Partition trait-bound constraints to process them after unification
+        let mut trait_bounds: Vec<&Constraint> = Vec::new();
+        let mut others: Vec<&Constraint> = Vec::new();
         for c in constraints.iter() {
-            // Ensure the runtime monitor sees progress even for small constraint sets.
-            monitor::update_heartbeat();
             match c {
-                Constraint::Equal(t1, t2, origin) => {
+                Constraint::TraitBound(_, _, _) => trait_bounds.push(c),
+                _ => others.push(c),
+            }
+        }
+
+        // First, process non-trait constraints (unification-heavy)
+        for c in others.iter() {
+            monitor::update_heartbeat();
+            match *c {
+                Constraint::Equal(ref t1, ref t2, ref origin) => {
                     let a = self.substitution.apply(t1);
                     let b = self.substitution.apply(t2);
                     if let Err(e) = self.unify(&a, &b) {
@@ -1871,10 +1991,10 @@ impl InferenceEngine {
                         );
                     }
                 }
-                Constraint::HasField(recv, field, field_ty, origin) => {
+                Constraint::HasField(ref recv, ref field, ref field_ty, ref origin) => {
                     let resolved_recv = self.substitution.apply(recv);
                     let resolved_field_ty = self.substitution.apply(field_ty);
-                    if let Type::Struct(name, fields) = &resolved_recv {
+                    if let Type::Struct(ref name, ref fields) = &resolved_recv {
                         if let Some((_, ft)) = fields.iter().find(|(n, _)| n == field) {
                             if let Err(_e) = self.unify(&resolved_field_ty, ft) {
                                 self.errors.push(TypeError::new(format!(
@@ -1898,12 +2018,11 @@ impl InferenceEngine {
                             }
                         }
                     }
-                    // If the receiver is a type variable, we cannot resolve now –
-                    // we just leave it (a more sophisticated engine would iterate).
+                    // If the receiver is a type variable, we cannot resolve now – leave it.
                 }
-                Constraint::Callable(callee, args, ret, origin) => {
+                Constraint::Callable(ref callee, ref args, ref ret, ref origin) => {
                     let resolved_callee = self.substitution.apply(callee);
-                    if let Type::Function(param_tys, ret_ty) = &resolved_callee {
+                    if let Type::Function(ref param_tys, ref ret_ty) = &resolved_callee {
                         // Unify return type
                         let resolved_ret = self.substitution.apply(ret);
                         if let Err(_e) = self.unify(&resolved_ret, ret_ty) {
@@ -1916,14 +2035,10 @@ impl InferenceEngine {
                         if args.len() != param_tys.len() {
                             self.errors.push(TypeError::new(format!(
                                 "Function expects {} arguments but {} were provided – {}",
-                                param_tys.len(),
-                                args.len(),
-                                origin.description
+                                param_tys.len(), args.len(), origin.description
                             )));
                         } else {
-                            for (i, (expected, actual)) in
-                                param_tys.iter().zip(args.iter()).enumerate()
-                            {
+                            for (i, (expected, actual)) in param_tys.iter().zip(args.iter()).enumerate() {
                                 let a = self.substitution.apply(actual);
                                 let e = self.substitution.apply(expected);
                                 if let Err(_err) = self.unify(&a, &e) {
@@ -1935,7 +2050,43 @@ impl InferenceEngine {
                             }
                         }
                     }
-                    // If callee is still a Var, we can't resolve yet
+                }
+                _ => {}
+            }
+        }
+
+        // Now process trait-bound constraints (implied bounds)
+        for c in trait_bounds.iter() {
+            if let Constraint::TraitBound(ref ty, ref trait_name, ref origin) = *c {
+                let resolved = self.substitution.apply(ty);
+                // If unresolved (var or generic), skip enforcement here — other
+                // phases (or a repeated pass) may handle them. If resolved to a
+                // concrete builtin type, perform a basic check for common traits.
+                match resolved {
+                    Type::Int | Type::Float | Type::Bool | Type::String => {
+                        // Basic builtin trait check: enforce Clone/Copy for primitives
+                        if trait_name == "Copy" || trait_name == "Clone" {
+                            // primitives satisfy these
+                        } else {
+                            // Unknown trait on builtin primitive — conservatively OK
+                        }
+                    }
+                    Type::Var(_) | Type::Generic(_) => {
+                        // Cannot verify yet; leave as soft warning for now.
+                        self.errors.push(TypeError::new(format!(
+                            "Unverified implied bound: type {} must implement {} — {}",
+                            resolved, trait_name, origin.description
+                        )));
+                    }
+                    _ => {
+                        // For non-primitive concrete types we don't have the
+                        // full trait-resolution context here; emit an error
+                        // so the developer is informed (may be refined later).
+                        self.errors.push(TypeError::new(format!(
+                            "Type {} does not (yet) show implementation of {} — {}",
+                            resolved, trait_name, origin.description
+                        )));
+                    }
                 }
             }
         }
@@ -2481,6 +2632,7 @@ mod tests {
                 name: "x".into(),
                 mutable: false,
                 ty: None,
+                linear: false,
                 value: Some(a::Expression::Literal(a::Literal::Int(42))),
             }],
         ));
@@ -2496,6 +2648,7 @@ mod tests {
                 name: "x".into(),
                 mutable: false,
                 ty: Some(a::Type::I32),
+                linear: false,
                 value: Some(a::Expression::Literal(a::Literal::Int(10))),
             }],
         ));

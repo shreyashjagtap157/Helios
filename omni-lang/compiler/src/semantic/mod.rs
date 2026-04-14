@@ -412,6 +412,8 @@ pub struct TypedImpl {
 pub enum TypedStatement {
     Let {
         name: String,
+        /// Whether the original `let` binding was linear
+        linear: bool,
         ty: Type,
         value: TypedExpr,
     },
@@ -2502,6 +2504,7 @@ impl Analyzer {
                 mutable,
                 ty,
                 value,
+                linear,
             } => {
                 let typed_value = if let Some(v) = value {
                     self.analyze_expression(v)?
@@ -2516,6 +2519,7 @@ impl Analyzer {
                 self.define_binding_symbols(name, var_ty.clone(), *mutable)?;
                 Ok(TypedStatement::Let {
                     name: name.clone(),
+                    linear: *linear,
                     ty: var_ty,
                     value: typed_value,
                 })
@@ -2538,6 +2542,7 @@ impl Analyzer {
                 });
                 Ok(TypedStatement::Let {
                     name: name.clone(),
+                    linear: false,
                     ty: var_ty,
                     value: default_value,
                 })
@@ -3397,7 +3402,7 @@ impl Analyzer {
     fn statement_to_typed(&mut self, stmt: &Statement) -> Result<TypedStatement, SemanticError> {
         match stmt {
             Statement::Let {
-                name, ty, value, ..
+                name, ty, value, linear, ..
             } => {
                 let typed_value = if let Some(v) = value {
                     self.analyze_expression(v)?
@@ -3411,6 +3416,7 @@ impl Analyzer {
                 let var_ty = ty.clone().unwrap_or(typed_value.ty.clone());
                 Ok(TypedStatement::Let {
                     name: name.clone(),
+                    linear: *linear,
                     ty: var_ty,
                     value: typed_value,
                 })
@@ -3434,6 +3440,7 @@ impl Analyzer {
                 });
                 Ok(TypedStatement::Let {
                     name: "".to_string(),
+                    linear: false,
                     ty: var_ty,
                     value: default_value,
                 })

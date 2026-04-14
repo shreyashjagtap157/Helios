@@ -1054,6 +1054,7 @@ mod tests {
             name: "x".into(),
             mutable: false,
             ty: None,
+            linear: false,
             value: Some(Expression::Literal(Literal::Int(42))),
         }]));
         let instrs = main_instrs(&m);
@@ -1218,6 +1219,7 @@ mod tests {
                 name: "a".into(),
                 mutable: false,
                 ty: None,
+                linear: false,
                 value: Some(Expression::Literal(Literal::Int(1))),
             },
             Statement::If {
@@ -1227,6 +1229,7 @@ mod tests {
                         name: "b".into(),
                         mutable: false,
                         ty: None,
+                        linear: false,
                         value: Some(Expression::Literal(Literal::Int(2))),
                     }],
                 },
@@ -1313,6 +1316,7 @@ mod tests {
                 name: "x".into(),
                 mutable: false,
                 ty: None,
+                linear: false,
                 value: Some(Expression::Literal(Literal::Int(10))),
             },
             Statement::Return(Some(Expression::Binary(

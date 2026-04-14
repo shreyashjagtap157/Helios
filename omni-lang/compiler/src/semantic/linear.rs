@@ -130,7 +130,7 @@ impl LinearChecker {
         }
 
         for (name, var) in &linear_vars {
-            if !var.used && var.moved {
+            if !var.used {
                 let location = var.last_use.unwrap_or(Location { stmt_index: 0 });
                 errors.push(LinearError::LinearNotUsed {
                     var: name.clone(),
@@ -150,59 +150,62 @@ impl LinearChecker {
         errors: &mut Vec<LinearError>,
     ) {
         match stmt {
-            Statement::Let { name, value, .. } => {
-                if let Some(val) = value {
-                    if self.is_linear_value(val) {
-                        linear_vars.insert(
-                            name.clone(),
-                            LinearVar {
-                                name: name.clone(),
-                                used: false,
-                                moved: false,
-                                last_use: Some(location),
-                            },
-                        );
+            Statement::Let { name, value, linear, .. } => {
+                if *linear {
+                    if let Some(val) = value {
+                        if self.is_linear_value(val) {
+                            linear_vars.insert(
+                                name.clone(),
+                                LinearVar {
+                                    name: name.clone(),
+                                    used: false,
+                                    moved: false,
+                                    last_use: Some(location),
+                                },
+                            );
+                        }
                     }
                 }
             }
-            Statement::Assignment { target, value } => {
-                if let Some(expr) = value {
-                    if let Expression::Identifier(name) = target.as_ref() {
-                        if let Some(var) = linear_vars.get_mut(name) {
-                            if var.moved {
-                                errors.push(LinearError::LinearMovedTwice {
-                                    var: name.clone(),
-                                    first_use: var.last_use.unwrap_or(location),
-                                    second_use: location,
-                                });
-                            }
-                            var.used = true;
-                            var.last_use = Some(location);
-                            var.moved = true;
+            Statement::Assignment { target, op: _, value } => {
+                // If assigning to a linear variable, treat as a move/use
+                if let Expression::Identifier(tgt) = target {
+                    if let Some(var) = linear_vars.get_mut(tgt) {
+                        if var.moved {
+                            errors.push(LinearError::LinearMovedTwice {
+                                var: tgt.clone(),
+                                first_use: var.last_use.unwrap_or(location),
+                                second_use: location,
+                            });
                         }
+                        var.used = true;
+                        var.last_use = Some(location);
+                        var.moved = true;
                     }
+                }
 
-                    if self.is_linear_value(expr) {
-                        if let Some(var) = linear_vars.get_mut(name) {
-                            if var.moved {
-                                errors.push(LinearError::LinearMovedTwice {
-                                    var: name.clone(),
-                                    first_use: var.last_use.unwrap_or(location),
-                                    second_use: location,
-                                });
-                            }
-                            var.moved = true;
-                            var.last_use = Some(location);
+                // If the value is an identifier referring to a linear var, it is moved
+                if let Expression::Identifier(src) = value {
+                    if let Some(var) = linear_vars.get_mut(src) {
+                        if var.moved {
+                            errors.push(LinearError::LinearMovedTwice {
+                                var: src.clone(),
+                                first_use: var.last_use.unwrap_or(location),
+                                second_use: location,
+                            });
                         }
+                        var.moved = true;
+                        var.last_use = Some(location);
                     }
                 }
             }
-            Statement::Return { value } => {
-                if let Some(expr) = value {
+            Statement::Return(expr_opt) => {
+                if let Some(expr) = expr_opt {
                     if let Expression::Identifier(name) = expr {
                         if let Some(var) = linear_vars.get_mut(name) {
                             var.used = true;
                             var.last_use = Some(location);
+                            var.moved = true;
                         }
                     }
                 }
@@ -235,8 +238,8 @@ impl LinearChecker {
                     var.last_use = Some(location);
                 }
             }
-            Expression::Call { func, args } => {
-                for arg in args {
+            Expression::Call(func_box, args) => {
+                for arg in args.iter() {
                     if let Expression::Identifier(name) = arg {
                         if let Some(var) = linear_vars.get_mut(name) {
                             if var.moved {
@@ -270,7 +273,7 @@ impl LinearChecker {
         match expr {
             Expression::Identifier(_) => true,
             Expression::Tuple(_) => true,
-            Expression::Struct(_, _) => true,
+            Expression::StructLiteral { .. } => true,
             _ => false,
         }
     }

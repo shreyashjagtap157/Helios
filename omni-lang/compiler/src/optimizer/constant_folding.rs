@@ -74,6 +74,7 @@ fn fold_statement(stmt: Statement, env: &mut ConstEnv) -> Statement {
             mutable,
             ty,
             value,
+            linear,
         } => {
             let folded = value.map(|v| fold_expr_with_env(&v, env));
             // If the binding is immutable and the value is a literal, propagate it
@@ -88,6 +89,7 @@ fn fold_statement(stmt: Statement, env: &mut ConstEnv) -> Statement {
                 name,
                 mutable,
                 ty,
+                linear,
                 value: folded,
             }
         }
@@ -535,12 +537,14 @@ mod tests {
                             name: "x".into(),
                             mutable: false,
                             ty: None,
+                            linear: false,
                             value: Some(int(5)),
                         },
                         Statement::Let {
                             name: "y".into(),
                             mutable: false,
                             ty: None,
+                            linear: false,
                             value: Some(bin(ident("x"), BinaryOp::Add, int(3))),
                         },
                     ],
@@ -581,12 +585,14 @@ mod tests {
                             name: "x".into(),
                             mutable: true,
                             ty: None,
+                            linear: false,
                             value: Some(int(5)),
                         },
                         Statement::Let {
                             name: "y".into(),
                             mutable: false,
                             ty: None,
+                            linear: false,
                             value: Some(bin(ident("x"), BinaryOp::Add, int(3))),
                         },
                     ],
@@ -626,18 +632,21 @@ mod tests {
                             name: "a".into(),
                             mutable: false,
                             ty: None,
+                            linear: false,
                             value: Some(int(2)),
                         },
                         Statement::Let {
                             name: "b".into(),
                             mutable: false,
                             ty: None,
+                            linear: false,
                             value: Some(int(3)),
                         },
                         Statement::Let {
                             name: "c".into(),
                             mutable: false,
                             ty: None,
+                            linear: false,
                             value: Some(bin(
                                 bin(ident("a"), BinaryOp::Mul, ident("b")),
                                 BinaryOp::Add,

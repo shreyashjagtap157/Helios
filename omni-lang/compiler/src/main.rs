@@ -670,7 +670,8 @@ fn resolve_imports(
 ) -> Result<parser::ast::Module> {
     use std::collections::HashSet;
     let mut visited = HashSet::new();
-    resolve_imports_impl(module, current_file, tick_limit, &mut visited)
+    let mut stack: Vec<std::path::PathBuf> = Vec::new();
+    resolve_imports_impl(module, current_file, tick_limit, &mut visited, &mut stack)
 }
 
 /// Internal implementation of resolve_imports with circular import detection.
@@ -679,6 +680,7 @@ fn resolve_imports_impl(
     current_file: &std::path::Path,
     tick_limit: Option<usize>,
     visited: &mut std::collections::HashSet<std::path::PathBuf>,
+    stack: &mut Vec<std::path::PathBuf>,
 ) -> Result<parser::ast::Module> {
     use parser::ast::{ImportDecl, Item, Module};
     use std::collections::HashSet;
@@ -787,10 +789,68 @@ fn resolve_imports_impl(
             .collect()
     }
 
+    #[derive(Debug, PartialEq, Eq)]
+    enum ModuleVisibility {
+        Public,
+        Module,
+        Package,
+        Unrestricted,
+    }
+
+    fn parse_pub_visibility(attrs: &[String]) -> ModuleVisibility {
+        for attr in attrs {
+            match attr.as_str() {
+                "@pub" => return ModuleVisibility::Public,
+                "@pub(mod)" => return ModuleVisibility::Module,
+                "@pub(pkg)" => return ModuleVisibility::Package,
+                _ => {}
+            }
+        }
+        ModuleVisibility::Unrestricted
+    }
+
+    fn module_path_from_file(
+        file_path: &std::path::Path,
+        project_root: Option<&std::path::Path>,
+    ) -> String {
+        let rel = if let Some(root) = project_root {
+            if let Ok(stripped) = file_path.strip_prefix(root) {
+                stripped
+            } else {
+                file_path
+            }
+        } else {
+            file_path
+        };
+
+        let s = rel
+            .to_string_lossy()
+            .replace("\\", "/")
+            .trim_start_matches('/')
+            .trim_end_matches(".omni")
+            .to_string();
+        let s = s.strip_suffix("/mod").unwrap_or(&s).to_string();
+        s.replace('/', "::")
+    }
+
+    fn package_root(module_path: &str) -> &str {
+        module_path.split("::").next().unwrap_or("")
+    }
+
+    fn module_visibility_of(module: &Module) -> ModuleVisibility {
+        for item in &module.items {
+            if let Item::Module(m) = item {
+                return parse_pub_visibility(&m.attributes);
+            }
+        }
+        ModuleVisibility::Unrestricted
+    }
+
     let base_dir = current_file
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
     let project_root = detect_project_root(current_file);
+    let importer_module = module_path_from_file(current_file, project_root.as_deref());
 
     let mut resolved_items: Vec<Item> = Vec::new();
 
@@ -822,12 +882,28 @@ fn resolve_imports_impl(
                             }
                         };
 
+                        if stack.contains(&normalized_path) {
+                            let cycle_start = stack
+                                .iter()
+                                .position(|p| p == &normalized_path)
+                                .unwrap_or(0);
+                            let mut cycle_paths: Vec<String> = stack
+                                .iter()
+                                .skip(cycle_start)
+                                .map(|p| p.display().to_string())
+                                .collect();
+                            cycle_paths.push(normalized_path.display().to_string());
+                            return Err(anyhow::anyhow!(
+                                "Import cycle detected: {}",
+                                cycle_paths.join(" -> ")
+                            ));
+                        }
+
                         if visited.contains(&normalized_path) {
                             log::debug!(
-                                "Skipping circular import {:?} (already visited)",
+                                "Skipping already-resolved import {:?} (visited)",
                                 &file_path
                             );
-                            // Don't add the import again; just continue
                             continue;
                         }
 
@@ -842,27 +918,54 @@ fn resolve_imports_impl(
                             }
                         }
 
-                        // Mark as visited before processing to detect cycles
-                        visited.insert(normalized_path.clone());
-
-                        if stage_trace_enabled() && visited.len() % 100 == 0 {
-                            eprintln!(
-                                "IMPORT_PROGRESS visited={} current={}",
-                                visited.len(),
-                                file_path.display()
-                            );
-                        }
-
-                        log::debug!("Resolving import {:?} → {:?}", variant, file_path);
-                        match std::fs::read_to_string(&file_path) {
+                        let src = std::fs::read_to_string(&file_path);
+                        match src {
                             Ok(src) => match lexer::tokenize(&src) {
                                 Ok(tokens) => match parser::parse(tokens, tick_limit) {
                                     Ok(mut imported) => {
-                                        // Recursively resolve imports in the imported module
+                                        let imported_module_path =
+                                            module_path_from_file(&file_path, project_root.as_deref());
+                                        let visibility = module_visibility_of(&imported);
+
+                                        if visibility == ModuleVisibility::Module
+                                            && importer_module != imported_module_path
+                                        {
+                                            return Err(anyhow::anyhow!(
+                                                "Visibility violation: module '{}' is declared pub(mod) and cannot be imported from '{}'.",
+                                                imported_module_path,
+                                                importer_module
+                                            ));
+                                        }
+
+                                        if visibility == ModuleVisibility::Package
+                                            && package_root(&importer_module)
+                                                != package_root(&imported_module_path)
+                                        {
+                                            return Err(anyhow::anyhow!(
+                                                "Visibility violation: module '{}' is declared pub(pkg) and cannot be imported from '{}'.",
+                                                imported_module_path,
+                                                importer_module
+                                            ));
+                                        }
+
+                                        // Mark as visited before processing to detect cycles
+                                        visited.insert(normalized_path.clone());
+                                        stack.push(normalized_path.clone());
+
+                                        if stage_trace_enabled() && visited.len() % 100 == 0 {
+                                            eprintln!(
+                                                "IMPORT_PROGRESS visited={} current={}",
+                                                visited.len(),
+                                                file_path.display()
+                                            );
+                                        }
+
+                                        log::debug!("Resolving import {:?} → {:?}", variant, file_path);
                                         imported = resolve_imports_impl(
-                                            imported, &file_path, tick_limit, visited,
+                                            imported, &file_path, tick_limit, visited, stack,
                                         )?;
                                         resolved_items.extend(imported.items);
+                                        stack.pop();
                                     }
                                     Err(e) => {
                                         eprintln!(

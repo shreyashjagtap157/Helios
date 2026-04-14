@@ -3379,6 +3379,7 @@ impl Interpreter {
                 mutable,
                 ty: _,
                 value,
+                ..
             } => {
                 let val = if let Some(v) = value {
                     self.eval_expr(v)?

@@ -143,9 +143,9 @@ Full recursive inventory was scanned from disk for all readable files; compact k
 | Q55 | Advanced generics | ⚠️ Partial | Basic monomorphization |
 | Q56 | Traits as polymorphism | ✅ Implemented | `semantic/traits.rs` |
 | Q57 | Exhaustive pattern matching | ✅ Implemented | Parser + match handling |
-| v2.0 | Variadic generics | ❌ Not Implemented | Not supported |
+| v2.0 | Variadic generics | ⚠️ Partial | Parser support added; variadic-type scaffolding now recognized by inference |
 | v2.0 | Async traits native | ❌ Not Implemented | No async trait support |
-| v2.0 | Implied bounds | ❌ Not Implemented | Where clauses repeated |
+| v2.0 | Implied bounds | ✅ Implemented | Struct `where` bounds now propagate into method/impl trait constraints in `type_inference.rs` |
 
 ### REQ-DOMAIN-03: Memory Model
 
@@ -204,8 +204,8 @@ Full recursive inventory was scanned from disk for all readable files; compact k
 | # | Requirement | Status | Evidence |
 |---|---|---|---|
 | Q61 | File → Module → Package | ✅ Implemented | Module system |
-| Q62 | Visibility levels | ⚠️ Partial | `pub` exists |
-| Q63 | Import resolution | ✅ Implemented | Basic use declarations |
+| Q62 | Visibility levels | ✅ Implemented | `pub(mod)` and `pub(pkg)` module visibility are now recognized and enforced during import resolution |
+| Q63 | Import resolution | ✅ Implemented | Basic use declarations with deterministic cycle detection and module boundaries enforced |
 | Q64 | Package manifest | ✅ Implemented | `manifest.rs` |
 | Q65 | Build scripts | ⚠️ Partial | `opm build` executes `build.omni`, propagates cfg directives (`OMNI_CFG_FLAGS`), validates compiler-emitted `.link` sidecar metadata, and now enforces explicit native artifact kind + target metadata in link preflight; ABI-policy completeness remains partial |
 | Q66 | Workspace support | ⚠️ Partial | `opm` workspace discovery respects `exclude`/`default-members` and missing-member errors, and member build execution now uses deterministic topological ordering; richer multi-package publish/install behavior still pending |

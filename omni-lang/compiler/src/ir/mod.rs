@@ -911,7 +911,7 @@ impl IrGenerator {
         current_block: &mut String,
     ) {
         match stmt {
-            TypedStatement::Let { name, ty, value } => {
+            TypedStatement::Let { name, ty, value, .. } => {
                 let _dest = self.fresh_temp();
                 let ir_ty = self.convert_type(ty);
                 instructions.push(IrInstruction::Alloca {

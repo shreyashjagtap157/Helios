@@ -176,6 +176,7 @@ impl StatementSubstitutor {
                 mutable,
                 ty,
                 value,
+                linear,
             } => {
                 let substituted_type = ty.as_ref().map(|t| self.substitution.apply_to_type(t));
                 let expr_sub = ExpressionSubstitutor::new(self.substitution.clone());
@@ -184,6 +185,7 @@ impl StatementSubstitutor {
                     name: name.clone(),
                     mutable: *mutable,
                     ty: substituted_type,
+                    linear: *linear,
                     value: transformed_value,
                 }
             }

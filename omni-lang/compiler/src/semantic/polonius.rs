@@ -446,7 +446,7 @@ impl FactBuilder {
 
     fn process_statement(&mut self, stmt: &ast::Statement) -> (Id, Id, bool) {
         match stmt {
-            ast::Statement::Let { name, mutable, ty: _, value } => {
+            ast::Statement::Let { name, mutable, ty: _, value, .. } => {
                 let point = self.new_point();
                 // if value exists, process expression first
                 if let Some(val) = value {

@@ -98,6 +98,7 @@ mod tests {
                         name: "x".into(),
                         mutable: false,
                         ty: None,
+                        linear: false,
                         value: Some(Expression::Binary(
                             Box::new(Expression::Literal(Literal::Int(2))),
                             BinaryOp::Add,

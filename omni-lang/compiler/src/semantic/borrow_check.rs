@@ -920,6 +920,7 @@ impl BorrowChecker {
                 mutable,
                 ty,
                 value: Some(value),
+                ..
             } => {
                 self.check_expression(value);
                 if let ast::Expression::Identifier(ref src) = value {
@@ -1386,6 +1387,7 @@ mod tests {
             name: name.to_string(),
             mutable,
             ty: None,
+            linear: false,
             value: Some(value),
         }
     }
