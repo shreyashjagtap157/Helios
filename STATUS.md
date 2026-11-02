@@ -41,12 +41,14 @@
 
 ## Repository governance findings
 
-- main remains protected and currently still requires the obsolete check, test, clippy, and fmt contexts.
-- The new docs workflow has completed its first hosted run successfully on the dev branch; branch protection has not yet been switched to require docs.
+- main remains protected and still requires the old status contexts `check`, `test`, `clippy`, and `fmt`; GitHub has not yet persisted the replacement with `docs`.
+- The new `docs` workflow has passed on both `main` and `dev` for the same commit. The GitHub Actions job succeeded on Ubuntu 24.04; branch protection has not yet been switched to require `docs`.
 - The runner is pinned to ubuntu-24.04 to avoid an unplanned hosted-image migration.
 - Added `.github/workflows/docs.yml`, which publishes a stable `docs` job on pushes to main/dev and pull requests targeting main.
 - The workflow uses a read-only GITHUB_TOKEN, a full-SHA-pinned official checkout action, and a dependency-free Ruby validator.
-- Hosted run [41467896240](https://github.com/shreyashjagtap157/Helios/actions/runs/41467896240) for commit `47b3b57323d71d29cb4a819e49ba29e94ddfea1e` passed: `docs` succeeded on Ubuntu 24.04.5 LTS with no annotations.
+- Earlier hosted run [41467896240](https://github.com/shreyashjagtap157/Helios/actions/runs/41467896240) for commit `47b3b57323d71d29cb4a819e49ba29e94ddfea1e` passed on the initial runner configuration; it emitted an `ubuntu-latest` migration notice, which motivated explicit runner pinning.
+- Latest hosted run on `main`: [41469285815](https://github.com/shreyashjagtap157/Helios/actions/runs/41469285815), commit `1f54a2cc24c55944fec68180029262e96522dc79`; status and conclusion `success`, with the `docs` validator step successful and runner label `ubuntu-24.04`.
+- Latest hosted run on `dev`: [41469294548](https://github.com/shreyashjagtap157/Helios/actions/runs/41469294548), same commit; status and conclusion `success`, with the `docs` validator step successful and runner label `ubuntu-24.04`.
 - Attempted to replace the old required contexts with `docs`, but GitHub required a fresh sudo-mode passkey/MFA check to save. The browser showed the updated form, but the server-side readback confirms the change was not persisted.
 - `main` therefore remains protected with the old required contexts `check`, `test`, `clippy`, and `fmt`. The replacement is still pending user-completed GitHub reauthentication.
 - dev currently points to the same commit as main but is not protected. main is the repository default branch.

@@ -2,6 +2,10 @@
 
 ## 2026-11-02 — Protected check migration status
 
+- Verified successful `docs` jobs on both `main` (run 41469285815) and `dev` (run 41469294548) for commit `1f54a2cc24c55944fec68180029262e96522dc79`.
+- The GitHub sudo-mode passkey/MFA challenge prevented saving the required-check replacement; the server-side branch readback still shows `check`, `test`, `clippy` and `fmt`.
+
+
 - Verified the `docs` job succeeds on Ubuntu 24.04.5 LTS for commit `47b3b57323d71d29cb4a819e49ba29e94ddfea1e`.
 - Attempted to replace stale required contexts on protected `main`; GitHub's sudo-mode authentication blocked saving the form. API readback confirms the old four contexts remain, so the migration is explicitly pending.
 
