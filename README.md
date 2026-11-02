@@ -8,7 +8,7 @@ Its defining constraint is strict: Helios must not depend on training any model,
 
 ## Project phase
 
-<badge>Concept and specification only</badge>
+**Concept and specification only**
 
 No Helios implementation has started. No subsystem, operating system, cognitive engine, device broker or hardware integration is implemented. This repository currently holds the design baseline and project-control records only.
 
