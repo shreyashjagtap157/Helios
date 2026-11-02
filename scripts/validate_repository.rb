@@ -50,7 +50,7 @@ checks += 1
 forbidden_content = /(?:\bomni\b|omni-lang|\.omni\b|\bomnc\b|ownership semantics|systems programming language|self-hosted compiler)/i
 text_extensions = %w[.md .yml .yaml .rb .py .json .toml .txt .sh .gitignore]
 tracked.each do |path|
-  next unless text_extensions.include?(File.extname(path)) || %w[.gitignore NOTICE LICENSE].include?(File.basename(path))
+  next unless text_extensions.include?(File.extname(path).downcase) || %w[.gitignore NOTICE LICENSE CODEOWNERS].include?(File.basename(path))
   next if path == 'scripts/validate_repository.rb'
   content = read_text(ROOT.join(path), errors)
   fail_check(errors, "Legacy project reference remains in #{path}") if content.match?(forbidden_content)
@@ -118,11 +118,20 @@ workflow_paths.each do |path|
     unless triggers.is_a?(Hash) && %w[push pull_request workflow_dispatch].all? { |event| triggers.key?(event) }
       fail_check(errors, "Workflow must define push, pull_request and workflow_dispatch triggers: #{path}")
     end
+    unless triggers.dig('push', 'branches') == %w[main dev]
+      fail_check(errors, "Workflow push triggers must target exactly main and dev: #{path}")
+    end
+    unless triggers.dig('pull_request', 'branches') == ['main']
+      fail_check(errors, "Workflow pull_request trigger must target main: #{path}")
+    end
     permissions = workflow['permissions']
     unless permissions.is_a?(Hash) && permissions['contents'] == 'read'
       fail_check(errors, "Workflow must declare least-privilege contents: read: #{path}")
     end
     jobs = workflow['jobs']
+    unless jobs.is_a?(Hash) && jobs.keys == ['docs']
+      fail_check(errors, "Workflow must contain exactly one reviewed job named docs: #{path}")
+    end
     docs_job = jobs.is_a?(Hash) ? jobs['docs'] : nil
     unless docs_job.is_a?(Hash) && docs_job['name'] == 'docs'
       fail_check(errors, "Workflow must publish the stable docs job check: #{path}")
@@ -130,6 +139,12 @@ workflow_paths.each do |path|
     end
     unless docs_job['runs-on'] == 'ubuntu-24.04'
       fail_check(errors, "Workflow must use the explicitly pinned Ubuntu 24.04 runner: #{path}")
+    end
+    unless docs_job['permissions'].is_a?(Hash) && docs_job['permissions'] == { 'contents' => 'read' }
+      fail_check(errors, "Workflow docs job must use only contents: read permissions: #{path}")
+    end
+    unless docs_job['timeout-minutes'].is_a?(Integer) && docs_job['timeout-minutes'].between?(1, 10)
+      fail_check(errors, "Workflow docs job must have a 1–10 minute timeout: #{path}")
     end
     steps = docs_job['steps']
     unless steps.is_a?(Array)

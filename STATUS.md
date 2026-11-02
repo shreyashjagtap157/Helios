@@ -27,7 +27,7 @@
 - No hardware drivers or device adapters.
 - No operating system or distribution.
 - No application or plugin runtime.
-- No conformance suite or validated benchmarks.
+- No Helios runtime conformance suite or validated capability benchmarks.
 
 ## Current approved constraints
 
@@ -41,17 +41,15 @@
 
 ## Repository governance findings
 
-- main remains protected and still requires the old status contexts `check`, `test`, `clippy`, and `fmt`; GitHub has not yet persisted the replacement with `docs`.
-- The new `docs` workflow has passed on both `main` and `dev` for the same commit. The GitHub Actions job succeeded on Ubuntu 24.04; branch protection has not yet been switched to require `docs`.
-- The runner is pinned to ubuntu-24.04 to avoid an unplanned hosted-image migration.
-- Added `.github/workflows/docs.yml`, which publishes a stable `docs` job on pushes to main/dev and pull requests targeting main.
-- The workflow uses a read-only GITHUB_TOKEN, a full-SHA-pinned official checkout action, and a dependency-free Ruby validator.
-- Earlier hosted run [41467896240](https://github.com/shreyashjagtap157/Helios/actions/runs/41467896240) for commit `47b3b57323d71d29cb4a819e49ba29e94ddfea1e` passed on the initial runner configuration; it emitted an `ubuntu-latest` migration notice, which motivated explicit runner pinning.
-- Latest hosted run on `main`: [41469285815](https://github.com/shreyashjagtap157/Helios/actions/runs/41469285815), commit `1f54a2cc24c55944fec68180029262e96522dc79`; status and conclusion `success`, with the `docs` validator step successful and runner label `ubuntu-24.04`.
-- Latest hosted run on `dev`: [41469294548](https://github.com/shreyashjagtap157/Helios/actions/runs/41469294548), same commit; status and conclusion `success`, with the `docs` validator step successful and runner label `ubuntu-24.04`.
-- Attempted to replace the old required contexts with `docs`, but GitHub required a fresh sudo-mode passkey/MFA check to save. The browser showed the updated form, but the server-side readback confirms the change was not persisted.
-- `main` therefore remains protected with the old required contexts `check`, `test`, `clippy`, and `fmt`. The replacement is still pending user-completed GitHub reauthentication.
-- dev currently points to the same commit as main but is not protected. main is the repository default branch.
+- `main` remains protected and still requires the four old status contexts: `check`, `test`, `clippy`, and `fmt`. GitHub has not persisted their replacement with `docs`.
+- The repository-owned `.github/workflows/docs.yml` workflow publishes a stable `docs` job on pushes to `main` and `dev`, and on pull requests targeting `main`.
+- The workflow grants read-only `GITHUB_TOKEN` permissions, pins `actions/checkout` to a full commit SHA, disables persisted checkout credentials, and runs a dependency-free Ruby validator on Ubuntu 24.04.
+- Hosted validation of revision `1f54a2cc24c55944fec68180029262e96522dc79` passed on both branches: `main` run [41469285815](https://github.com/shreyashjagtap157/Helios/actions/runs/41469285815) and `dev` run [41469294548](https://github.com/shreyashjagtap157/Helios/actions/runs/41469294548).
+- The next revision `6a82b867dcceee22fc1262da4b5eae92e863df69` also passed on both branches: `main` run [41469777104](https://github.com/shreyashjagtap157/Helios/actions/runs/41469777104) and `dev` run [41469788857](https://github.com/shreyashjagtap157/Helios/actions/runs/41469788857). Both jobs reported `success`, the validator step passed, and the runner label was `ubuntu-24.04`.
+- The earlier initial workflow run [41467896240](https://github.com/shreyashjagtap157/Helios/actions/runs/41467896240) used `ubuntu-latest` and emitted a runner-migration notice. The workflow was subsequently pinned to Ubuntu 24.04.
+- An attempted required-check replacement was blocked by GitHub's sudo-mode passkey/MFA challenge. The settings form showed `docs` as the sole required check, but the server-side readback confirms no change was saved.
+- The available GitHub connector supports branch-protection reads but does not expose a branch-protection write action. The remaining settings change therefore requires the repository owner to complete GitHub's interactive sudo-mode verification and save it in repository settings.
+- `dev` and `main` are synchronized at the current revision; `main` is protected and `dev` is not.
 
 ## Current work phase
 

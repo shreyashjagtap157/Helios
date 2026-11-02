@@ -1,13 +1,15 @@
 # Changelog
 
+## 2026-11-02 — Repository validation hardening
+
+- Expanded the dependency-free validator to scan CODEOWNERS for stale project references.
+- Added exact checks for workflow push and pull-request target branches, the single permitted docs job, job-level read-only permissions and a bounded timeout.
+
 ## 2026-11-02 — Protected check migration status
 
 - Verified successful `docs` jobs on both `main` (run 41469285815) and `dev` (run 41469294548) for commit `1f54a2cc24c55944fec68180029262e96522dc79`.
+- Verified successful `docs` jobs on both `main` (run 41469777104) and `dev` (run 41469788857) for commit `6a82b867dcceee22fc1262da4b5eae92e863df69`.
 - The GitHub sudo-mode passkey/MFA challenge prevented saving the required-check replacement; the server-side branch readback still shows `check`, `test`, `clippy` and `fmt`.
-
-
-- Verified the `docs` job succeeds on Ubuntu 24.04.5 LTS for commit `47b3b57323d71d29cb4a819e49ba29e94ddfea1e`.
-- Attempted to replace stale required contexts on protected `main`; GitHub's sudo-mode authentication blocked saving the form. API readback confirms the old four contexts remain, so the migration is explicitly pending.
 
 ## 2026-11-02 — Documentation CI runner stabilization
 
@@ -19,7 +21,6 @@
 - Added a dependency-free Ruby repository validator for required files, stale project references, issue-form YAML, workflow safety, local Markdown links and non-training requirement IDs.
 - Added a GitHub Actions workflow with read-only token permissions, SHA-pinned checkout and a stable `docs` job check.
 - Added local validation instructions; the workflow's first hosted run and branch-protection update remain pending verification.
-
 
 ## 2026-11-02 — Non-training assurance refinement
 
