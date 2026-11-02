@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-02 — Documentation CI runner stabilization
+
+- Pinned the validation runner to Ubuntu 24.04 after the initial hosted run emitted an ubuntu-latest migration notice.
+- Added a validator assertion so future workflow changes cannot silently restore the moving runner label.
+
 ## 2026-11-02 — Documentation CI gate
 
 - Added a dependency-free Ruby repository validator for required files, stale project references, issue-form YAML, workflow safety, local Markdown links and non-training requirement IDs.

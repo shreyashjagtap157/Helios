@@ -41,7 +41,9 @@
 
 ## Repository governance findings
 
-- main remains protected and, pending the first hosted run of the new workflow, still requires the obsolete check, test, clippy, and fmt contexts.
+- main remains protected and currently still requires the obsolete check, test, clippy, and fmt contexts.
+- The new docs workflow has completed its first hosted run successfully on the dev branch; branch protection has not yet been switched to require docs.
+- The runner is pinned to ubuntu-24.04 to avoid an unplanned hosted-image migration.
 - Added `.github/workflows/docs.yml`, which publishes a stable `docs` job on pushes to main/dev and pull requests targeting main.
 - The workflow uses a read-only GITHUB_TOKEN, a full-SHA-pinned official checkout action, and a dependency-free Ruby validator.
 - Branch protection will be changed only after the new `docs` check has completed successfully on GitHub Actions.

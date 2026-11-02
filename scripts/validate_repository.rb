@@ -128,6 +128,9 @@ workflow_paths.each do |path|
       fail_check(errors, "Workflow must publish the stable docs job check: #{path}")
       next
     end
+    unless docs_job['runs-on'] == 'ubuntu-24.04'
+      fail_check(errors, "Workflow must use the explicitly pinned Ubuntu 24.04 runner: #{path}")
+    end
     steps = docs_job['steps']
     unless steps.is_a?(Array)
       fail_check(errors, "Workflow docs job has no steps: #{path}")
