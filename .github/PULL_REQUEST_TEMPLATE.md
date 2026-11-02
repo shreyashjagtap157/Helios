@@ -1,38 +1,45 @@
-## What does this PR do?
+## Summary
 
-<!-- One-line summary of the change -->
+<!-- Describe the change and its user or project impact. -->
 
-## Why is this needed?
+## Motivation and scope
 
-<!-- Link to the issue or describe the problem this solves -->
+<!-- Link the related issue, requirement ID, or decision. State what is intentionally out of scope. -->
+
 Closes #
 
-## Type of change
+## Change category
 
-- [ ] Bug fix
-- [ ] New feature
-- [ ] Refactoring (no behavior change)
+- [ ] Specification or requirements
+- [ ] Architecture or research
 - [ ] Documentation
-- [ ] CI/Build
-- [ ] Other (describe)
+- [ ] Repository governance or tooling
+- [ ] Implementation (only after implementation is explicitly authorized)
+- [ ] Other
 
-## How did you test it?
+## Evidence and validation
 
-- [ ] `cargo test` passes
-- [ ] `cargo clippy -- -D warnings` passes
-- [ ] `cargo fmt --check` passes
-- [ ] Manually tested with `omnc --run`
+**Commands or checks actually run:**
 
-**Test command(s) run:**
-```
-paste commands here
-```
+~~~text
+<!-- List exact commands and their results. Write "not run" where applicable. -->
+~~~
 
-## Checklist
+**Sources and assumptions:**
 
-- [ ] My branch is based on `dev`
-- [ ] I have read [CONTRIBUTING.md](../CONTRIBUTING.md)
-- [ ] Tests added/updated for the change
-- [ ] No new clippy warnings introduced
-- [ ] Doc comments added for new public APIs
-- [ ] Relevant docs updated (README, language reference, etc.)
+<!-- Link authoritative sources. Separate verified facts, proposals, and assumptions. -->
+
+## Helios constraints
+
+- [ ] No training, fine-tuning, pretrained-model inference, learned embeddings, or model inference service was introduced.
+- [ ] No proposed capability is described as implemented without source and test evidence.
+- [ ] No privileged hardware or operating-system action bypasses the independent authorization boundary.
+- [ ] Relevant requirements, decisions, status, and roadmap records were updated.
+- [ ] Security, privacy, failure behavior, and limitations were considered.
+
+## Review checklist
+
+- [ ] The change is based on the intended target branch (main by default).
+- [ ] I have read [CONTRIBUTING.md](../CONTRIBUTING.md).
+- [ ] Links, Markdown, and structured configuration were checked.
+- [ ] Tests or validation results are reported honestly.

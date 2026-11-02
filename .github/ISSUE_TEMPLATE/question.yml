@@ -1,0 +1,39 @@
+name: "Helios Project Question"
+description: "Ask a question about Helios requirements, architecture, research, or project status."
+title: "[QUESTION] "
+labels:
+  - question
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: What would you like clarified?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Related area
+      options:
+        - Project identity and scope
+        - Non-training constraint
+        - Cognitive architecture
+        - Knowledge and memory
+        - Reasoning and planning
+        - Interaction and perception
+        - Hardware and actions
+        - Operating-system ecosystem
+        - Security and privacy
+        - Research and technology choices
+        - Repository process
+        - General
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Include relevant document links, sections, assumptions, or what you have already investigated.
+    validations:
+      required: false

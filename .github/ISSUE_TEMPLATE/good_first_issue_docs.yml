@@ -1,0 +1,48 @@
+name: "Good First Issue — Documentation"
+description: "Suggest a small, bounded improvement to Helios documentation."
+title: "[DOCS] "
+labels:
+  - good first issue
+  - documentation
+  - needs-triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Keep this task documentation-only and small enough for a first contribution.
+        Do not imply that proposed or planned capabilities have been implemented.
+  - type: input
+    id: target
+    attributes:
+      label: Documentation target
+      description: Give the exact repository path and section.
+      placeholder: "HELIOS_MASTER_SPEC.md — Section 7"
+    validations:
+      required: true
+  - type: textarea
+    id: gap
+    attributes:
+      label: What is missing or unclear?
+      description: Describe the reader problem and provide relevant context.
+    validations:
+      required: true
+  - type: textarea
+    id: deliverable
+    attributes:
+      label: Expected deliverable
+      description: Define the exact text, diagram description, source note, or cross-reference to add or revise.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      value: |
+        - [ ] The change is limited to the stated documentation scope.
+        - [ ] Technical statements have authoritative sources or are clearly marked as proposals.
+        - [ ] Requirement IDs and cross-references remain consistent.
+        - [ ] No prohibited training or pretrained-model dependency is introduced.
+        - [ ] No planned capability is described as implemented.
+        - [ ] Links and Markdown render correctly.
+    validations:
+      required: true

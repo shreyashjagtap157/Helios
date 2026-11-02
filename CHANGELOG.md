@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-02 — Repository governance cleanup
+
+- Removed the remaining obsolete compiler/project references from GitHub issue templates, CODEOWNERS, pull-request guidance and NOTICE.
+- Converted the issue templates to GitHub's YAML issue-form format with .yml filenames and required top-level name, description and body keys.
+- Replaced toolchain-specific contribution checkboxes with evidence-based Helios review criteria.
+- Recorded the mismatch between protected-branch required checks and the absence of repository-owned CI workflows.
+
 ## 2026-11-02 — Helios design baseline reset
 
 - Re-established Helios as a personal cognitive computing framework.

@@ -1,8 +1,7 @@
-# Default owner for everything
+# Repository-wide ownership
 * @shreyashjagtap157
 
-# Compiler source — owner must review
-omni-lang/compiler/ @shreyashjagtap157
-
-# CI and workflow files
-.github/ @shreyashjagtap157
+# Keep repository governance and policy under direct ownership.
+/.github/ @shreyashjagtap157
+/SECURITY.md @shreyashjagtap157
+/HELIOS_MASTER_SPEC.md @shreyashjagtap157

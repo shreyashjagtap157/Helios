@@ -13,6 +13,7 @@ This file tracks design questions, not software defects. No implementation has s
 - Specify the first reasoning engine and acceptance suite.
 - Define the action broker and authorization protocol.
 - Define what the system must do when intent is ambiguous or device state is unknown.
+- Design a minimal documentation-validation workflow and reconcile its real status names with the protected main branch requirements; the current required contexts are remnants of an earlier toolchain and are not produced by any workflow in the current repository tree.
 
 ## P1 — Research and architecture
 

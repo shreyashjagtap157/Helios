@@ -1,0 +1,67 @@
+name: "Helios Feature or Design Proposal"
+description: "Propose a capability, requirement, architecture change, or project improvement."
+title: "[FEATURE] "
+labels:
+  - enhancement
+  - needs-triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Helios prohibits model training, fine-tuning, pretrained-model inference,
+        learned embeddings, and model-based inference services. Proposals must respect
+        this constraint and preserve independent authorization for privileged actions.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or unmet need
+      description: What user problem, limitation, or requirement motivates this proposal?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed capability or change
+      description: Describe the behavior and the intended user-visible outcome.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Project area
+      options:
+        - Cognitive architecture
+        - Knowledge representation and provenance
+        - Memory
+        - Symbolic reasoning
+        - Planning and problem solving
+        - Interaction and language
+        - Perception and modalities
+        - Hardware and device actions
+        - Security, privacy, and safety
+        - Host operating system and ecosystem
+        - Developer tooling and documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: nontraining
+    attributes:
+      label: Non-training compatibility
+      description: Explain how the proposal avoids training, pretrained models, learned embeddings, and model inference dependencies.
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Safety, privacy, and authority implications
+      description: Identify permissions, data access, failure modes, and human-approval requirements.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and trade-offs
+      description: Include simpler alternatives, limitations, and relevant sources.
+    validations:
+      required: false

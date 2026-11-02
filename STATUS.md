@@ -39,6 +39,13 @@
 - User authority and independent action policy are mandatory.
 - No custom kernel until a demonstrated need justifies it.
 
+## Repository governance findings
+
+- main is protected and currently requires status contexts named check, test, clippy, and fmt.
+- The current default-branch tree has no .github/workflows/ directory. Therefore this repository currently defines no GitHub Actions workflows that produce those contexts.
+- Whether an external integration publishes any of those status contexts has not been established. The required checks and actual CI design must be reconciled before treating pull-request validation as operational.
+- dev currently points to the same commit as main but is not protected. main is the repository default branch.
+
 ## Current work phase
 
 Research and architecture refinement. The next practical work is to define a small target use case, select a bounded reasoning domain, evaluate candidate technologies and design a mock hardware-action vertical slice.

@@ -1,0 +1,80 @@
+name: "Helios Bug Report"
+description: "Report a reproducible defect in current project materials or a future implemented component."
+title: "[BUG] "
+labels:
+  - bug
+  - needs-triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Helios is currently in the design/specification phase. Please report documentation,
+        specification, tooling, or implemented-software defects accurately; do not describe
+        planned capabilities as existing functionality.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Bug summary
+      description: State the observed problem and its impact.
+      placeholder: What happened?
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected area
+      options:
+        - Master specification
+        - Architecture or requirements
+        - Knowledge representation
+        - Reasoning or planning
+        - Memory
+        - Interaction or perception
+        - Hardware and action safety
+        - Host operating system or ecosystem
+        - Security or privacy
+        - Repository documentation or tooling
+        - Implemented software (only where implementation exists)
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Evidence and reproduction steps
+      description: Provide exact document sections, links, commands, inputs, or steps needed to reproduce the issue.
+      placeholder: |
+        1. Open ...
+        2. Navigate to ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should happen instead?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include exact output or observed behavior. Distinguish verified behavior from assumptions.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, application, revision, and relevant versions, if applicable.
+      placeholder: "e.g. Windows 11; browser version; commit SHA"
+    validations:
+      required: false
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Relevant links, screenshots, logs, or further evidence.
+    validations:
+      required: false
