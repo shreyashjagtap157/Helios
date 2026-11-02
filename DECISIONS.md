@@ -15,6 +15,8 @@ This register tracks choices that govern the project. The master specification r
 | DEC-007 | A broader operating-system ecosystem is a long-term vision. | Hardware and system control require deeper integration over time. | Approved |
 | DEC-008 | Initial work should use existing, mature programming languages and host operating systems. | Avoids depending on an unimplemented language or premature custom kernel. | Approved |
 | DEC-009 | The repository is a design-only project until real implementation is explicitly started and evidenced. | Prevents scaffolding from being represented as working software. | Approved |
+| DEC-010 | The non-training constraint prohibits model inference as well as training, including local and remote services. | Prevents a pretrained or hosted model from entering the system under an inference-only or optional-dependency label. | Approved |
+| DEC-011 | Every dependency and supported build must undergo non-training conformance review, with automated artifact and integration checks where feasible. | Makes the non-training rule enforceable across the software supply chain rather than relying on developer intent. | Approved |
 
 ## Proposed decisions
 

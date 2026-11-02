@@ -15,7 +15,7 @@ Deliverables:
 - Approved master specification.
 - Requirements traceability and decision log.
 - Initial use-case catalogue.
-- Strict non-training dependency policy.
+- Strict non-training dependency policy, including transitive dependency admission, model-asset exclusion and runtime-service restrictions.
 - Domain and modality scope for the first demonstration.
 - Hardware target shortlist.
 - Research register with source quality and conclusions.
@@ -40,13 +40,15 @@ Spikes:
 - Provenance and contradiction handling.
 - Grammar/structured-command interaction without neural models.
 - Mock device capability broker.
+- Dependency graph, SBOM and build-artifact review to verify non-training conformance.
 - Host-OS permission and process-isolation design.
 
 Exit criteria:
 - Benchmark results and limitations are recorded.
 - Candidate libraries and licenses are checked.
 - At least one end-to-end reasoning trace is reproducible.
-- No component silently depends on trained models.
+- No component silently depends on trained models or model-inference services.
+- The supported dependency graph and build artifacts have recorded non-training review evidence.
 
 ## Stage 2 — Cognitive vertical-slice prototype
 

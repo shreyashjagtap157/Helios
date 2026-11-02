@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-02 — Non-training assurance refinement
+
+- Explicitly prohibited local and remote model inference, including optional or indirect model-service paths.
+- Added dependency-admission criteria covering transitive dependencies, optional features, SDKs, plugins, OS services, network calls and build artifacts.
+- Added requirements for SBOM generation, model-asset checks and auditable dependency review when implementation begins.
+
 ## 2026-11-02 — Repository governance cleanup
 
 - Removed the remaining obsolete project references from GitHub issue templates, CODEOWNERS, pull-request guidance, NOTICE and contributor documentation.

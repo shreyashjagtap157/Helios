@@ -37,11 +37,12 @@ The following are out of scope for the intended architecture:
 - Downloading or relying on pretrained neural models, even when used only for inference.
 - LLM, transformer, diffusion, learned speech, learned vision or learned embedding dependencies.
 - Vector embeddings produced by trained models, learned rerankers, model-generated classifiers or other hidden learned components.
-- Cloud AI inference APIs as a required cognitive dependency.
-- Training datasets, weight files, model checkpoints or model-serving infrastructure.
+- Any inference of a trained or pretrained model, whether local or remote, required or optional, or invoked indirectly by a third-party component.
+- External AI or model-inference APIs and hosted model services as any part of a Helios workflow.
+- Training datasets, weight files, model checkpoints, learned embedding assets or model-serving infrastructure.
 - Quietly introducing a trained model behind a library, plugin, operating-system service or device adapter.
 
-This prohibition applies to third-party components as well as components written specifically for Helios. A dependency is not acceptable merely because the project itself did not train the model.
+This prohibition applies to third-party components, plugins, operating-system services, vendor SDKs and externally hosted services as well as components written specifically for Helios. A dependency is not acceptable merely because the project itself did not train the model. A component that can train or infer a model is not acceptable simply because its model path is optional or disabled by default; any such functionality must be excluded from the supported build and its absence demonstrated by dependency and artifact evidence. If the behavior of a dependency cannot be established, the dependency must be rejected or deferred.
 
 ### 2.2 What remains permitted
 
@@ -81,6 +82,24 @@ Local execution and local persistence are the preferred defaults. Offline operat
 Helios must be designed to interact with hardware and software resources when explicitly asked by its user. This includes discovering available devices, understanding their declared capabilities, planning actions, obtaining authorization, issuing bounded commands, observing results and recording what occurred.
 
 Hardware access must be controlled by an enforcement layer outside the reasoning engine. A reasoning conclusion is not itself permission to operate a device.
+
+### 2.7 Non-training dependency admission
+
+The non-training constraint applies to the complete supported product, not only to code written in this repository. Before a dependency, plugin, SDK, system service, external service or build tool is admitted, its relevant behavior must be assessed across direct, transitive, optional, build-time and runtime paths.
+
+The admission review must establish:
+
+- Exact component identity, version, source, license and maintenance status.
+- Direct and transitive dependency graph, including activated feature flags and optional components.
+- Whether it can train, fine-tune, fit, update or infer any trained or pretrained model.
+- Whether it downloads, loads or ships model weights, checkpoints, learned embeddings or training datasets.
+- Whether it invokes remote model services or sends data to model-inference endpoints.
+- Build scripts, runtime hooks, plugins and operating-system integrations that may introduce hidden behavior.
+- Network destinations and whether the component remains functional offline.
+
+A dependency must be rejected or deferred when its relevant behavior cannot be established. A default-off model feature is not sufficient evidence of compliance. A feature may be considered only when it is excluded from supported builds and its absence is verified in the resolved dependency graph and built artifacts.
+
+When implementation begins, the project should generate a software bill of materials (SBOM) for each build or release and add automated checks for prohibited model artifacts, unexpected model-service endpoints and disallowed dependency features. Automated scans are defense-in-depth checks, not proof by themselves; dependency review and test evidence remain mandatory. No build or release may contain model weights, checkpoints, training datasets or learned embedding assets.
 
 ## 3. Project boundaries and terminology
 
@@ -651,6 +670,8 @@ Helios must be assessed by reproducible task suites, not subjective impressions.
 
 Evaluation dimensions:
 
+- Conformance with the non-training dependency policy across direct and transitive dependencies.
+- Absence of prohibited model assets and model-inference network paths in supported builds.
 - Logical validity of deductions.
 - Correctness and provenance of retrieved facts.
 - Contradiction detection.
@@ -729,7 +750,7 @@ Unless explicitly reconsidered, Helios will not:
 - Treat all graph relationships as causal.
 - Silently resolve contradictory evidence.
 - Start by building every layer of an operating system.
-- Require cloud AI services.
+- Use AI or model-inference services, whether local or remote.
 - Claim formal verification, safety certification or production readiness without evidence.
 
 ## 20. Requirements register
@@ -749,6 +770,10 @@ These identifiers are stable requirement anchors. Future detailed requirements m
 - HEL-NTR-004: No learned embeddings, model weights or model-generated classifiers.
 - HEL-NTR-005: New information is acquired as explicit, provenance-bearing knowledge.
 - HEL-NTR-006: Rule and procedure changes must be explicit, auditable and governed; they must not become hidden parameter learning.
+- HEL-NTR-007: No trained or pretrained model inference service, local or remote, is used by a Helios runtime or workflow.
+- HEL-NTR-008: Every direct, transitive, optional, build-time and runtime dependency is reviewed for model training, inference, learned components and model assets before admission.
+- HEL-NTR-009: Supported build and release artifacts contain no training datasets, model weights, checkpoints or learned embedding assets.
+- HEL-NTR-010: Non-training conformance checks are automated where feasible and supplemented by recorded human dependency review.
 
 ### Cognition
 - HEL-COG-001: A cognitive executive coordinates requests, goals and subsystem operations.

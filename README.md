@@ -18,7 +18,8 @@ No Helios implementation has started. No subsystem, operating system, cognitive 
 2. **[ROADMAP.md](ROADMAP.md)** — dependency-ordered research and implementation milestones.
 3. **[DECISIONS.md](DECISIONS.md)** — approved decisions, proposed decisions and unresolved questions.
 4. **[STATUS.md](STATUS.md)** — verified project state.
-5. **[docs/RESEARCH_REGISTER.md](docs/RESEARCH_REGISTER.md)** — research areas and authoritative starting sources.
+5. **[docs/NON_TRAINING_COMPLIANCE.md](docs/NON_TRAINING_COMPLIANCE.md)** — dependency admission rules and future verification evidence for the non-training constraint.
+6. **[docs/RESEARCH_REGISTER.md](docs/RESEARCH_REGISTER.md)** — research areas and authoritative starting sources.
 
 ## Core objectives
 
