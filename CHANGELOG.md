@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-02 — Protected check migration status
+
+- Verified the `docs` job succeeds on Ubuntu 24.04.5 LTS for commit `47b3b57323d71d29cb4a819e49ba29e94ddfea1e`.
+- Attempted to replace stale required contexts on protected `main`; GitHub's sudo-mode authentication blocked saving the form. API readback confirms the old four contexts remain, so the migration is explicitly pending.
+
 ## 2026-11-02 — Documentation CI runner stabilization
 
 - Pinned the validation runner to Ubuntu 24.04 after the initial hosted run emitted an ubuntu-latest migration notice.

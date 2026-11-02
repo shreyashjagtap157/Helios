@@ -13,7 +13,7 @@ This file tracks design questions, not software defects. No implementation has s
 - Specify the first reasoning engine and acceptance suite.
 - Define the action broker and authorization protocol.
 - Define what the system must do when intent is ambiguous or device state is unknown.
-- Verify the new repository documentation-validation workflow on a hosted GitHub Actions run, then replace obsolete protected-branch status contexts with the passing `docs` check while preserving branch protection.
+- Complete the GitHub sudo-mode passkey/MFA challenge, then replace the four obsolete required contexts (`check`, `test`, `clippy`, `fmt`) with the already-passing `docs` check while preserving all other `main` branch protection settings.
 
 ## P1 — Research and architecture
 

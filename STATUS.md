@@ -46,7 +46,9 @@
 - The runner is pinned to ubuntu-24.04 to avoid an unplanned hosted-image migration.
 - Added `.github/workflows/docs.yml`, which publishes a stable `docs` job on pushes to main/dev and pull requests targeting main.
 - The workflow uses a read-only GITHUB_TOKEN, a full-SHA-pinned official checkout action, and a dependency-free Ruby validator.
-- Branch protection will be changed only after the new `docs` check has completed successfully on GitHub Actions.
+- Hosted run [41467896240](https://github.com/shreyashjagtap157/Helios/actions/runs/41467896240) for commit `47b3b57323d71d29cb4a819e49ba29e94ddfea1e` passed: `docs` succeeded on Ubuntu 24.04.5 LTS with no annotations.
+- Attempted to replace the old required contexts with `docs`, but GitHub required a fresh sudo-mode passkey/MFA check to save. The browser showed the updated form, but the server-side readback confirms the change was not persisted.
+- `main` therefore remains protected with the old required contexts `check`, `test`, `clippy`, and `fmt`. The replacement is still pending user-completed GitHub reauthentication.
 - dev currently points to the same commit as main but is not protected. main is the repository default branch.
 
 ## Current work phase
