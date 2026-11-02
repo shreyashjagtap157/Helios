@@ -204,7 +204,7 @@ community for everyone.
 
 ---
 
-**Thank you for being part of the Helios + Omni community!**
+**Thank you for being part of the Helios community!**
 
-Your contributions, whether in code, documentation, testing, or simply using
-the software, help make this project better for everyone.
+Your contributions through research, documentation, architecture review, issue reports,
+and future implementation work help make this project better for everyone.
