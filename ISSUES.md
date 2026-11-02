@@ -13,7 +13,7 @@ This file tracks design questions, not software defects. No implementation has s
 - Specify the first reasoning engine and acceptance suite.
 - Define the action broker and authorization protocol.
 - Define what the system must do when intent is ambiguous or device state is unknown.
-- Design a minimal documentation-validation workflow and reconcile its real status names with the protected main branch requirements; the configured contexts are not produced by any workflow in the current repository tree.
+- Verify the new repository documentation-validation workflow on a hosted GitHub Actions run, then replace obsolete protected-branch status contexts with the passing `docs` check while preserving branch protection.
 
 ## P1 — Research and architecture
 

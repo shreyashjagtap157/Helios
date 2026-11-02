@@ -21,6 +21,10 @@ No Helios implementation has started. No subsystem, operating system, cognitive 
 5. **[docs/NON_TRAINING_COMPLIANCE.md](docs/NON_TRAINING_COMPLIANCE.md)** — dependency admission rules and future verification evidence for the non-training constraint.
 6. **[docs/RESEARCH_REGISTER.md](docs/RESEARCH_REGISTER.md)** — research areas and authoritative starting sources.
 
+## Repository validation
+
+Run `ruby scripts/validate_repository.rb` from a local clone. This dependency-free check validates required project files, removal of legacy project artifacts, GitHub issue-form YAML structure, the repository workflow's safety properties, local Markdown link targets, and the master requirement register. It validates repository governance and documentation only; it does not test a Helios runtime or establish that any planned capability has been implemented.
+
 ## Core objectives
 
 - Explicit knowledge acquisition with provenance and version history.

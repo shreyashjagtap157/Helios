@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-02 — Documentation CI gate
+
+- Added a dependency-free Ruby repository validator for required files, stale project references, issue-form YAML, workflow safety, local Markdown links and non-training requirement IDs.
+- Added a GitHub Actions workflow with read-only token permissions, SHA-pinned checkout and a stable `docs` job check.
+- Added local validation instructions; the workflow's first hosted run and branch-protection update remain pending verification.
+
+
 ## 2026-11-02 — Non-training assurance refinement
 
 - Explicitly prohibited local and remote model inference, including optional or indirect model-service paths.

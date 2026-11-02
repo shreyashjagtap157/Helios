@@ -19,6 +19,8 @@ Do not create implementation scaffolding and describe it as a working Helios sub
 
 Research contributions must record sources, versions, dates, assumptions and limitations. Technical claims must distinguish documented facts from proposals.
 
+Before submitting documentation or repository-governance changes, run `ruby scripts/validate_repository.rb` and report the exact result. The GitHub Actions workflow runs the same check for pushes and pull requests targeting `main`.
+
 When implementation begins, every change must identify requirements, tests, results, failure cases, security implications and known limitations.
 
 ## Non-training dependency review
