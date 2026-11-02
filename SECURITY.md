@@ -1,46 +1,40 @@
-# Security Policy
+# Helios Security and Safety Policy
 
-## Supported Versions
+**Status:** Design requirements only. No security implementation currently exists.
 
-| Version | Supported |
-|---------|-----------|
-| dev (development) | Yes |
-| main (stable) | Yes |
+## Core rules
 
-## Reporting a Vulnerability
+1. Default deny for hardware, operating-system and sensitive-data operations.
+2. Least privilege and narrowly scoped, revocable capabilities.
+3. The cognitive reasoning process cannot grant itself authority.
+4. Privileged operations are performed by a separate trusted service.
+5. External documents, websites, messages, files, plugins and device responses are untrusted data.
+6. Imported content cannot override user policy or authorization requirements.
+7. Consequential operations require explicit authorization under a defined policy.
+8. Physical actions require risk classification, safety interlocks and human override.
+9. Unknown device state, failed authorization or uncertain preconditions block consequential actions.
+10. Every attempted action and its result must be recorded.
 
-**Do NOT open a public GitHub issue for security vulnerabilities.**
+## Device action controls
 
-Instead, report them privately:
+A device adapter must define its identity, operations, parameter bounds, preconditions, expected effects, timeouts, failure behavior and safety class.
 
-1. **Email:** ssjagtap2016@gmail.com
-2. **Subject:** `[SECURITY] Helios/Omni — <brief description>`
+No natural-language request may directly become an unrestricted shell command, memory operation, register write or privileged system call.
 
-### What to Include
+The action broker must independently enforce permissions, device allowlists, operation limits, capability expiry, timeouts and rate limits. It must support emergency stop and explicit revocation.
 
-- Description of the vulnerability
-- Steps to reproduce
-- Potential impact
-- Suggested fix (if any)
+## Plugin controls
 
-### Response Timeline
+Plugins must declare identity, version, interfaces, requested permissions, network/filesystem/device access and resource limits. Plugins must be isolated and must not alter the trusted policy boundary.
 
-- **Acknowledgment:** within 48 hours
-- **Initial assessment:** within 1 week
-- **Fix or mitigation:** depends on severity
+## Data protection
 
-### Disclosure Policy
+Sensitive data should be local by default, access-controlled, backed up according to user policy and deleted through explicit retention rules. Secrets must not appear in logs. Network connections must authenticate endpoints where supported.
 
-- We follow responsible disclosure
-- We will credit reporters in the fix (unless they prefer anonymity)
-- We will coordinate a public disclosure timeline with the reporter
+## Failure handling
 
-## Security Considerations
+A command sent is not a verified result. A timeout is not success. Partial execution must be represented explicitly. Unknown hardware state must be treated as unsafe for consequential operations.
 
-This project is a programming language compiler and runtime. Key security surfaces:
+## Vulnerability handling
 
-- **Compiler:** input parsing, code generation, memory safety
-- **Runtime:** sandboxing, file system access, network access
-- **Package manager (opm):** dependency integrity, supply chain
-
-If you find a vulnerability in any of these areas, please report it.
+Security issues should be reported privately to the project owner until a formal disclosure process is established. Do not publish secrets, device credentials or exploit details in public issue reports.

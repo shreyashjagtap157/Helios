@@ -1,8 +1,0 @@
-// Tutorial 05: Async Programming
-// This demonstrates Omni's async/await features
-
-fn main():
-    println("Async Programming")
-    println("Use 'async fn' for async functions")
-    println("Use 'await' to wait for futures")
-    println("Omni supports concurrent execution")

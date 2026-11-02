@@ -1,6 +1,0 @@
-fn greet():
-    println("Hello")
-
-fn main():
-    greet()
-    println("Functions work")

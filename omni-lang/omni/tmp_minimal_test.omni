@@ -1,3 +1,0 @@
-// Temporary minimal test to verify compiler runtime
-fn main() -> i32:
-    return 0

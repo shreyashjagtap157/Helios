@@ -1,84 +1,27 @@
-# =============================================================================
-# Helios / Omni Project .gitignore
-# =============================================================================
-
-# --- Rust Build Artifacts ---
-target/
-target_alt/
-**/target_alt/
-*.rlib
-*.rmeta
-Cargo.lock
-
-# --- Compiled Binaries & Build Outputs ---
-build/
-dist/
-out/
-*.o
-*.a
-*.so
-*.dylib
-*.dll
-*.exe
-*.out
-
-# --- OVM Bytecode (generated, not source) ---
-*.ovm
-*.ovm.hints
-
-# --- GitNexus / Claude / Memory ---
-.gitnexus/
-.claude/
-Memory/
-
-# --- IDE / Editor ---
+# Local editor state
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
-*.sublime-project
-*.sublime-workspace
-
-# --- OS-specific ---
-Thumbs.db
 .DS_Store
-desktop.ini
+Thumbs.db
 
-# --- Temporary ---
-tmp/
-.tmp/
-*.tmp
-*.bak
+# Local logs and traces
 *.log
+logs/
+traces/
 
-# --- Python ---
-__pycache__/
-*.py[cod]
+# Local application state and test data
+.local/
+.local-data/
+data/
+tmp/
+temp/
+*.sqlite-wal
+*.sqlite-shm
 
-# --- Node/npm (for vscode-omni tool) ---
-node_modules/
-package-lock.json
-
-# --- Deployment Scripts ---
-*.ps1
-
-# --- Claude Local Overrides ---
-CLAUDE.local.md
-CLAUDE.md
-
-# =============================================================================
-# Un-ignore project source (force-track these)
-# =============================================================================
-!omni-lang/**/*.rs
-!omni-lang/**/*.toml
-!omni-lang/**/*.omni
-!omni-lang/**/*.bnf
-!helios-framework/**/*
-!examples/**/*
-!.github/**/*
-!README.md
-!LICENSE
-!CONTRIBUTING.md
-!CODE_OF_CONDUCT.md
-!ISSUES.md
+# Build and package outputs (future implementation)
+build/
+dist/
+out/
+target/

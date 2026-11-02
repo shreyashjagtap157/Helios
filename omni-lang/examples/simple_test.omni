@@ -1,4 +1,0 @@
-fn main():
-    println("Hello from OVM!")
-    println("Standalone execution works!")
-    println("Test passed")

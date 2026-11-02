@@ -1,9 +1,0 @@
-fn test_match():
-    let x = 42
-    if x == 42:
-        println("Match test")
-
-fn main():
-    println("Match Test")
-    test_match()
-    println("Done")

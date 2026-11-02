@@ -1,5 +1,0 @@
-module core::std::collections::Vector
-
-// Minimal Vector placeholder to resolve imports
-pub struct Vector {
-}

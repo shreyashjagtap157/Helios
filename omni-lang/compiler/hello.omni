@@ -1,4 +1,0 @@
-fn main():
-    println("Hello from Omni!")
-    let x = 1 + 2
-    println(x)

@@ -1,5 +1,0 @@
-module examples::hello
-
-fn main():
-    println("Hello World")
-    println("Done")

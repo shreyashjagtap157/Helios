@@ -1,9 +1,0 @@
-// Main program - import math module
-
-module main
-
-import math
-
-fn main():
-    let x = math::add(5, 3)
-    println(x)

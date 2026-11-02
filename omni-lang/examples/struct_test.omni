@@ -1,9 +1,0 @@
-module struct_test
-
-struct Point:
-    x: int
-    y: int
-
-fn main():
-    println("Struct Tests")
-    println("Done")

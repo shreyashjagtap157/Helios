@@ -1,6 +1,0 @@
-module test::import_hang
-
-import std::core
-
-fn main():
-    print("Test: Basic import std::core completed")
