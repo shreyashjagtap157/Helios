@@ -1,0 +1,672 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/shreyashjagtap157/Helios/blob/main/schemas/perception-observation.schema.json",
+  "title": "Helios PerceptionObservation v1",
+  "description": "Untrusted, task-ephemeral candidate observations. Structural validity is not truth or authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "observation_id",
+    "gateway_issued_at",
+    "capture",
+    "pipeline",
+    "raw_model_output_sha256",
+    "candidates",
+    "epistemic_status",
+    "authority",
+    "retention",
+    "integrity"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "observation_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "gateway_issued_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "capture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_id",
+        "source_authentication",
+        "modality",
+        "captured_at",
+        "media_type",
+        "byte_length",
+        "raw_input_sha256",
+        "content_ref"
+      ],
+      "properties": {
+        "source_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "source_authentication": {
+          "enum": [
+            "not_established",
+            "transport_authenticated",
+            "device_signature_verified",
+            "authenticated_user_upload"
+          ]
+        },
+        "modality": {
+          "enum": [
+            "image",
+            "audio",
+            "video",
+            "document",
+            "sensor",
+            "other"
+          ]
+        },
+        "captured_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "media_type": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 128
+        },
+        "byte_length": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 104857600
+        },
+        "raw_input_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "content_ref": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "pipeline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "preprocessor",
+        "model",
+        "runtime",
+        "execution",
+        "sandbox"
+      ],
+      "properties": {
+        "preprocessor": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "version",
+            "artifact_sha256",
+            "config_sha256"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "artifact_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "config_sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "model": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "role",
+            "publisher",
+            "model_id",
+            "version",
+            "weights_sha256",
+            "processor_sha256"
+          ],
+          "properties": {
+            "role": {
+              "const": "perception"
+            },
+            "publisher": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "model_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "weights_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "processor_sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "version",
+            "build_sha256"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "build_sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "execution": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "backend",
+            "hardware_profile",
+            "precision",
+            "quantization",
+            "config_sha256",
+            "deterministic_mode"
+          ],
+          "properties": {
+            "backend": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "hardware_profile": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "precision": {
+              "enum": [
+                "fp32",
+                "fp16",
+                "bf16",
+                "int8",
+                "int4",
+                "other"
+              ]
+            },
+            "quantization": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "config_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "deterministic_mode": {
+              "type": "boolean"
+            }
+          }
+        },
+        "sandbox": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "profile_id",
+            "image_sha256",
+            "network_access",
+            "filesystem_policy",
+            "cognitive_memory_access",
+            "tool_access"
+          ],
+          "properties": {
+            "profile_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "image_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "network_access": {
+              "const": false
+            },
+            "filesystem_policy": {
+              "const": "read_input_write_output_only"
+            },
+            "cognitive_memory_access": {
+              "const": false
+            },
+            "tool_access": {
+              "const": false
+            }
+          }
+        }
+      }
+    },
+    "raw_model_output_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "candidates": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/entity"
+          },
+          {
+            "$ref": "#/$defs/attribute"
+          },
+          {
+            "$ref": "#/$defs/text_segment"
+          },
+          {
+            "$ref": "#/$defs/spatial_region"
+          },
+          {
+            "$ref": "#/$defs/event"
+          },
+          {
+            "$ref": "#/$defs/measurement"
+          },
+          {
+            "$ref": "#/$defs/relation"
+          }
+        ]
+      }
+    },
+    "epistemic_status": {
+      "const": "UNTRUSTED_CANDIDATE"
+    },
+    "authority": {
+      "const": "NONE"
+    },
+    "retention": {
+      "const": "TASK_EPHEMERAL"
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "canonicalization",
+        "payload_digest_sha256"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "SHA-256"
+        },
+        "canonicalization": {
+          "const": "RFC8785-JCS"
+        },
+        "payload_digest_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "candidate_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._:-]{1,64}$"
+    },
+    "model_score": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "semantics"
+      ],
+      "properties": {
+        "value": {
+          "type": "number"
+        },
+        "semantics": {
+          "enum": [
+            "logit",
+            "similarity",
+            "rank",
+            "probability",
+            "other"
+          ]
+        },
+        "scale_id": {
+          "type": "string",
+          "maxLength": 128
+        }
+      },
+      "description": "Untrusted model-native metadata; not truth, calibrated confidence or authorization."
+    },
+    "entity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_id",
+        "kind",
+        "payload"
+      ],
+      "properties": {
+        "candidate_id": {
+          "$ref": "#/$defs/candidate_id"
+        },
+        "kind": {
+          "const": "entity"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "label",
+            "entity_type"
+          ],
+          "properties": {
+            "label": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "entity_type": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        },
+        "model_score": {
+          "$ref": "#/$defs/model_score"
+        }
+      }
+    },
+    "attribute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_id",
+        "kind",
+        "payload"
+      ],
+      "properties": {
+        "candidate_id": {
+          "$ref": "#/$defs/candidate_id"
+        },
+        "kind": {
+          "const": "attribute"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "subject_candidate_id",
+            "attribute_name",
+            "value"
+          ],
+          "properties": {
+            "subject_candidate_id": {
+              "$ref": "#/$defs/candidate_id"
+            },
+            "attribute_name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "value": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            }
+          }
+        },
+        "model_score": {
+          "$ref": "#/$defs/model_score"
+        }
+      }
+    },
+    "text_segment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_id",
+        "kind",
+        "payload"
+      ],
+      "properties": {
+        "candidate_id": {
+          "$ref": "#/$defs/candidate_id"
+        },
+        "kind": {
+          "const": "text_segment"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "text"
+          ],
+          "properties": {
+            "text": {
+              "type": "string",
+              "maxLength": 4096
+            },
+            "region_candidate_id": {
+              "$ref": "#/$defs/candidate_id"
+            }
+          }
+        },
+        "model_score": {
+          "$ref": "#/$defs/model_score"
+        }
+      }
+    },
+    "spatial_region": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_id",
+        "kind",
+        "payload"
+      ],
+      "properties": {
+        "candidate_id": {
+          "$ref": "#/$defs/candidate_id"
+        },
+        "kind": {
+          "const": "spatial_region"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "coordinate_space",
+            "bounds"
+          ],
+          "properties": {
+            "coordinate_space": {
+              "enum": [
+                "normalized_xyxy",
+                "pixel_xyxy"
+              ]
+            },
+            "bounds": {
+              "type": "array",
+              "minItems": 4,
+              "maxItems": 4,
+              "items": {
+                "type": "number"
+              }
+            }
+          }
+        },
+        "model_score": {
+          "$ref": "#/$defs/model_score"
+        }
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_id",
+        "kind",
+        "payload"
+      ],
+      "properties": {
+        "candidate_id": {
+          "$ref": "#/$defs/candidate_id"
+        },
+        "kind": {
+          "const": "event"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "event_type",
+            "participant_candidate_ids"
+          ],
+          "properties": {
+            "event_type": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "participant_candidate_ids": {
+              "type": "array",
+              "maxItems": 32,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/candidate_id"
+              }
+            }
+          }
+        },
+        "model_score": {
+          "$ref": "#/$defs/model_score"
+        }
+      }
+    },
+    "measurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_id",
+        "kind",
+        "payload"
+      ],
+      "properties": {
+        "candidate_id": {
+          "$ref": "#/$defs/candidate_id"
+        },
+        "kind": {
+          "const": "measurement"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "quantity",
+            "value",
+            "unit"
+          ],
+          "properties": {
+            "quantity": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "value": {
+              "type": "number"
+            },
+            "unit": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          }
+        },
+        "model_score": {
+          "$ref": "#/$defs/model_score"
+        }
+      }
+    },
+    "relation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_id",
+        "kind",
+        "payload"
+      ],
+      "properties": {
+        "candidate_id": {
+          "$ref": "#/$defs/candidate_id"
+        },
+        "kind": {
+          "const": "relation"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "relation_type",
+            "subject_candidate_id",
+            "object_candidate_id"
+          ],
+          "properties": {
+            "relation_type": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "subject_candidate_id": {
+              "$ref": "#/$defs/candidate_id"
+            },
+            "object_candidate_id": {
+              "$ref": "#/$defs/candidate_id"
+            }
+          }
+        },
+        "model_score": {
+          "$ref": "#/$defs/model_score"
+        }
+      }
+    }
+  }
+}
