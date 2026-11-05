@@ -3,7 +3,7 @@
 **Document status:** Authoritative design baseline  
 **Project phase:** Concept and specification only — pre-implementation  
 **Intended owner:** Personal project  
-**Last updated:** 2026-11-02  
+**Last updated:** 2026-11-05  
 **Normative authority:** This document is the sole source of truth for Helios requirements and architecture.  
 **Implementation status:** No Helios implementation has begun. No code, prototype, subsystem, operating system, or hardware integration is accepted as implemented merely because an earlier repository contained a similarly named directory, archive, experiment, or design sketch.
 
@@ -138,7 +138,7 @@ The intended capabilities are:
 - Analogical reasoning over represented structures.
 - Search and planning over explicit state/action models.
 - Procedural knowledge and repeatable skill execution.
-- Persistent episodic, semantic and procedural memory.
+- Task-scoped episodic, semantic and procedural memory, with durable retention only through explicit opt-in authorization.
 - Self-monitoring, contradiction detection and uncertainty reporting.
 - Controlled execution of user-authorized actions.
 - Learning in the sense of adding and revising explicit knowledge and procedures, not training models.
@@ -640,13 +640,13 @@ The first implementation should prove a narrow vertical slice on existing operat
 1. A local Helios process starts and accepts a structured request.
 2. It stores explicit facts with source and timestamp.
 3. It answers a bounded logical query with a traceable derivation.
-4. It stores an event in episodic memory.
+4. It records the event in task-ephemeral episodic context; durable retention requires explicit authorization.
 5. It creates a small plan over a typed action model.
 6. It requests permission for a harmless, reversible action.
 7. It invokes a mock device adapter.
 8. It verifies the mock result and records the execution.
 9. It survives restart with its knowledge and audit history intact.
-10. It runs without model training, pretrained models or network AI services.
+10. It runs without model training or neural inference in the symbolic core; the NPB is optional and not required for this first vertical slice.
 
 This is the first meaningful acceptance milestone. It is not a complete intelligence system and must not be described as one.
 
