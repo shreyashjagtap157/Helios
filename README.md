@@ -4,7 +4,7 @@
 
 Helios is intended to acquire and organize explicit knowledge, reason over it, maintain memory, plan tasks, evaluate its conclusions and carry out user-authorized actions through controlled software and hardware interfaces.
 
-Its defining constraint is strict: Helios must not depend on training any model, fine-tuning a model, pretrained neural models, learned embeddings or model inference services. Its cognitive mechanisms are to be built from explicit representations, algorithms, symbolic reasoning, search, planning, constraint solving, persistent knowledge and auditable procedures.
+Its defining constraint is strict: Helios never trains or adapts a model, and its reasoning, planning, decisions and memory governance are exclusively symbolic and deterministic. Frozen foundation models are permitted only inside an isolated Neural Perception Boundary (NPB), where they produce untrusted, provenance-bearing observations. They have no access to cognitive memory, tools, policy or execution. Cognitive memory is ephemeral by default; durable retention is opt-in.
 
 ## Project phase
 
@@ -20,6 +20,9 @@ No Helios implementation has started. No subsystem, operating system, cognitive 
 4. **[STATUS.md](STATUS.md)** — verified project state.
 5. **[docs/NON_TRAINING_COMPLIANCE.md](docs/NON_TRAINING_COMPLIANCE.md)** — dependency admission rules and future verification evidence for the non-training constraint.
 6. **[docs/RESEARCH_REGISTER.md](docs/RESEARCH_REGISTER.md)** — research areas and authoritative starting sources.
+7. **[docs/architecture/NEURAL_PERCEPTION_BOUNDARY.md](docs/architecture/NEURAL_PERCEPTION_BOUNDARY.md)** — NPB isolation and observation contract.
+8. **[schemas/perception-observation.schema.json](schemas/perception-observation.schema.json)** — machine-readable observation schema.
+9. **[docs/PHASE_A_FOUNDATION.md](docs/PHASE_A_FOUNDATION.md)** — bounded Phase A plan.
 
 ## Repository validation
 
@@ -29,7 +32,7 @@ Run `ruby scripts/validate_repository.rb` from a local clone. This dependency-fr
 
 - Explicit knowledge acquisition with provenance and version history.
 - Multiple transparent reasoning methods rather than one opaque model.
-- Working, episodic, semantic, procedural and prospective memory.
+- Explicit task-scoped working, episodic, semantic, procedural and prospective memory, with opt-in durable retention.
 - Planning, problem solving and metacognitive uncertainty management.
 - A strict separation between reasoning and privileged action execution.
 - Safe, authorized interaction with devices and hardware.
@@ -37,7 +40,7 @@ Run `ruby scripts/validate_repository.rb` from a local clone. This dependency-fr
 
 ## Development principles
 
-- No hidden model dependencies.
+- No hidden model dependencies; frozen model inference is isolated to the approved perception boundary.
 - No claims of implementation without source and test evidence.
 - Use established languages and tools; select them per subsystem after evaluation.
 - Integrate with an existing operating system first.

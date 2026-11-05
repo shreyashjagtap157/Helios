@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-05 — Symbolic core, perception boundary and ephemeral memory specification
+
+- Approved DEC-012: frozen foundation-model inference is confined to an isolated, local-only, network-denied NPB and produces only untrusted observations with no authority.
+- Approved DEC-013: cognitive memory is ephemeral by default; durable cross-task/session retention is explicit opt-in and isolated from safety/action audit records.
+- Approved DEC-014: PerceptionObservation v1 is JSON Schema 2020-12 with RFC 8785 JCS canonicalization and SHA-256 integrity digests.
+- Revised the master specification, requirements register, non-training compliance policy, research register, roadmap, status and README.
+- Added the machine-readable PerceptionObservation schema, NPB architecture contract and bounded Phase A plan.
+- No runtime, Rust workspace, model deployment or hardware integration was implemented.
+
 ## 2026-11-02 — Repository validation hardening
 
 - Expanded the dependency-free validator to scan CODEOWNERS for stale project references.

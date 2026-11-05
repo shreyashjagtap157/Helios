@@ -1,84 +1,67 @@
-# Helios Non-Training Compliance Policy
+# Helios Non-Training and Perception Compliance Policy
 
-**Status:** Normative implementation policy derived from HEL-NTR-001 through HEL-NTR-010.  
+**Status:** Normative implementation policy derived from HEL-NTR-001 through HEL-NTR-010 and HEL-PER-001 through HEL-PER-008.  
 **Project phase:** Design only. No implementation or automated compliance gate currently exists.  
-**Authority:** HELIOS_MASTER_SPEC.md remains the canonical requirements source. This document defines the evidence expected to demonstrate conformance.
+**Authority:** HELIOS_MASTER_SPEC.md is the canonical requirements source.
 
 ## 1. Governing rule
 
-Helios must not train, fine-tune, fit, update or infer a trained or pretrained model. This applies to models created by the project, models supplied by third parties, local model runtimes, remote inference APIs, plugins, vendor SDKs and operating-system services.
+Helios never trains, pretrains, fine-tunes, distills, fits, updates or continually adapts a neural/learned model.
 
-The restriction is not satisfied merely because Helios does not run a training job. Inference-only use of pretrained models is also prohibited.
+Frozen pretrained-model inference is permitted only inside the approved Neural Perception Boundary (NPB), solely to convert supplied sensory/unstructured input into untrusted, typed candidate observations. It is not permitted for reasoning, intent interpretation, dialogue orchestration, planning, decisions, memory, knowledge revision, tool selection, policy evaluation or action authorization.
 
-## 2. Prohibited capabilities and assets
+The initial NPB profile is local-only and network-denied. Remote perception requires a separate decision and verifiable immutability, provenance, isolation and data-handling evidence.
 
-A supported Helios build or workflow must not:
+## 2. Absolute prohibitions
 
-- Train, pretrain, fine-tune, distill or continually adapt any machine-learning model.
-- Fit learned model parameters from user data or observations.
-- Invoke local or remote inference of trained or pretrained models.
-- Use LLMs, transformers, learned speech or vision models, learned classifiers, learned rankers or learned recommendation models.
-- Create or consume learned vector embeddings or latent representations.
-- Download, load, bundle or publish model weights, checkpoints or training datasets.
-- Send user or device data to hosted AI/model-inference services.
-- Introduce any of these capabilities through an optional dependency, plugin, SDK, system service or transitive package.
+- Training, pretraining, fine-tuning, distillation, fitting or adaptation of model parameters.
+- Automatic updates to weights or inference-affecting artifacts.
+- Neural models for cognitive reasoning, planning, intent interpretation, decisions, memory or policy.
+- Learned embeddings, latent-vector retrieval, learned rerankers or learned indexes in the symbolic core.
+- NPB access to memory, credentials, tools, network clients or privileged interfaces.
+- Perception output setting trust, epistemic status, persistence, authority or authorization.
+- Unapproved/remote model fallback when perception is unavailable.
+- Training datasets, optimizer state, model-update pipelines or unapproved model artifacts in supported builds.
+- Hidden inference through transitive dependencies, optional features, plugins, SDKs, OS services or hosted endpoints.
 
-A model-related feature being disabled by default is not enough. It must be excluded from supported builds and the exclusion must be evidenced.
+## 3. NPB model admission
 
-## 3. Permitted mechanisms
+An approved deployment is pinned by publisher, immutable model ID/version, SHA-256 digests for weights and processor/tokenizer assets, preprocessing and inference-configuration digests, runtime version/build digest, backend, hardware profile, precision/quantization and sandbox profile.
 
-The following are compatible when their behavior is explicit and testable:
+Admission also requires proof that the process cannot access cognitive memory, symbolic rules, executive state, tools, credentials, arbitrary filesystem paths, network or action broker. The model's only role is perception. Changes require a new admission record and regression suite.
 
-- Deterministic algorithms and fixed mathematical transforms.
-- Human-authored rules, ontologies, schemas and domain models.
-- Explicit fact and observation acquisition with provenance.
-- Parsing, indexing and searching documents using non-learned algorithms.
-- Symbolic inference, theorem proving within declared fragments, graph algorithms, search, constraint solving and planning.
-- Explicit statistical calculations over supplied data when the calculation is not fitting or updating a predictive model.
-- Versioned user-approved changes to knowledge, rules, procedures and preferences.
-- Bounded procedural composition from an allowlist of verified primitives.
+Frozen weights do not guarantee identical output across drivers, kernels, runtimes, backends or numerical paths. Perception repeatability is measured per pinned execution profile. Core determinism is scoped to identical validated observations and symbolic configuration.
 
-Knowledge acquisition, memory formation and correction of explicit facts are not model training. A rule or procedure change must remain inspectable, versioned, attributable and reversible.
+## 4. Observation contract and trust
 
-## 4. Dependency admission gate
+The v1 wire format is UTF-8 JSON validated using JSON Schema Draft 2020-12. Raw input bytes and the canonical observation envelope use SHA-256. The envelope is canonicalized using RFC 8785 JCS after removing the integrity object.
 
-Before adopting a dependency, reviewers must record:
+A hash establishes byte integrity/content identity, not source authenticity or truth. Source attestation is evaluated separately. Epistemic admission is a symbolic operation and cannot be replaced by a model score.
 
-| Review item | Required evidence |
-|---|---|
-| Identity | Name, exact version, source repository or publisher |
-| License | License identifier and compatibility decision |
-| Maintenance | Release activity, support status and known security concerns |
-| Dependency graph | Direct and transitive dependencies; lockfile or resolved graph |
-| Optional features | Activated feature flags and optional packages |
-| Model behavior | Explicit determination of training, fitting, inference, embedding and model-download capability |
-| Runtime services | Network destinations, API calls, background services and telemetry behavior |
-| Assets | Model files, checkpoints, datasets, learned indexes or generated artifacts |
-| Build behavior | Build scripts, code generation and install/runtime hooks |
-| Offline behavior | Whether core functionality remains available without external services |
-| Decision | Accept, reject or defer, with reviewer and date |
+Perception strings are inert data. The schema rejects undeclared fields; the gateway additionally enforces cross-field references, payload bounds and allowlisted model manifests. No memory pointer, command, tool call, executable markup or policy field is accepted.
 
-If a reviewer cannot determine whether a component introduces prohibited behavior, it must be deferred or rejected. Do not infer compliance from package descriptions, popularity, licensing or the fact that a component is open source.
+## 5. Dependency admission
 
-## 5. Build and release evidence
+Reviewers record identity/version/publisher/license; direct/transitive dependencies and enabled features; training/fitting/inference and model-download behavior; NPB-only role; artifact digests; runtime network/filesystem/IPC behavior; sandbox controls and negative tests; offline behavior; build hooks; and accept/reject/defer decision with evidence.
 
-When implementation begins, each supported build should produce:
+The symbolic core dependency set contains no neural inference facility. The NPB set may contain only the exact reviewed perception runtime and immutable artifacts. If relevant behavior cannot be established, the dependency is rejected or deferred.
 
-1. A software bill of materials covering direct and transitive dependencies.
-2. A record of enabled optional features and resolved packages.
-3. An artifact scan for prohibited model weights, checkpoints, learned embedding assets and training datasets.
-4. A review of network destinations and integrations for model-inference services.
-5. Offline tests demonstrating that the cognitive core does not require an external AI/model service.
-6. A human-reviewed dependency admission record for every new or upgraded dependency.
+## 6. Build and release evidence
 
-Automated filename, package-name or string scans are useful tripwires but are not sufficient proof. They can miss renamed assets and can produce false positives. Combine them with dependency graph inspection, source review, build configuration review and runtime tests.
+Each supported build/release should produce an SBOM, enabled-feature manifest, NPB model manifest, scans for training data/optimizer state/unapproved weights/undeclared checkpoints/learned cognitive indexes, network/IPC review, runtime isolation tests, offline tests with NPB disabled, schema/adversarial tests and human-reviewed dependency records.
 
-## 6. Change control
+Automated scans are defense-in-depth, not proof by themselves.
 
-No exception is permitted under the current approved decisions. Any future reconsideration requires an explicit owner decision, a dated change to DECISIONS.md, revision of the master specification and an impact assessment against all HEL-NTR requirements.
+## 7. Memory policy compliance
 
-A dependency that violates this policy must not be merged while a policy change is merely proposed.
+All cognitive memory is task/session ephemeral by default. Durable episodic, semantic, procedural, prospective, autobiographical or preference retention requires explicit scoped authorization. The NPB cannot write memory or choose retention.
 
-## 7. Current verification state
+Safety/action audit records are separate under their own access and retention policy and are not implicitly loaded into cognitive context. Expiration/deletion tests cover caches and derived indexes as well as primary task records.
 
-The repository currently contains specifications and project-control documents only. There are no Helios dependency manifests, runtime binaries, model assets, SBOMs or executable compliance checks to validate. This policy defines future acceptance evidence; it does not claim that an implementation has passed it.
+## 8. Change control
+
+A change to perception role, model/network profile, memory default, observation envelope or retention behavior requires a dated decision, master-spec update, dependency/safety impact assessment and acceptance-test update.
+
+## 9. Current verification state
+
+The repository contains specifications and project-control records only. There is no NPB, cognitive runtime, dependency manifest, model package, SBOM, memory subsystem or automated compliance gate. This policy defines future evidence; it does not claim implementation conformance.

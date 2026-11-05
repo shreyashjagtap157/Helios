@@ -1,6 +1,6 @@
 # Helios Project Status
 
-**As of:** 2026-11-02  
+**As of:** 2026-11-05  
 **Overall status:** Concept and specification only  
 **Implementation:** Not started
 
@@ -8,7 +8,7 @@
 
 - The intended project is a personal cognitive computing framework.
 - It has a strict non-training requirement.
-- Pretrained models are excluded, even for inference-only use.
+- Frozen pretrained-model inference is permitted only in the isolated NPB for perception; neural cognition remains prohibited.
 - It is intended to maintain explicit knowledge and memory, reason, plan and evaluate its own conclusions.
 - It is intended to interact with hardware for user-authorized requests.
 - A wider operating-system ecosystem is a long-term goal.
@@ -31,9 +31,13 @@
 
 ## Current approved constraints
 
+- DEC-012: frozen foundation models are permitted only as isolated perception peripherals producing untrusted observations.
+- DEC-013: cognitive memory is ephemeral by default; durable cross-task/session retention is opt-in.
+- DEC-014: PerceptionObservation v1 uses JSON Schema 2020-12, RFC 8785 JCS canonicalization and SHA-256 digests.
+
 - No training of any model.
-- No fine-tuning or pretrained-model inference.
-- No learned embeddings or model weights.
+- No training, fine-tuning or neural inference outside the NPB.
+- No learned cognitive embeddings; only reviewed, digest-pinned perception weights may be admitted to the NPB deployment.
 - Explicit knowledge acquisition and revision are permitted.
 - Reasoning and privileged hardware execution must be separated.
 - User authority and independent action policy are mandatory.
@@ -53,7 +57,7 @@
 
 ## Current work phase
 
-Research and architecture refinement. The next practical work is to define a small target use case, select a bounded reasoning domain, evaluate candidate technologies and design a mock hardware-action vertical slice.
+Architecture specification and research refinement. The NPB trust boundary, PerceptionObservation v1 contract and opt-in memory policy are specified in the review branch. Phase A is specified but not implemented. Rust and a Datalog engine remain candidates pending a bounded comparison spike. No Rust workspace, runtime, model deployment or cognitive memory subsystem has been created.
 
 ## Evidence policy
 

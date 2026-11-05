@@ -3,65 +3,56 @@
 **Document status:** Authoritative design baseline  
 **Project phase:** Concept and specification only — pre-implementation  
 **Intended owner:** Personal project  
-**Last updated:** 2026-11-02  
+**Last updated:** 2026-11-05  
 **Normative authority:** This document is the sole source of truth for Helios requirements and architecture.  
 **Implementation status:** No Helios implementation has begun. No code, prototype, subsystem, operating system, or hardware integration is accepted as implemented merely because an earlier repository contained a similarly named directory, archive, experiment, or design sketch.
 
 ---
 
+
 ## 1. Executive definition
 
-Helios is a personal, non-training cognitive computing framework intended to provide useful intelligence through explicit computational mechanisms rather than trained machine-learning models.
+Helios is a personal cognitive computing framework whose reasoning, planning, decisions, knowledge revision and memory governance are performed by an explicitly non-neural, deterministic symbolic core.
 
-Its intended capabilities include acquiring and organizing knowledge; representing entities, concepts, facts, events, relationships, rules, procedures and uncertainty; reasoning over that information; remembering prior experiences; planning; solving problems; evaluating its own conclusions; improving its explicit knowledge and procedures; and carrying out user-authorized tasks.
+Frozen foundation models may be used only as quarantined perception peripherals. Their outputs are untrusted candidate observations with provenance; they are not facts, instructions, beliefs, plans, decisions or authorization. The Neural Perception Boundary (NPB) has no direct access to the symbolic executive, cognitive memory, policy engine, tools or privileged execution.
 
-Helios is also intended to interact with the physical and digital environment through controlled hardware and software interfaces. The longer-term vision includes an operating-system ecosystem in which Helios can manage resources, communicate with devices, run services and applications, and safely execute actions requested by its user.
+The symbolic core represents entities, claims, events, relations, rules, procedures, uncertainty and goals explicitly. It derives conclusions using declared algorithms and formal methods within published operational limits. It preserves premises, evidence, contradictions, derivations and failure states. It manages working context and temporary memory explicitly; durable cognitive retention is opt-in and separately authorized.
 
-Helios is not defined as a chatbot, an LLM wrapper, a collection of agents, a knowledge-graph front end, or an autonomous shell script. Those may be interfaces or integration options, but they do not constitute the cognitive architecture.
+Helios is intended to interact with digital and physical environments through controlled software and hardware interfaces. A separate policy and action-enforcement boundary must authorize consequential operations. A reasoning conclusion or perceptual observation is never, by itself, permission to execute.
 
-The core ambition is to investigate how far a useful, extensible intelligence system can be built with algorithms, explicit representations, symbolic reasoning, search, planning, constraint solving, persistent knowledge and verified action mechanisms—without training any model.
+Helios is not a chatbot, an LLM wrapper, a collection of agents, a knowledge-graph front end or an autonomous shell script. Its defining intelligence mechanisms are symbolic, inspectable and reproducible. Neural inference is an optional sensory input capability, never a cognitive authority.
+
+The project investigates how far a useful, extensible intelligence system can be built through explicit representations, symbolic reasoning, search, planning, constraint solving, controlled memory and verified action mechanisms, without training or adapting any model.
 
 ## 2. Foundational commitments
 
 The following commitments govern all future design decisions.
 
-### 2.1 Strict non-training constraint
 
-Helios must not depend on training anything. This is a defining design constraint, not an optimization preference.
+### 2.1 Absolute non-training constraint and restricted perception exception
 
-The following are out of scope for the intended architecture:
+Helios must never train, pretrain, fine-tune, distill, fit, update or continually adapt neural models or other learned model parameters. This is an absolute project constraint.
 
-- Training, pretraining, fine-tuning or distilling neural networks.
-- Supervised, unsupervised, self-supervised or reinforcement-learning training.
-- Online or continual training of model parameters.
-- Downloading or relying on pretrained neural models, even when used only for inference.
-- LLM, transformer, diffusion, learned speech, learned vision or learned embedding dependencies.
-- Vector embeddings produced by trained models, learned rerankers, model-generated classifiers or other hidden learned components.
-- Any inference of a trained or pretrained model, whether local or remote, required or optional, or invoked indirectly by a third-party component.
-- External AI or model-inference APIs and hosted model services as any part of a Helios workflow.
-- Training datasets, weight files, model checkpoints, learned embedding assets or model-serving infrastructure.
-- Quietly introducing a trained model behind a library, plugin, operating-system service or device adapter.
+Pretrained foundation-model inference is permitted only inside an approved Neural Perception Boundary (NPB), and only to transform supplied sensory or unstructured source material into typed candidate observations. This is a narrow architectural exception, not permission to use a model as a cognitive subsystem.
 
-This prohibition applies to third-party components, plugins, operating-system services, vendor SDKs and externally hosted services as well as components written specifically for Helios. A dependency is not acceptable merely because the project itself did not train the model. A component that can train or infer a model is not acceptable simply because its model path is optional or disabled by default; any such functionality must be excluded from the supported build and its absence demonstrated by dependency and artifact evidence. If the behavior of a dependency cannot be established, the dependency must be rejected or deferred.
+Neural/model-based reasoning, inference chaining, deliberation, planning, goal selection, decision-making, policy evaluation, memory management, knowledge revision, action authorization, LLM-based user-intent interpretation, dialogue orchestration, code generation, tool selection and response generation remain prohibited. Learned embeddings, latent-vector retrieval, learned rerankers and learned memory indexes are prohibited in the cognitive core. The NPB may not access cognitive memory, the executive, tools, credentials, network clients, policy services or privileged device operations.
+
+Remote or hosted model inference is excluded from the initial supported profile. A later remote-perception proposal requires a separate decision and evidence that model version, weights, execution configuration, data handling and isolation are immutable and auditable.
+
+Every permitted perception model is frozen as an exact reviewed deployment: model identity, publisher, version, weight digest, processor/tokenizer artifacts, preprocessing, inference configuration, runtime build, precision/quantization, backend and sandbox profile are recorded. Updates are disabled; replacing any item requires a new admission review and regression suite.
+
+The NPB is an isolated process or equivalent enforced security domain. It receives only the input needed for the specific perception request and returns only a versioned, schema-validated observation envelope. It has no access to cognitive memory, symbolic rules, action broker, user secrets or arbitrary tools. Network access is denied in the initial profile. Model output is untrusted even when schema-valid.
+
+A dependency that can train or infer models is not acceptable in the symbolic core merely because the relevant feature is optional or disabled. Perception-only dependencies are confined to the separately reviewed NPB dependency set. If behavior, artifacts or isolation cannot be established, they are rejected or deferred.
+
 
 ### 2.2 What remains permitted
 
-The prohibition on training does not prohibit the acquisition of new information or the addition of knowledge.
+Permitted mechanisms include deterministic algorithms; human-authored rules, ontologies and schemas; explicit facts and provenance-bearing observations; classical signal processing, OCR, grammar parsing and non-learned feature extraction; logical inference, theorem proving within declared fragments, search, constraint solving and planning; recording task events under scoped retention policies; and explicit, auditable knowledge revision.
 
-Permitted mechanisms include:
+Frozen foundation-model inference is permitted only within the approved NPB and solely to produce untrusted candidate observations from sensory or unstructured input. Perception is an acquisition mechanism only. A candidate becomes an operational belief or durable knowledge item only through a separate symbolic admission process that checks schema, provenance, corroboration policy, contradictions, source limitations and required user authorization.
 
-- Deterministic algorithms and hand-designed procedures.
-- Human-authored rules, ontologies, schemas and domain models.
-- Explicit facts and observations acquired from approved sources.
-- Parsing and converting documents, messages, structured data and device observations into explicit representations.
-- Logical inference, search, theorem proving within supported fragments, constraint solving and planning.
-- Recording experiences and action outcomes as auditable events.
-- Adding, correcting, versioning or retracting explicit knowledge.
-- Human-reviewed changes to rules, procedures, preferences and domain knowledge.
-- Bounded symbolic skill composition from approved primitives, subject to verification and authorization.
-- Explicit statistical calculations over supplied data where the algorithm and assumptions are known and no learned model is fitted.
-
-These activities may be described as knowledge acquisition, memory formation, knowledge revision or procedural adaptation. They must not silently turn into parameter training or model fitting.
+Explicit statistical calculations are permitted where the algorithm and assumptions are known and no predictive model is fitted. These activities must not silently become model-parameter training or neural cognition.
 
 ### 2.3 No artificial capability claims
 
@@ -83,23 +74,18 @@ Helios must be designed to interact with hardware and software resources when ex
 
 Hardware access must be controlled by an enforcement layer outside the reasoning engine. A reasoning conclusion is not itself permission to operate a device.
 
-### 2.7 Non-training dependency admission
 
-The non-training constraint applies to the complete supported product, not only to code written in this repository. Before a dependency, plugin, SDK, system service, external service or build tool is admitted, its relevant behavior must be assessed across direct, transitive, optional, build-time and runtime paths.
+### 2.7 Dependency admission and perception isolation
 
-The admission review must establish:
+Every dependency, plugin, SDK, system service, external service and build tool is reviewed across direct, transitive, optional, build-time and runtime paths.
 
-- Exact component identity, version, source, license and maintenance status.
-- Direct and transitive dependency graph, including activated feature flags and optional components.
-- Whether it can train, fine-tune, fit, update or infer any trained or pretrained model.
-- Whether it downloads, loads or ships model weights, checkpoints, learned embeddings or training datasets.
-- Whether it invokes remote model services or sends data to model-inference endpoints.
-- Build scripts, runtime hooks, plugins and operating-system integrations that may introduce hidden behavior.
-- Network destinations and whether the component remains functional offline.
+Admission establishes exact component identity/version/source/license; direct and transitive dependencies and enabled features; training/fitting/inference capability; model downloads and artifacts; runtime network destinations and telemetry; build scripts and dynamic loading; offline behavior; and whether the symbolic core remains independent of the NPB.
 
-A dependency must be rejected or deferred when its relevant behavior cannot be established. A default-off model feature is not sufficient evidence of compliance. A feature may be considered only when it is excluded from supported builds and its absence is verified in the resolved dependency graph and built artifacts.
+The symbolic core dependency set contains no neural inference facility. The NPB dependency set may contain only the exact frozen perception model and minimum reviewed runtime required to execute it. NPB admission additionally records artifact and processor digests, inference runtime/backend, precision/quantization, execution configuration, sandbox profile, input/output permissions and negative tests proving cognitive/privileged interfaces are unreachable.
 
-When implementation begins, the project should generate a software bill of materials (SBOM) for each build or release and add automated checks for prohibited model artifacts, unexpected model-service endpoints and disallowed dependency features. Automated scans are defense-in-depth checks, not proof by themselves; dependency review and test evidence remain mandatory. No build or release may contain model weights, checkpoints, training datasets or learned embedding assets.
+A default-off feature or package-level assurance is insufficient. When implementation begins, generate an SBOM for each supported build, scan artifacts for training data/optimizer state/undeclared weights/learned indexes, inspect network destinations and test NPB isolation. Automated scans are defense-in-depth; human dependency review and runtime isolation tests remain mandatory.
+
+The NPB is optional. If absent, unavailable or rejected, the symbolic core continues on structured inputs and reports perception unavailable rather than falling back to an unapproved model service.
 
 ## 3. Project boundaries and terminology
 
@@ -152,7 +138,7 @@ The intended capabilities are:
 - Analogical reasoning over represented structures.
 - Search and planning over explicit state/action models.
 - Procedural knowledge and repeatable skill execution.
-- Persistent episodic, semantic and procedural memory.
+- Task-scoped episodic, semantic and procedural memory, with durable retention only through explicit opt-in authorization.
 - Self-monitoring, contradiction detection and uncertainty reporting.
 - Controlled execution of user-authorized actions.
 - Learning in the sense of adding and revising explicit knowledge and procedures, not training models.
@@ -163,40 +149,23 @@ A capability is not complete merely because a module exists. Each must have supp
 
 The following architecture is the proposed design baseline. Internal interfaces and algorithms remain subject to research and validation.
 
+
 ### 5.1 Cognitive executive
 
-The executive coordinates the cognitive cycle. It receives requests, determines the active goal, selects relevant context, allocates bounded resources, invokes reasoning and planning services, and decides whether to answer, ask, defer or execute.
+The executive is a deterministic symbolic coordinator. It receives typed requests, determines the active goal, selects relevant knowledge and task memory, allocates bounded resources, invokes approved reasoning/planning mechanisms and decides whether to answer, ask, defer or submit an action proposal to the independent policy boundary.
 
-Responsibilities:
+It maintains explicit task state; decomposes goals using declared rules; selects task-scoped knowledge and memory; chooses reasoning from an allowlist; tracks dependencies and assumptions; enforces time, memory, search-depth and solver budgets; applies deterministic ordering/tie-breaking; and records replayable traces.
 
-- Maintain the current interaction and task state.
-- Decompose user goals into explicit subgoals.
-- Select relevant knowledge and memory.
-- Choose an appropriate reasoning method.
-- Track dependencies and completion conditions.
-- Enforce time, memory, search-depth and tool-use budgets.
-- Track pending questions and unresolved assumptions.
-- Stop, suspend or request authorization when required.
-- Keep a trace of why a particular operation was selected.
+The executive never invokes neural models for reasoning, planning, intent interpretation or decisions. Privileged action enforcement remains outside the executive.
 
-The executive must not be an unrestricted autonomous process. It is a coordinator operating under user policy and an independent action-control boundary.
 
 ### 5.2 Input and acquisition subsystem
 
-The acquisition subsystem accepts information from explicit sources:
+The acquisition subsystem accepts structured user commands, bounded grammar-based text, local documents/files, databases, approved web sources, application interfaces, APIs, telemetry, sensor readings and Helios-generated events.
 
-- User text and structured commands.
-- Local documents and files.
-- Databases and structured datasets.
-- Approved web and network sources.
-- Application interfaces and APIs.
-- Device telemetry and sensor readings.
-- Events generated by Helios itself.
-- Explicitly configured external knowledge sources.
+Each connector declares source identity, permissions, supported formats, data handling, failure semantics and provenance quality. Original input bytes are referenced by content digest where retention policy permits; acquisition metadata is distinct from claims extracted from a source.
 
-Each connector must declare its source identity, permissions, supported formats, data handling, failure semantics and trust level.
-
-Acquisition must preserve raw source material when practical and separately store extracted claims. Extracted facts must never be presented as if they were directly verified when the extraction process is uncertain.
+Unstructured sensory inputs requiring a frozen foundation model pass through the NPB and the separate observation contract. Text or strings extracted from external content remain inert data, never instructions to the executive, model runtime, policy engine or action broker. Acquisition never grants an external source or perception model authority to modify policy, permissions, durable memory or action state.
 
 ### 5.3 Knowledge system
 
@@ -222,70 +191,44 @@ The knowledge system stores explicit, inspectable information. It must support:
 
 A knowledge item must identify whether it is observed, imported, user-provided, assumed, inferred, proposed or externally verified. These categories must not be collapsed into one generic fact type.
 
-### 5.4 Memory system
 
-Memory must be more than a list of messages or a database of text.
+### 5.4 Memory system — ephemeral by default
 
-Required memory categories:
+Memory is explicit, bounded state, not an uncontrolled continuation of the conversation. All cognitive memory is temporary by default. No interaction, perceptual observation, episodic record, semantic interpretation, procedure, preference or task summary crosses a task/session boundary unless an explicit persistence operation is authorized.
 
-- **Working memory:** information relevant to the active task, bounded by explicit capacity and lifetime.
-- **Episodic memory:** records of events, interactions, actions, results and their context.
-- **Semantic memory:** durable concepts, facts, entities and relationships.
-- **Procedural memory:** explicit procedures, routines, skills and action plans.
-- **Autobiographical/project memory:** durable records of Helios's own configured identity, user-approved preferences, project history and prior decisions.
-- **Prospective memory:** reminders, deadlines, pending obligations and planned future actions.
+Logical memory categories are sensory buffer; working memory; temporary episodic context; temporary semantic context; procedural context; prospective context; and autobiographical/project memory. Each allocation has an owner, scope, creation time, expiry rule, sensitivity label and provenance. Durable reuse of any category requires explicit promotion.
 
-Memory lifecycle operations must include creation, retrieval, linking, consolidation, archival, correction, expiration and deletion according to policy.
+Lifecycle operations include allocate, retrieve, link, update, invalidate, expire, erase and promote. A separate trusted persistence gate identifies exact records/fields, purpose, retention period, access scope, authorizing principal and revocation/deletion path. No broad "remember everything" permission is inferred from a one-time request.
 
-Memory consolidation must not silently discard evidence or rewrite history. It may create summaries or indexes, but the original event or source record should remain addressable when retention policy permits.
+Durable semantic facts, episodic history, procedures and preferences are opt-in. A user-approved fact is stored as a separate versioned knowledge record linked to its source; it does not mutate the original observation into ground truth. Retraction of a premise invalidates dependent derived records.
 
-### 5.5 Reasoning system
+Safety, security and action audit records are not cognitive memory. They are held in a separately governed audit store with its own minimization, integrity, access and retention policy. Audit retention must not become implicit cognitive recall.
 
-Reasoning should be a portfolio of explicit mechanisms, not one opaque universal reasoner.
+Automatic cross-session recall, background consolidation, model-generated memory summaries and silent promotion are disabled by default. Expiration/deletion covers derived indexes, caches and temporary copies, subject to separately disclosed legal/safety audit retention requirements.
 
-Candidate mechanisms:
 
-- Rule-based deduction.
-- Forward chaining.
-- Backward chaining and goal-directed proof search.
-- Datalog-style relational inference.
-- First-order logic fragments with explicit decidability and resource limits.
-- Answer-set programming for suitable combinatorial problems.
-- Constraint satisfaction and optimization.
-- SAT and SMT solving.
-- Graph traversal and graph algorithms.
-- Search algorithms, including heuristic search.
-- Planning over explicit states, actions, preconditions and effects.
-- Temporal reasoning.
-- Spatial and geometric reasoning.
-- Causal models and intervention analysis where causal structure is known.
-- Abductive reasoning to generate possible explanations.
-- Analogical reasoning over explicit mappings.
-- Mathematical computation and symbolic algebra.
-- Probabilistic calculations with declared assumptions and known limitations.
+### 5.5 Symbolic reasoning system
 
-No method should be used outside its supported semantics without marking the result as heuristic or speculative.
+All reasoning is performed by explicit, non-neural algorithms over typed symbolic representations. Foundation models are not reasoning engines and cannot contribute hidden premises, proofs, plans or decisions.
+
+Candidate mechanisms include rule-based deduction; forward/backward chaining; Datalog; bounded first-order logic; truth maintenance and belief revision; constraint satisfaction; SAT/SMT; answer-set programming; graph algorithms and deterministic search; temporal, spatial and causal reasoning over explicit models; abductive hypothesis generation; analogical reasoning over explicit mappings; and symbolic algebra.
+
+The portfolio is phased. The first symbolic foundation implements typed facts, provenance, a small deterministic rule set and derivation traces. Datalog is the leading candidate for the initial inference layer, subject to a recorded comparison of Soufflé and suitable Rust-native options. SMT, ASP and general planners are deferred until concrete use cases and benchmarks justify them.
+
+Every engine declares supported semantics, determinism profile, resource bounds, failure modes and provenance. Solver timeout, resource exhaustion, unsupported theory or indeterminate result remains unknown/indeterminate; it is never reported as proof of satisfiability or unsatisfiability.
+
 
 ### 5.6 Metacognition and epistemic control
 
-Helios must track not only conclusions but also the status of its own knowledge.
+Helios distinguishes known from unknown; observed from inferred; proven from plausible; current from stale; consistent from contradictory; a plan from execution; and an attempted action from a verified result.
 
-It should distinguish:
+Every claim retains source, acquisition method, temporal context, epistemic state, supporting/contradicting evidence, derivation premises and rule/solver version. A model score is never automatically calibrated probability or evidence of truth.
 
-- Known from unknown.
-- Observed from inferred.
-- Proven from plausible.
-- Current from stale.
-- Consistent from contradictory.
-- Supported from unsupported.
-- High-confidence from low-confidence.
-- A completed action from an attempted action.
-- A plan from an execution.
-- A simulation from a real-world result.
+Research four-valued evidence semantics, including Belnap-style representations, so positive support, negative support, both and neither can coexist without unrestricted explosion. This is an evidence-management choice, not a claim that the external world has four truth values.
 
-For a conclusion, Helios should preserve the relevant premises, source references, rules or algorithms used, intermediate derivations, unresolved assumptions and any solver result or proof artifact available.
+A perception candidate is always UNTRUSTED. Promotion to an operational belief requires a separate symbolic admission rule, source policy and any required corroboration or user adjudication. No generic confidence threshold converts neural output directly into fact.
 
-Confidence must not be an arbitrary scalar that creates an illusion of statistical calibration. Its meaning, derivation and permitted uses must be specified. When there is no principled probability model, use categorical evidence states or explicit uncertainty reasons rather than fabricated precision.
+Results preserve premises, evidence, rules, intermediate derivations, unresolved assumptions and available proof artifacts. If evidence is insufficient or inconsistent, Helios abstains, asks or exposes uncertainty.
 
 ### 5.7 Planning and problem-solving system
 
@@ -307,77 +250,74 @@ A plan should identify:
 
 Planning methods may include classical planning, hierarchical task decomposition, partial-order planning, graph search and constraint-based scheduling. Each planning engine must state which classes of problems it supports.
 
+
 ### 5.8 Interaction and language subsystem
 
-Natural-language interaction without trained models is a major research challenge and must be treated honestly.
+The interaction subsystem does not rely on a foundation model to interpret intent, conduct dialogue, generate plans or produce decisions. The initial interface uses structured commands and explicit grammar/semantic parsing over declared language subsets.
 
-Candidate components:
+Candidate components include tokenization, hand-authored lexical resources, deterministic grammar parsing, semantic parsing into typed requests, entity resolution against approved knowledge, dialogue-state tracking, clarification and template/grammar-based response generation.
 
-- Tokenization and normalization.
-- Hand-authored lexical resources.
-- Grammar-based parsing for defined language subsets.
-- Semantic parsing into explicit task and knowledge representations.
-- Entity resolution against the knowledge base.
-- Dialogue state and context tracking.
-- Clarification questions for ambiguity.
-- Template- and grammar-based natural-language generation.
-- Structured command interfaces as a precise alternative to unrestricted natural language.
+A frozen foundation model may extract perceptual content such as visible text, spoken words or scene candidates only when classified as perception and placed in the untrusted observation envelope. Converting extracted text into a command, policy change or executable action requires separate symbolic interpretation and authorization.
 
-The initial system should prefer a reliable bounded language and a structured command interface over claiming arbitrary human-level language comprehension.
 
-### 5.9 Perception and multiple modalities
+### 5.9 Neural Perception Boundary and multiple modalities
 
-The framework should be designed for multiple input modalities, but modality support must be staged.
+The Neural Perception Boundary (NPB) is the only permitted location for frozen foundation-model inference. It is a quarantined sensory peripheral, not a cognitive subsystem.
 
-Text, structured records, event streams and device telemetry are appropriate early targets. Image, audio and video processing without trained models will require research into deterministic signal processing, classical computer vision, hand-designed feature extraction, explicit grammars and domain-constrained algorithms.
+Permitted tasks are limited to extracting candidate observations from supplied sensory/unstructured inputs: image regions, object/entity candidates, audio events, speech/text segments, document structure or modality-specific measurements. It cannot summarize task history, answer general questions, infer user intent, deliberate, plan, select tools, write memory or issue instructions to another subsystem.
 
-No general-purpose visual recognition, speech recognition or image understanding capability should be claimed without measured evidence on representative data.
+The NPB is isolated by OS process/container/sandbox controls appropriate to the host. Its initial profile is local-only, network-denied, credential-free and least-privilege. It receives read access only to the specific task input and write access only to a bounded output channel. It has no access to cognitive databases/caches, rule stores, action brokers, shell, arbitrary filesystem paths, user secrets or ambient IPC.
+
+Every deployment pins model identity/publisher/version, weights digest, processor/tokenizer digest, preprocessing and inference configuration, runtime version/build digest, backend, hardware profile, precision/quantization and sandbox image/profile. Runtime updates, dynamic downloads, automatic fallback, weight replacement and configuration drift require re-admission.
+
+The NPB returns the versioned PerceptionObservation envelope defined in docs/architecture/NEURAL_PERCEPTION_BOUNDARY.md and schemas/perception-observation.schema.json. The trusted gateway stamps untrusted epistemic status, no authority and task-ephemeral retention; the model cannot set trust, memory scope, policy or persistence.
+
+All perceptual text is inert data. The symbolic core validates schema, bounds, identifiers, references and value types. No arbitrary pointers, executable markup, tool-call structures or undeclared properties are accepted. A valid schema proves structural conformance, not truth.
+
+Hashes protect integrity/content identity, not source authenticity or correctness. Source identity/attestation is assessed separately from epistemic support. Perception is optional; if unavailable or rejected, Helios reports unavailable/unknown and never silently routes to a hosted/unapproved model.
+
 
 ## 6. The non-training learning model
 
-Helios must be capable of acquiring new knowledge without training a model.
+Helios acquires and revises explicit knowledge without training or adapting model parameters. Frozen inference, when used, occurs only inside the NPB and ends at an untrusted observation envelope.
 
 The permitted cycle is:
-
-1. Receive an observation, document, user correction or task outcome.
-2. Preserve source and context.
-3. Parse it into candidate entities, claims, relations, events or procedures.
+1. Receive a structured request or untrusted PerceptionObservation.
+2. Preserve source identity, input digest and acquisition context for the task lifetime; do not retain raw inputs beyond the ephemeral policy unless authorized.
+3. Parse candidate entities, claims, relations, events or procedures through schema validation and declared deterministic processing.
 4. Check types, constraints, provenance and source credibility.
-5. Compare with existing knowledge.
+5. Compare with task-scoped knowledge and evidence.
 6. Identify conflicts, novelty, uncertainty and possible consequences.
-7. Derive candidate conclusions only through declared reasoning mechanisms.
+7. Derive candidate conclusions only through declared symbolic reasoning.
 8. Request human review when required by policy or ambiguity.
-9. Add, correct, link or retract explicit knowledge.
-10. Record the complete history and reason for the change.
-11. Make the resulting knowledge available to later reasoning and planning.
+9. Add, correct, link or retract task knowledge. Promote selected records into durable knowledge only through the opt-in persistence gate.
+10. Record the reason and provenance in the task trace; retain it beyond the task only under explicit policy.
+11. Make resulting task knowledge available to later reasoning/planning within the authorized task scope.
 
-This is explicit knowledge acquisition and revision. It does not create or optimize neural weights, embeddings, latent representations or other trained parameters.
+This process does not create or optimize neural weights, embeddings, latent representations or other trained parameters. It does not allow a perception model to promote its output, retain memory, update configuration or influence symbolic rules. Task-end cleanup expires temporary cognitive state unless durable retention was explicitly authorized.
 
-Automatic rule creation is high risk. It must be bounded by a formal rule language, provenance, safety constraints, review policy, regression tests and rollback. Helios must not silently convert an observed correlation into a causal rule.
+Automatic rule creation is high risk. It must be bounded by a formal rule language, provenance, safety constraints, review policy, regression tests and rollback. Helios must not silently convert observed correlation into causal rule.
+
 
 ## 7. Knowledge integrity and evidence model
 
-Every claim should have a stable identifier and a structured record containing, where applicable:
+Every claim should have a stable identifier and structured record containing:
+- Claim identifier, subject/predicate/object or proposition, type and domain.
+- Source identifier/location, author/asserting party and acquisition method.
+- Observation/publication time, ingestion time and valid-time interval.
+- Raw input digest/content reference and perception model/runtime provenance, where applicable.
+- Evidence and derivation references.
+- Evidence state and rationale.
+- Status: untrusted candidate, accepted for a declared purpose, disputed, superseded, retracted or rejected.
+- Sensitivity/access classification, version/change history and retention scope/authorization reference.
 
-- Claim identifier.
-- Subject, predicate and object or proposition.
-- Type and domain.
-- Source identifier and source location.
-- Observation or publication time.
-- Ingestion time.
-- Valid-time interval.
-- Author or asserting party.
-- Acquisition method.
-- Evidence references.
-- Derivation references.
-- Confidence/evidence category and rationale.
-- Status: candidate, accepted, disputed, superseded, retracted or rejected.
-- Sensitivity and access classification.
-- Version and change history.
+A PerceptionObservation is a source observation, not a knowledge fact. Its epistemic status is UNTRUSTED_CANDIDATE and authority is NONE. The symbolic core may create a separate claim after applying explicit admission rules. The original observation remains immutable during the task; correction/adjudication creates a linked version or status event, not a rewrite of model output.
 
-Contradictions must be representable. A newer source must not automatically overwrite an older claim. The system must be able to preserve both claims, explain the difference and ask for adjudication when evidence does not resolve the conflict.
+Contradictions coexist. A newer source does not automatically overwrite an older claim. The system preserves competing claims, supporting/contradicting evidence and reasons for adjudication. Use four-valued evidence semantics or another explicitly specified non-explosive approach where appropriate.
 
-Derived conclusions should link to their premises. If a premise is retracted or changed, dependent conclusions must be marked stale and scheduled for recomputation or review.
+Every derived conclusion links to premises and rule/engine version. Retraction/change marks dependents stale for deterministic recomputation or review. A model-provided score is metadata, not truth, calibrated confidence or proof.
+
+SHA-256 input/envelope digests provide integrity and content-addressing only. Source authenticity requires separately verified identity, signature or transport/device attestation. Neither integrity nor authenticity establishes proposition truth.
 
 ## 8. Hardware interaction and action execution
 
@@ -624,25 +564,32 @@ The project must provide inspectable records of:
 
 Sensitive values must be redacted according to policy. Auditability must not require exposing passwords, secrets or unrelated private content.
 
+
 ## 14. Data architecture and persistence
 
-The design should separate at least:
+The data architecture separates temporary cognitive state, durable records and safety/audit state.
 
-- Raw source archive.
-- Normalized knowledge records.
-- Entity and relation indexes.
-- Rule and ontology definitions.
-- Episodic event log.
-- Procedural plans and validated procedures.
-- User configuration and permissions.
-- Device inventory and adapter metadata.
-- Task state and execution records.
-- Audit log.
-- Cache and derived indexes.
+### 14.1 Task-ephemeral cognitive state
 
-Data schemas require stable IDs, versions, migrations, backup/restore and integrity checks. A derived index must be rebuildable from authoritative records or explicitly classified as irreplaceable data.
+Working memory, sensory buffers, temporary episodic/semantic context, candidate perception observations, derived task facts, plans and intermediate traces are held in task-scoped storage. They carry owner, scope, creation time, expiry and sensitivity labels. Task-end cleanup erases or invalidates temporary records, caches and derived indexes.
 
-A relational store is a reasonable initial baseline for transactional records. Graph and logic indexes may be layered on top. Do not select a graph database merely because the architecture contains relationships.
+Crash recovery may restore only the minimum volatile state required to safely abort/reconcile an interrupted action; it must not silently resume cognitive recall or execution.
+
+### 14.2 Explicitly retained knowledge
+
+A separate persistence gate controls any durable semantic fact, preference, episode, procedure, project record or prospective obligation. The request identifies exact records/fields, purpose, access scope, retention duration, authorizing principal and deletion/revocation mechanism.
+
+Durable knowledge is versioned and provenance-bearing. It is not created merely because something appeared in a conversation, was perceived, inferred or useful once. Persistent semantic knowledge and episodic history are opt-in.
+
+### 14.3 Safety and action audit store
+
+Consequential authorization and execution records are stored separately from cognitive memory. Their retention is governed by safety, security, privacy and applicable legal requirements. Audit records are not automatically retrievable as cognitive memory; access requires a distinct audited operation.
+
+### 14.4 Storage categories
+
+Separate as needed: temporary raw-input buffers/content-addressed task objects; task-local observations/claims; explicitly approved durable knowledge; versioned rules/ontologies/schemas; temporary plan/execution state; user configuration/scoped permissions; device inventory/adapter metadata; separate safety/action audit records; rebuildable indexes/caches.
+
+No persistence technology is selected yet. A database or file store must not cause retention merely because it is technically persistent. Application and storage boundaries enforce the policy; temporary caches/indexes must be task-scoped and clearable.
 
 ## 15. Plugin and extension model
 
@@ -664,32 +611,27 @@ Every plugin must declare:
 
 Plugins must not receive unrestricted authority by default. A plugin cannot modify the trusted policy engine or grant itself capabilities.
 
+
 ## 16. Evaluation and acceptance
 
-Helios must be assessed by reproducible task suites, not subjective impressions.
+Helios is assessed by reproducible task suites, not subjective impressions. Evaluation includes:
+- Symbolic-core determinism for identical canonical inputs, state, rules and execution profile.
+- Logical validity of deductions and complete premise/provenance/derivation traces.
+- Contradiction handling and premise retraction.
+- Perception model/artifact pinning and processor/runtime configuration.
+- NPB sandbox isolation, denied network/credential/tool/memory access and bounded I/O.
+- Schema validation, size/reference bounds and rejection of undeclared fields.
+- Adversarial multimodal inputs with no authority propagation.
+- Separation of content integrity, source authenticity and epistemic support.
+- Memory scope, expiration/deletion and no unapproved cross-session restoration.
+- Explicit durable-persistence authorization/revocation.
+- No background consolidation or model-generated memory promotion.
+- Planning feasibility, deterministic tie-breaking and constraint satisfaction.
+- Abstention, clarification, unknown/timeout reporting and safe action authorization.
 
-Evaluation dimensions:
+Initial experiments include repeated replay of identical symbolic fixtures; malformed/adversarial observation injection; contradictory sensor/model evidence; model/runtime unavailability; attempted NPB access to memory/tools/network; task-end cleanup; restart without persistence authorization; premise retraction; solver resource exhaustion; and unauthorized mock-device operations.
 
-- Conformance with the non-training dependency policy across direct and transitive dependencies.
-- Absence of prohibited model assets and model-inference network paths in supported builds.
-- Logical validity of deductions.
-- Correctness and provenance of retrieved facts.
-- Contradiction detection.
-- Accuracy of entity resolution in declared domains.
-- Planning feasibility and constraint satisfaction.
-- Ability to identify missing information.
-- Appropriate abstention and clarification.
-- Memory retrieval and correction behavior.
-- Reproducibility of reasoning traces.
-- Device-command authorization correctness.
-- Hardware action success and postcondition verification.
-- Failure handling and recovery.
-- Resource consumption and latency.
-- Privacy and permission enforcement.
-- Offline operation.
-- Compatibility and upgrade behavior.
-
-Each benchmark must define inputs, expected outputs or invariants, environment, resource limits, scoring and known limitations. Test fixtures must not be treated as evidence of unrestricted general intelligence.
+Perception accuracy is measured independently against representative labelled data. Symbolic reasoning correctness is measured independently against fixed observations. End-to-end success must not obscure which layer produced an error. Every benchmark defines inputs, invariants, environment, resource limits, scoring and known limitations.
 
 ## 17. Initial implementation philosophy
 
@@ -698,60 +640,41 @@ The first implementation should prove a narrow vertical slice on existing operat
 1. A local Helios process starts and accepts a structured request.
 2. It stores explicit facts with source and timestamp.
 3. It answers a bounded logical query with a traceable derivation.
-4. It stores an event in episodic memory.
+4. It records the event in task-ephemeral episodic context; durable retention requires explicit authorization.
 5. It creates a small plan over a typed action model.
 6. It requests permission for a harmless, reversible action.
 7. It invokes a mock device adapter.
 8. It verifies the mock result and records the execution.
 9. It survives restart with its knowledge and audit history intact.
-10. It runs without model training, pretrained models or network AI services.
+10. It runs without model training or neural inference in the symbolic core; the NPB is optional and not required for this first vertical slice.
 
 This is the first meaningful acceptance milestone. It is not a complete intelligence system and must not be described as one.
+
 
 ## 18. Research requirements before major implementation
 
 Research and record evidence for:
-
 - Symbolic AI architectures and limitations.
-- Datalog, rule engines and deductive databases.
-- Answer-set programming.
-- SAT/SMT solving and proof-producing workflows.
-- Automated planning, PDDL, hierarchical planning and scheduling.
-- Ontologies, knowledge graphs and temporal databases.
-- Truth-maintenance and belief-revision systems.
-- Causal models, intervention and counterfactual reasoning.
-- Analogical reasoning.
-- Classical computer vision and non-trained signal processing.
-- Natural-language parsing and generation without neural models.
-- Memory architectures and event sourcing.
-- Agent/action planning with independent policy enforcement.
-- Capability-based security and sandboxing.
-- OS architectures: monolithic, hybrid and microkernel.
-- Existing kernels and operating systems with hardware coverage.
-- Rust, C and other candidate languages for OS and device work.
-- Driver architecture, IOMMU/DMA boundaries, device identity and firmware.
-- Hardware-in-the-loop testing and safety engineering.
-- Local storage, cryptographic integrity, backup and recovery.
+- Datalog semantics, recursion, negation, termination and provenance; compare Soufflé with Rust-native candidates.
+- SAT/SMT capabilities, proof production, deterministic resource bounds and solver limitations.
+- Truth-maintenance systems, paraconsistent logic and belief revision.
+- Classical/hierarchical planning, PDDL and scheduling.
+- Typed knowledge representation, ontology engineering, temporal databases and claim provenance.
+- Ephemeral memory lifecycle, explicit persistence, secure erasure and crash-safe task cleanup.
+- Frozen perception deployment: model manifests, weight/processor digests, runtime/build pinning, quantization, backend reproducibility and model supply-chain review.
+- Sandboxing, process isolation, network denial, least privilege and IPC contracts for the NPB.
+- Multimodal prompt-injection/adversarial-input risk and deterministic downstream validation.
+- JSON Schema Draft 2020-12, I-JSON constraints, RFC 8785 canonicalization and SHA-256 integrity; evaluate Protobuf only after deterministic canonical-signing profile is defined.
+- Classical computer vision, non-trained signal processing and bounded perception alternatives.
+- Causal reasoning, counterfactual models, analogical reasoning and non-neural language grammars.
+- Capability security, device-driver isolation, IOMMU/DMA boundaries, device identity/firmware trust, hardware-in-loop testing and privacy/deletion governance.
 
-For each topic, record sources, date, assumptions, candidate technologies, alternatives, limitations, licensing and an implementation recommendation. Prefer official documentation, original research, formal specifications and maintained repositories.
+Prefer official specifications, standards, original research and maintained repositories. For each topic record source/date, assumptions, alternatives, limits, license, version and recommendation. Recheck before implementation. No broad implementation begins until the initial symbolic domain, observation contract, memory lifecycle, threat model and acceptance fixtures are specified.
+
 
 ## 19. Non-goals and exclusions
 
-Unless explicitly reconsidered, Helios will not:
-
-- Train or fine-tune machine-learning models.
-- Depend on pretrained models even for inference.
-- Use learned embeddings or model-based retrieval.
-- Claim arbitrary human-level comprehension or perception.
-- Execute arbitrary natural-language shell commands with elevated privileges.
-- Control hardware without declared capabilities and authorization.
-- Treat an unverified plan as a completed action.
-- Treat a source's confidence score as proof.
-- Treat all graph relationships as causal.
-- Silently resolve contradictory evidence.
-- Start by building every layer of an operating system.
-- Use AI or model-inference services, whether local or remote.
-- Claim formal verification, safety certification or production readiness without evidence.
+Helios will not train, fine-tune, distill or adapt any model; use a foundation model outside the approved NPB perception role; use neural models for reasoning, intent interpretation, dialogue orchestration, planning, decisions, memory, knowledge revision, tool selection or action authorization; use learned embeddings/retrieval in the symbolic core; expose memory, policy, tools, credentials, network clients or privileged execution to the NPB; automatically persist episodic or semantic cognitive memory across tasks/sessions; silently consolidate or promote temporary state; execute arbitrary natural-language shell commands with elevated privileges; control hardware without declared capabilities and authorization; silently resolve contradictory evidence; or claim formal verification/safety certification/production readiness without evidence.
 
 ## 20. Requirements register
 
@@ -763,17 +686,28 @@ These identifiers are stable requirement anchors. Future detailed requirements m
 - HEL-FOUND-003: The master specification is the canonical authority.
 - HEL-FOUND-004: Design and implementation must use existing, maintained programming languages and tools.
 
-### Non-training
-- HEL-NTR-001: No training of any model.
-- HEL-NTR-002: No fine-tuning, pretraining, distillation or online model adaptation.
-- HEL-NTR-003: No pretrained model dependency, including inference-only use.
-- HEL-NTR-004: No learned embeddings, model weights or model-generated classifiers.
-- HEL-NTR-005: New information is acquired as explicit, provenance-bearing knowledge.
-- HEL-NTR-006: Rule and procedure changes must be explicit, auditable and governed; they must not become hidden parameter learning.
-- HEL-NTR-007: No trained or pretrained model inference service, local or remote, is used by a Helios runtime or workflow.
-- HEL-NTR-008: Every direct, transitive, optional, build-time and runtime dependency is reviewed for model training, inference, learned components and model assets before admission.
-- HEL-NTR-009: Supported build and release artifacts contain no training datasets, model weights, checkpoints or learned embedding assets.
-- HEL-NTR-010: Non-training conformance checks are automated where feasible and supplemented by recorded human dependency review.
+
+### Non-training and restricted perception
+- HEL-NTR-001: No training of any neural or learned model is permitted.
+- HEL-NTR-002: No pretraining, fine-tuning, distillation, online adaptation, parameter updates or model fitting is permitted.
+- HEL-NTR-003: Frozen pretrained-model inference is permitted only inside the approved NPB and only for sensory/unstructured-input perception; all other model inference is prohibited.
+- HEL-NTR-004: The symbolic core must not use learned embeddings, latent-vector retrieval, learned rerankers or neural classifiers; perception candidates may be produced only within the NPB.
+- HEL-NTR-005: New information is acquired as explicit, provenance-bearing observations and claims.
+- HEL-NTR-006: Rule/procedure changes are explicit, auditable and governed; they do not become hidden parameter learning.
+- HEL-NTR-007: Neural inference is not used for cognition; the initial supported perception profile is local-only; remote inference requires separate approval and verifiable immutability.
+- HEL-NTR-008: Every direct, transitive, optional, build-time and runtime dependency is reviewed; perception-only dependencies are admitted only to the isolated NPB set.
+- HEL-NTR-009: Supported builds contain no training datasets, optimizer state, unapproved weights, checkpoints or learned cognitive indexes; only approved, digest-pinned perception weights may be present in the NPB.
+- HEL-NTR-010: Non-training, model-pinning and NPB-isolation checks are automated where feasible and supplemented by human review.
+
+### Neural perception boundary
+- HEL-PER-001: Frozen foundation-model inference is confined to the NPB and limited to perception.
+- HEL-PER-002: Every model output is an untrusted candidate observation with no authority.
+- HEL-PER-003: The NPB cannot access symbolic memory, rules, executive state, tools, credentials, network clients or privileged execution.
+- HEL-PER-004: Every observation is schema-validated, bounded and linked to input, source, model, processor and runtime provenance.
+- HEL-PER-005: The NPB cannot set epistemic status, trust, persistence, policy or authorization fields.
+- HEL-PER-006: Perception failure/unsupported input yields unavailable/unknown; no silent model fallback.
+- HEL-PER-007: Hashes establish integrity, not truth or source authenticity.
+- HEL-PER-008: Model artifacts, runtime, backend, precision/quantization and inference configuration are pinned and re-admitted on change.
 
 ### Cognition
 - HEL-COG-001: A cognitive executive coordinates requests, goals and subsystem operations.
@@ -792,13 +726,26 @@ These identifiers are stable requirement anchors. Future detailed requirements m
 - HEL-MEM-001: Working, episodic, semantic, procedural and prospective memory are distinct.
 - HEL-MEM-002: Memory changes are versioned and auditable.
 - HEL-MEM-003: Consolidation does not silently destroy authoritative evidence.
+- HEL-MEM-004: Cognitive memory is ephemeral by default and scoped to an explicit task/session.
+- HEL-MEM-005: Cross-task/session episodic, semantic, procedural, prospective and autobiographical retention is opt-in.
+- HEL-MEM-006: Durable persistence requires explicit scoped authorization identifying records, purpose, retention period and deletion path.
+- HEL-MEM-007: Safety/action audit records are isolated from cognitive memory and are not automatically available for recall.
+- HEL-MEM-008: Task-end expiration/deletion covers temporary records, caches and derived indexes, subject to separately governed audit retention.
+- HEL-MEM-009: Automatic background consolidation, memory summarization and silent promotion are disabled by default.
 
 ### Interaction and perception
 - HEL-INT-001: Initial interaction supports a precise structured command path.
 - HEL-INT-002: Natural-language capabilities are bounded by implemented grammars and semantic representations.
 - HEL-INT-003: Ambiguous requests trigger clarification.
 - HEL-INT-004: Multimodal support is staged and evidence-based.
-- HEL-INT-005: No trained speech, vision or language model is required.
+- HEL-INT-005: No neural model is used for language understanding, dialogue, reasoning or generation; frozen models may be used only for NPB perception.
+
+### Symbolic core
+- HEL-SYM-001: All reasoning, planning, decisions and memory governance are performed by explicit non-neural symbolic mechanisms.
+- HEL-SYM-002: Identical canonical symbolic inputs, state, rules and execution profile produce reproducible outputs within the declared determinism profile.
+- HEL-SYM-003: Solver timeouts, resource exhaustion and unsupported operations remain unknown/indeterminate, not proof.
+- HEL-SYM-004: Every derived result preserves premises, evidence, engine/rule version and derivation trace.
+- HEL-SYM-005: Contradictory evidence is represented without silent overwrite or unrestricted inference.
 
 ### Hardware and actions
 - HEL-HW-001: Hardware is accessed through declared device adapters and typed capabilities.
@@ -841,9 +788,9 @@ These are unresolved design questions, not hidden assumptions:
 3. Which domains should the first knowledge and reasoning demonstration support?
 4. What local operating system should host the first prototype?
 5. Should the eventual operating environment be a customized existing distribution, a microkernel-based system or a custom kernel?
-6. What data must persist indefinitely, and what may expire?
+6. Which data, if any, should be promoted to durable memory after the opt-in persistence gate is available?
 7. Which actions, if any, may be pre-authorized under narrow user-configured policies?
-8. What level of local multimodal perception is actually required without trained models?
+8. Which sensory modalities and local frozen perception models are justified for the first NPB profile, and what reproducibility guarantees can the selected hardware/runtime meet?
 9. Which candidate reasoning engines should be embedded, wrapped or implemented directly?
 10. What are acceptable latency and resource budgets for the first use cases?
 
@@ -875,7 +822,7 @@ As of 2026-11-02:
 - No knowledge or memory engine is implemented.
 - No operating system or hardware broker is implemented.
 - No device adapter is implemented.
-- No model training or model inference is part of the intended architecture.
+- No model training or neural cognitive inference is part of the intended architecture. A restricted frozen-model perception exception is specified but no model/runtime has been approved or implemented.
 - No programming-language or operating-system stack has been finally selected.
 - The next work is research, architecture refinement, requirements approval and a carefully scoped prototype plan.
 
@@ -892,9 +839,17 @@ These are research entry points, not automatic endorsements:
 - seL4 project documentation: https://docs.sel4.systems/projects/sel4/
 - seL4 capabilities: https://docs.sel4.systems/Tutorials/capabilities.html
 - seL4 supported hardware and verification status: https://docs.sel4.systems/Hardware/
-- Soufflé Datalog: https://souffle-lang.org/docs/home/
-- Soufflé Datalog language: https://souffle-lang.org/datalog-language
-- Potassco clingo answer-set programming: https://potassco.org/clingo/
+- Soufflé Datalog: https://souffle-lang.github.io/docs/home/
+- Soufflé rules and stratification: https://souffle-lang.github.io/rules
+- Potassco clingo: https://potassco.org/clingo/
+- Z3 Guide and solver parameters: https://microsoft.github.io/z3guide/ and https://microsoft.github.io/z3guide/programming/Parameters/
+- JSON Schema 2020-12: https://json-schema.org/specification
+- RFC 8785 JSON Canonicalization Scheme: https://www.rfc-editor.org/rfc/rfc8785.html
+- OWASP LLM01:2025 Prompt Injection: https://genai.owasp.org/llmrisk/llm01-prompt-injection/
+- NIST AI 600-1 Generative AI Profile: https://doi.org/10.6028/NIST.AI.600-1
+- NPB contract: docs/architecture/NEURAL_PERCEPTION_BOUNDARY.md
+- PerceptionObservation schema: schemas/perception-observation.schema.json
+- Phase A plan: docs/PHASE_A_FOUNDATION.md
 
 Reference pages must be rechecked before implementation. Record actual versions, licenses, platform support and limitations. Do not infer formal guarantees for an entire system from a kernel or solver's guarantees.
 
