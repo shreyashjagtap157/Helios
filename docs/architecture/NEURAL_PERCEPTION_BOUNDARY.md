@@ -36,7 +36,7 @@ The envelope carries:
 - Gateway-stamped epistemic status `UNTRUSTED_CANDIDATE`, authority `NONE` and retention `TASK_EPHEMERAL`.
 - An envelope digest over canonical JSON, excluding the integrity object itself.
 
-Candidate text is inert data. Candidate-local references must resolve only within the same envelope. The schema and semantic validator reject undeclared properties, arbitrary pointers/paths/URIs, executable markup, tool calls, policy/authority fields and malformed references. Model scores are untrusted model metadata, not calibrated confidence, truth or authorization.
+Candidate text is inert data. Candidate-local references must resolve only within the same envelope. Text segments are length-bounded extracted content and must pass a separate symbolic parser/admission policy before use in any task representation; they can never be interpreted as executive instructions or commands. The schema and semantic validator reject undeclared properties, arbitrary pointers/paths/URIs, executable markup, tool calls, policy/authority fields and malformed references. Model scores are untrusted metadata, not calibrated confidence, truth or authorization.
 
 The gateway—not the model—issues the observation ID/timestamp and stamps epistemic status, authority and retention.
 
@@ -65,7 +65,7 @@ The trusted gateway:
 7. Delivers the envelope as read-only task-local input.
 8. Leaves belief admission, contradiction handling and durable persistence to symbolic policies.
 
-Semantic checks beyond schema validation are mandatory: references must resolve; normalized coordinates must be in range; rectangle bounds must be ordered; numeric values must be finite; all limits must be enforced. Malformed or unverifiable data is rejected or retained only in a separate quarantine diagnostic channel, never partially trusted.
+JSON Schema `format` keywords such as `uuid` and `date-time` may be annotation-only unless format assertion is enabled. Implementations must explicitly assert these formats, reject duplicate JSON object keys, enforce I-JSON/JCS constraints and validate numeric finiteness. Semantic checks beyond schema validation are mandatory: references must resolve; normalized coordinates must be in range; rectangle bounds must be ordered; numeric values must be finite; all limits must be enforced. Malformed or unverifiable data is rejected or retained only in a separate quarantine diagnostic channel, never partially trusted.
 
 ## Failure and validation
 
