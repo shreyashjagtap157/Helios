@@ -5,7 +5,7 @@
 
 ## Guiding sequence
 
-Do not attempt to build a cognitive engine, device-control framework, desktop environment and operating-system kernel simultaneously. First prove a small non-training cognitive loop on an existing operating system. Expand only when each dependency has a tested contract.
+Do not attempt to build a cognitive engine, device-control framework, desktop environment and operating-system kernel simultaneously. First prove a deterministic non-neural symbolic loop on an existing operating system. Frozen foundation models are optional, quarantined perception peripherals only. Cognitive memory is ephemeral by default. Expand only when each dependency has a tested contract.
 
 ## Stage 0 — Project definition and research
 
@@ -15,7 +15,9 @@ Deliverables:
 - Approved master specification.
 - Requirements traceability and decision log.
 - Initial use-case catalogue.
-- Strict non-training dependency policy, including transitive dependency admission, model-asset exclusion and runtime-service restrictions.
+- Absolute no-training policy and restricted NPB perception exception, including dependency admission, pinned model manifests and isolation requirements.
+- PerceptionObservation v1 schema, canonicalization and integrity contract.
+- Ephemeral-by-default memory policy and explicit persistence gate.
 - Domain and modality scope for the first demonstration.
 - Hardware target shortlist.
 - Research register with source quality and conclusions.
@@ -24,7 +26,7 @@ Deliverables:
 Exit criteria:
 - The first user problem is explicit.
 - The initial supported reasoning domain is bounded.
-- No trained or pretrained model dependency is required.
+- The symbolic core operates without a model dependency; any optional frozen perception model is confined to the NPB and cannot be required for Phase A.
 - The host OS and candidate implementation stack have a reasoned shortlist.
 - Initial security and action boundaries are specified.
 
@@ -33,11 +35,14 @@ Exit criteria:
 **Goal:** Test the riskiest design assumptions before selecting the implementation architecture.
 
 Spikes:
-- Rust core service and persistence experiment.
-- Datalog/logic engine comparison.
+- Rust workspace feasibility spike; do not commit to Rust before evidence.
+- Compare Soufflé with a Rust-native Datalog/rule engine using one small fact/provenance fixture.
 - SAT/SMT and constraint-solving integration.
 - Simple typed planning model.
-- Provenance and contradiction handling.
+- Provenance and contradiction handling, including four-valued evidence semantics.
+- PerceptionObservation schema, JCS/SHA-256 implementation and negative schema tests.
+- NPB sandbox feasibility spike: denied memory/tools/network/credentials/filesystem and bounded input/output.
+- Task-memory expiration, crash cleanup and explicit durable-persistence gate.
 - Grammar/structured-command interaction without neural models.
 - Mock device capability broker.
 - Dependency graph, SBOM and build-artifact review to verify non-training conformance.
@@ -47,7 +52,7 @@ Exit criteria:
 - Benchmark results and limitations are recorded.
 - Candidate libraries and licenses are checked.
 - At least one end-to-end reasoning trace is reproducible.
-- No component silently depends on trained models or model-inference services.
+- The symbolic core has no neural inference dependency; the optional NPB is the only model-inference location and is pinned, isolated and network-denied.
 - The supported dependency graph and build artifacts have recorded non-training review evidence.
 
 ## Stage 2 — Cognitive vertical-slice prototype
@@ -59,7 +64,7 @@ Target flow:
 2. Retrieve or ingest explicit facts with provenance.
 3. Derive a result using declared rules or a solver.
 4. Explain the derivation and uncertainty.
-5. Store the interaction as an episodic event.
+5. Keep task events in ephemeral episodic context; do not persist them without explicit authorization.
 6. Create a bounded plan.
 7. Request authorization for a harmless, reversible action.
 8. Run a mock adapter.
@@ -70,7 +75,7 @@ Exit criteria:
 - Reproducible tests pass.
 - The system can distinguish facts, assumptions, inferences and unknowns.
 - It reports unsupported requests honestly.
-- It has no model training or model inference dependency.
+- It has no model training or neural cognitive inference dependency; optional NPB perception remains outside the core and may be disabled.
 - Authorization and audit boundaries work.
 
 ## Stage 3 — Knowledge and memory foundation
@@ -84,7 +89,7 @@ Deliverables:
 - Contradiction representation.
 - Temporal validity.
 - Derived-claim dependency tracking.
-- Working, episodic, semantic and procedural memory.
+- Task-scoped working, episodic, semantic and procedural context; separately authorized durable retention.
 - Search and query interfaces.
 - Backup, restore and schema migration.
 
